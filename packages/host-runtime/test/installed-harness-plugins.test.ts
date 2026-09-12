@@ -22,6 +22,7 @@ const classes = {
   codebuddy: "CodeBuddyAdapter",
   "cursor-cli": "CursorAdapter",
   hermes: "HermesAdapter",
+  qoder: "QoderAdapter",
 };
 
 const unavailable: HarnessInspection = {
@@ -118,6 +119,7 @@ describe("installed Harness composition", () => {
         "/kiro-vibe",
       ],
       hermes: [],
+      qoder: [],
     };
     const registry = await load();
     try {
@@ -146,6 +148,7 @@ describe("installed Harness composition", () => {
     ["codebuddy", "CODEXHOST_CODEBUDDY_COMMAND"],
     ["cursor-cli", "CODEXHOST_CURSOR_COMMAND"],
     ["hermes", "CODEXHOST_HERMES_COMMAND"],
+    ["qoder", "CODEXHOST_QODER_COMMAND"],
   ])(
     "preserves the explicit %s command rather than finding another local installation",
     async (id, commandVariable) => {
