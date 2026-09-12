@@ -153,6 +153,7 @@ declare global {
 }
 
 const KIRO_CLI_HARNESS_ID = harnessIdSchema.parse("kiro-cli");
+const QODER_HARNESS_ID = harnessIdSchema.parse("qoder");
 
 function transportModelIdForAgent(agent: RendererAgent): string | null {
   if (agent === "pi") return PI_TRANSPORT_MODEL_ID;
@@ -163,8 +164,7 @@ function transportModelIdForAgent(agent: RendererAgent): string | null {
   if (agent === "omp") return OMP_TRANSPORT_MODEL_ID;
   if (agent === "antigravity") return ANTIGRAVITY_TRANSPORT_MODEL_ID;
   if (agent === "kiro-cli") return encodeHarnessPluginRoute({ harnessId: KIRO_CLI_HARNESS_ID });
-  if (agent === "codebuddy" || agent === "cursor-cli")
-    return encodeHarnessPluginRoute({ harnessId: harnessIdSchema.parse(agent) });
+  if (agent === "qoder") return encodeHarnessPluginRoute({ harnessId: QODER_HARNESS_ID });
   return null;
 }
 
@@ -974,6 +974,13 @@ export function modelSelectionForAgent(
                       })
                     : agent === "hermes"
                       ? hermesTransportModelId(model, permissionModeId)
+                    : agent === "qoder"
+                      ? encodeHarnessPluginRoute({
+                          harnessId: QODER_HARNESS_ID,
+                          ...(model ? { model } : {}),
+                          ...(thinkingOptionId ? { thinkingOptionId } : {}),
+                          ...(permissionModeId ? { permissionModeId } : {}),
+                        })
                       : transportModelIdForAgent(agent);
   return transportModelId ? { model: transportModelId, reasoningEffort } : officialSelection;
 }
