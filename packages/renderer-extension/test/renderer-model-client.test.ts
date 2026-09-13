@@ -220,17 +220,22 @@ describe("Renderer fixed Model request client", () => {
       sources: [{ harnessId: "sample-agent", harnessName: "Sample Agent" }],
     });
     await expect(
-      client?.inspectHarnessAccount?.({ harnessId: harnessIdSchema.parse("sample-agent") }),
+      client?.inspectHarnessAccount?.({
+        harnessId: harnessIdSchema.parse("sample-agent"),
+        refresh: true,
+      }),
     ).resolves.toEqual({
       harnessId: "sample-agent",
       harnessName: "Sample Agent",
       account: { credits: account.credits },
     });
-    await expect(client?.listHarnessAccounts?.()).resolves.toEqual({ accounts: [account] });
+    await expect(client?.listHarnessAccounts?.({ refresh: true })).resolves.toEqual({
+      accounts: [account],
+    });
     expect(sendRequest.mock.calls).toEqual([
       [HARNESS_ACCOUNT_SOURCES_METHOD, {}],
-      [HARNESS_ACCOUNT_INSPECT_METHOD, { harnessId: "sample-agent" }],
-      ["codexhost/harness/accounts/list", {}],
+      [HARNESS_ACCOUNT_INSPECT_METHOD, { harnessId: "sample-agent", refresh: true }],
+      ["codexhost/harness/accounts/list", { refresh: true }],
     ]);
     sendRequest.mockResolvedValueOnce({
       harnessId: "sample-agent",

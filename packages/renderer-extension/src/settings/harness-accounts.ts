@@ -1,6 +1,7 @@
 import type {
   HarnessAccountInspectParams,
   HarnessAccountInspectResult,
+  HarnessAccountListParams,
   HarnessAccountListResult,
   HarnessAccountSourceListResult,
 } from "@codexhost/shared-contracts";
@@ -9,13 +10,17 @@ export interface RendererHarnessAccountClient {
   listHarnessAccountSources?(): Promise<HarnessAccountSourceListResult>;
   inspectHarnessAccount?(input: HarnessAccountInspectParams): Promise<HarnessAccountInspectResult>;
   /** Compatibility fallback for Hosts that predate progressive account inspection. */
-  listHarnessAccounts?(): Promise<HarnessAccountListResult>;
+  listHarnessAccounts?(input?: HarnessAccountListParams): Promise<HarnessAccountListResult>;
 }
 
 type HarnessAccount = HarnessAccountListResult["accounts"][number];
 
 function sortedAccounts(accounts: Iterable<HarnessAccount>): HarnessAccount[] {
-  return [...accounts].sort((a, b) => a.harnessId.localeCompare(b.harnessId));
+  return [...accounts].sort((a, b) => {
+    if (a.harnessId === "antigravity") return b.harnessId === "antigravity" ? 0 : 1;
+    if (b.harnessId === "antigravity") return -1;
+    return a.harnessId.localeCompare(b.harnessId);
+  });
 }
 
 /** Read-only telemetry, deliberately separate from Codex Account IDs and mutations. */
@@ -31,6 +36,7 @@ export function createHarnessAccounts(
     client: Required<
       Pick<RendererHarnessAccountClient, "listHarnessAccountSources" | "inspectHarnessAccount">
     >,
+    force: boolean,
   ): Promise<boolean> => {
     let sources: HarnessAccountSourceListResult;
     try {
@@ -43,7 +49,10 @@ export function createHarnessAccounts(
     await Promise.all(
       sources.sources.map(async (source) => {
         try {
-          const result = await client.inspectHarnessAccount({ harnessId: source.harnessId });
+          const result = await client.inspectHarnessAccount({
+            harnessId: source.harnessId,
+            ...(force ? { refresh: true } : {}),
+          });
           if (signal.aborted || result.harnessId !== source.harnessId) return;
           if (result.account) {
             byHarnessId.set(result.harnessId, {
@@ -73,7 +82,7 @@ export function createHarnessAccounts(
     get refreshing() {
       return refreshing;
     },
-    async refresh(): Promise<void> {
+    async refresh(force = false): Promise<void> {
       if (refreshing || signal.aborted) return;
       const client = getClient();
       if (!client) return;
@@ -83,14 +92,17 @@ export function createHarnessAccounts(
       try {
         const progressive =
           client.listHarnessAccountSources && client.inspectHarnessAccount
-            ? await loadProgressively({
-                listHarnessAccountSources: client.listHarnessAccountSources.bind(client),
-                inspectHarnessAccount: client.inspectHarnessAccount.bind(client),
-              })
+            ? await loadProgressively(
+                {
+                  listHarnessAccountSources: client.listHarnessAccountSources.bind(client),
+                  inspectHarnessAccount: client.inspectHarnessAccount.bind(client),
+                },
+                force,
+              )
             : false;
         if (progressive || signal.aborted) return;
         if (!client.listHarnessAccounts) return;
-        const result = await client.listHarnessAccounts();
+        const result = await client.listHarnessAccounts(force ? { refresh: true } : {});
         if (!signal.aborted) accounts = sortedAccounts(result.accounts);
       } catch {
         // Do not keep stale identities after authentication changes or a failed query.

@@ -508,9 +508,10 @@ describe("AppServerHost installed Harness plugins", () => {
       `
       import { FakeHarnessAdapter } from ${JSON.stringify(pathToFileURL(path.resolve("packages/harness-adapter/dist/testing.js")).href)};
       import { writeFileSync } from "node:fs";
+      let accountInspections = 0;
       export function createHarnessAdapter() {
         const adapter = new FakeHarnessAdapter("sample-agent");
-        adapter.inspectAccount = async () => ({ email: "sample@example.com", credits: { usedPercent: 25, periodType: "weekly" } });
+        adapter.inspectAccount = async () => ({ email: "sample@example.com", credits: { usedPercent: ++accountInspections, periodType: "weekly" } });
         const close = adapter.close.bind(adapter);
         adapter.close = async () => { await close(); writeFileSync(new URL("closed", import.meta.url), "yes"); };
         return adapter;
@@ -549,7 +550,7 @@ describe("AppServerHost installed Harness plugins", () => {
           harnessName: "Sample Agent",
           account: {
             email: "sample@example.com",
-            credits: { usedPercent: 25 },
+            credits: { usedPercent: 1 },
           },
         },
       });
@@ -573,9 +574,20 @@ describe("AppServerHost installed Harness plugins", () => {
               harnessId: "sample-agent",
               harnessName: "Sample Agent",
               email: "sample@example.com",
-              credits: { usedPercent: 25 },
+              credits: { usedPercent: 1 },
             },
           ],
+        },
+      });
+      writeRequest(fixture.desktopInput, {
+        id: 909,
+        method: "codexhost/harness/accounts/inspect",
+        params: { harnessId: "sample-agent", refresh: true },
+      });
+      expect(await fixture.collector.waitFor((message) => requestId(message, 909))).toMatchObject({
+        result: {
+          harnessId: "sample-agent",
+          account: { credits: { usedPercent: 2 } },
         },
       });
       writeRequest(fixture.desktopInput, {

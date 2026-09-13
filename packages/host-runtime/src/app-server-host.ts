@@ -1,10 +1,6 @@
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { ManagedNativeAuth } from "./managed-native-auth.js";
-import {
-  inspectHarnessAccount,
-  inspectHarnessAccounts,
-  listHarnessAccountSources,
-} from "./harness-accounts.js";
+import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
 import type { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
@@ -30,7 +26,6 @@ import {
   type HarnessAccountInspectResult,
   harnessAccountListParamsSchema,
   harnessAccountListResultSchema,
-  type HarnessAccountListResult,
   harnessAccountSourceListParamsSchema,
   codexAccountUsageParamsSchema,
   codexAccountUsageResultSchema,
@@ -534,8 +529,7 @@ export class AppServerHost {
   #managedNativeAuth: ManagedNativeAuth | undefined;
   #externalAdapters: Map<ExternalHarnessId, HarnessAdapter>;
   #pluginDescriptors: HarnessPluginDescriptor[] = [];
-  #accountInspection: Promise<HarnessAccountListResult> | null = null;
-  #accountInspections = new Map<HarnessId, Promise<HarnessAccountInspectResult>>();
+  readonly #accountInspections = new HarnessAccountInspectionCache();
   #externalRuntime: ExternalThreadRuntime;
   readonly #externalSteering = new ExternalTurnSteering();
   #repository: ExternalThreadRepository;
@@ -974,7 +968,7 @@ export class AppServerHost {
             return;
           }
           const result = harnessAccountInspectResultSchema.parse(
-            await this.#inspectHarnessAccount(adapter),
+            await this.#inspectHarnessAccount(adapter, params.data.refresh === true),
           );
           await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         });
@@ -982,19 +976,23 @@ export class AppServerHost {
       }
       if (request.method === "codexhost/harness/accounts/list") {
         this.#dispatchDesktopRequest(async () => {
-          if (!harnessAccountListParamsSchema.safeParse(request.params).success) {
+          const params = harnessAccountListParamsSchema.safeParse(request.params);
+          if (!params.success) {
             await this.#writer.json(
               rpcError(request, -32602, "Invalid Harness account list params"),
             );
             return;
           }
-          this.#accountInspection ??= inspectHarnessAccounts(
-            this.#externalAdapters.values(),
-            this.#pluginDescriptors,
-          ).finally(() => {
-            this.#accountInspection = null;
+          const inspections = await Promise.all(
+            [...this.#externalAdapters.values()].map((adapter) =>
+              this.#inspectHarnessAccount(adapter, params.data.refresh === true),
+            ),
+          );
+          const result = harnessAccountListResultSchema.parse({
+            accounts: inspections.flatMap(({ harnessId, harnessName, account }) =>
+              account ? [{ ...account, harnessId, harnessName }] : [],
+            ),
           });
-          const result = harnessAccountListResultSchema.parse(await this.#accountInspection);
           await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         });
         continue;
@@ -1542,16 +1540,11 @@ export class AppServerHost {
     return this.#officialRuntime.request(method, params);
   }
 
-  #inspectHarnessAccount(adapter: HarnessAdapter): Promise<HarnessAccountInspectResult> {
-    const active = this.#accountInspections.get(adapter.harnessId);
-    if (active) return active;
-    const inspection = inspectHarnessAccount(adapter, this.#pluginDescriptors).finally(() => {
-      if (this.#accountInspections.get(adapter.harnessId) === inspection) {
-        this.#accountInspections.delete(adapter.harnessId);
-      }
-    });
-    this.#accountInspections.set(adapter.harnessId, inspection);
-    return inspection;
+  #inspectHarnessAccount(
+    adapter: HarnessAdapter,
+    refresh = false,
+  ): Promise<HarnessAccountInspectResult> {
+    return this.#accountInspections.inspect(adapter, this.#pluginDescriptors, refresh);
   }
 
   async #currentCodexAccountId(): Promise<string | null> {

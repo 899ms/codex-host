@@ -27,7 +27,9 @@ export const harnessAccountSourceListResultSchema = z
   .strict();
 export type HarnessAccountSourceListResult = z.infer<typeof harnessAccountSourceListResultSchema>;
 
-export const harnessAccountInspectParamsSchema = z.object({ harnessId: harnessIdSchema }).strict();
+export const harnessAccountInspectParamsSchema = z
+  .object({ harnessId: harnessIdSchema, refresh: z.boolean().optional() })
+  .strict();
 export type HarnessAccountInspectParams = z.infer<typeof harnessAccountInspectParamsSchema>;
 
 export const harnessAccountInspectResultSchema = z
@@ -38,7 +40,10 @@ export const harnessAccountInspectResultSchema = z
   .strict();
 export type HarnessAccountInspectResult = z.infer<typeof harnessAccountInspectResultSchema>;
 
-export const harnessAccountListParamsSchema = z.object({}).strict();
+export const harnessAccountListParamsSchema = z
+  .object({ refresh: z.boolean().optional() })
+  .strict();
+export type HarnessAccountListParams = z.infer<typeof harnessAccountListParamsSchema>;
 export const harnessAccountListResultSchema = z
   .object({
     accounts: z.array(harnessAccountSnapshotSchema.extend(harnessAccountIdentityShape)).max(128),

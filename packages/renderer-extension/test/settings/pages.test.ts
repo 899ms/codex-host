@@ -6,6 +6,7 @@ import {
   type HarnessAccountInspectResult,
   type HarnessAccountListResult,
   type HarnessAccountSourceListResult,
+  type HarnessId,
   type HarnessSessionListParams,
   type UpdateCheckResult,
   type UpdateStatus,
@@ -261,6 +262,42 @@ describe("Read-only Harness accounts", () => {
     expect(changed).toHaveBeenCalledOnce();
   });
 
+  it("keeps Antigravity after the other Harness account rows", async () => {
+    const scope = new RendererSettingsPageScope();
+    const mounted = createHarnessAccounts(
+      scope.signal,
+      () => ({
+        listHarnessAccounts: async () => ({
+          accounts: [
+            {
+              harnessId: harnessIdSchema.parse("antigravity"),
+              harnessName: "Antigravity CLI",
+              credits: { usedPercent: 10, periodType: "weekly" },
+            },
+            {
+              harnessId: harnessIdSchema.parse("grok"),
+              harnessName: "Grok",
+              credits: { usedPercent: 20, periodType: "weekly" },
+            },
+            {
+              harnessId: harnessIdSchema.parse("claude-code"),
+              harnessName: "Claude Code",
+              credits: { usedPercent: 30, periodType: "weekly" },
+            },
+          ],
+        }),
+      }),
+      vi.fn(),
+    );
+    await mounted.refresh();
+    expect(mounted.accounts.map(({ harnessId }) => harnessId)).toEqual([
+      "claude-code",
+      "grok",
+      "antigravity",
+    ]);
+    scope.dispose();
+  });
+
   it("falls back to the aggregate account request when progressive discovery is unavailable", async () => {
     const scope = new RendererSettingsPageScope();
     const listHarnessAccounts = vi.fn(async () => result);
@@ -278,6 +315,39 @@ describe("Read-only Harness accounts", () => {
     await mounted.refresh();
     expect(listHarnessAccounts).toHaveBeenCalledOnce();
     expect(mounted.accounts).toEqual(result.accounts);
+    scope.dispose();
+  });
+
+  it("forces progressive Harness inspection only for an explicit quota refresh", async () => {
+    const scope = new RendererSettingsPageScope();
+    const inspectHarnessAccount = vi.fn(async ({ harnessId }: { harnessId: HarnessId }) => ({
+      harnessId,
+      harnessName: "Sample Agent",
+      account: {
+        email: "person@example.com",
+        credits: { usedPercent: 25, periodType: "weekly" as const },
+      },
+    }));
+    const mounted = createHarnessAccounts(
+      scope.signal,
+      () => ({
+        listHarnessAccountSources: async () => ({
+          sources: [
+            { harnessId: harnessIdSchema.parse("sample-agent"), harnessName: "Sample Agent" },
+          ],
+        }),
+        inspectHarnessAccount,
+      }),
+      vi.fn(),
+    );
+
+    await mounted.refresh();
+    expect(inspectHarnessAccount).toHaveBeenLastCalledWith({ harnessId: "sample-agent" });
+    await mounted.refresh(true);
+    expect(inspectHarnessAccount).toHaveBeenLastCalledWith({
+      harnessId: "sample-agent",
+      refresh: true,
+    });
     scope.dispose();
   });
 

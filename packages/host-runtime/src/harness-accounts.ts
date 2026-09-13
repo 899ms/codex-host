@@ -11,6 +11,7 @@ import {
 } from "@codexhost/shared-contracts";
 
 const DEFAULT_ACCOUNT_INSPECTION_TIMEOUT_MS = 12_000;
+const DEFAULT_ACCOUNT_CACHE_TTL_MS = 15_000;
 
 function harnessName(
   harnessId: HarnessId,
@@ -68,6 +69,50 @@ export async function inspectHarnessAccount(
     return harnessAccountInspectResultSchema.parse({ ...identity, account: null });
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+interface CachedHarnessAccountInspection {
+  readonly result: HarnessAccountInspectResult;
+  readonly freshUntil: number;
+}
+
+/** Per-Harness result cache shared by progressive and legacy account inspection routes. */
+export class HarnessAccountInspectionCache {
+  readonly #results = new Map<HarnessId, CachedHarnessAccountInspection>();
+  readonly #flights = new Map<HarnessId, Promise<HarnessAccountInspectResult>>();
+
+  constructor(
+    private readonly ttlMs = DEFAULT_ACCOUNT_CACHE_TTL_MS,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  inspect(
+    adapter: HarnessAdapter,
+    descriptors: readonly HarnessPluginDescriptor[],
+    refresh = false,
+  ): Promise<HarnessAccountInspectResult> {
+    const cached = this.#results.get(adapter.harnessId);
+    if (!refresh && cached && this.now() < cached.freshUntil) {
+      return Promise.resolve(cached.result);
+    }
+    const active = this.#flights.get(adapter.harnessId);
+    if (active) return active;
+    const flight = inspectHarnessAccount(adapter, descriptors)
+      .then((result) => {
+        this.#results.set(adapter.harnessId, {
+          result,
+          freshUntil: this.now() + this.ttlMs,
+        });
+        return result;
+      })
+      .finally(() => {
+        if (this.#flights.get(adapter.harnessId) === flight) {
+          this.#flights.delete(adapter.harnessId);
+        }
+      });
+    this.#flights.set(adapter.harnessId, flight);
+    return flight;
   }
 }
 

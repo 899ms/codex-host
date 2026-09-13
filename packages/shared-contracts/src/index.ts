@@ -17,6 +17,7 @@ export type {
   HarnessAccountSourceListResult,
   HarnessAccountInspectParams,
   HarnessAccountInspectResult,
+  HarnessAccountListParams,
   HarnessAccountListResult,
 } from "./harness-accounts.js";
 

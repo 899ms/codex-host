@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FakeHarnessAdapter } from "@codexhost/harness-adapter/testing";
 import { harnessIdSchema, type HarnessAccountSnapshot } from "@codexhost/shared-contracts";
 import {
+  HarnessAccountInspectionCache,
   inspectHarnessAccount,
   inspectHarnessAccounts,
   listHarnessAccountSources,
@@ -72,6 +73,29 @@ describe("read-only Harness accounts", () => {
       accounts: [{ ...snapshot, harnessId: "sample-agent", harnessName: "Sample Agent" }],
     });
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("caches each Harness account for 15 seconds and lets manual refresh bypass it", async () => {
+    let now = 0;
+    const inspectAccount = vi
+      .fn<() => Promise<HarnessAccountSnapshot | null>>()
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(snapshot);
+    const native = Object.assign(adapter("sample-agent"), { inspectAccount });
+    const cache = new HarnessAccountInspectionCache(15_000, () => now);
+
+    expect((await cache.inspect(native, [])).account).toEqual(snapshot);
+    expect((await cache.inspect(native, [])).account).toEqual(snapshot);
+    expect(inspectAccount).toHaveBeenCalledOnce();
+
+    expect((await cache.inspect(native, [], true)).account).toBeNull();
+    expect(inspectAccount).toHaveBeenCalledTimes(2);
+    expect((await cache.inspect(native, [])).account).toBeNull();
+
+    now = 15_001;
+    expect((await cache.inspect(native, [])).account).toEqual(snapshot);
+    expect(inspectAccount).toHaveBeenCalledTimes(3);
   });
 
   it("does not reuse the previous account when native authentication stops returning quota", async () => {

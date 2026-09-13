@@ -135,7 +135,7 @@ export function createAccountsSettingsPage(
       refreshUsage.addEventListener("click", () => {
         usageByAccountId.clear();
         loadUsage(accounts);
-        void harnessAccounts?.refresh();
+        void harnessAccounts?.refresh(true);
       });
       search.addEventListener("input", () => render());
       toolbar.append(connected, searchWrapper, displayControls, refreshUsage);
