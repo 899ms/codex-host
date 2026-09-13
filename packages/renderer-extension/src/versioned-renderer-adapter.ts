@@ -133,6 +133,7 @@ export interface RendererDraftPrewarmPolicy {
   state: "ready";
   hostId: string;
   readonly requestTarget?: () => unknown;
+  readonly refreshRequestBridge?: () => boolean;
   select(model: string | null): boolean;
   clear(): Promise<void>;
 }
@@ -1046,7 +1047,10 @@ export function installCurrentRendererAdapter(): {
       if (!cached) {
         const queueCleanup = installRendererExternalQueue(target);
         if (queueCleanup) turnControlCleanups.add(queueCleanup);
-        const steeringCleanup = installRendererExternalSteering(target);
+        const steeringCleanup = installRendererExternalSteering(
+          target,
+          policy?.refreshRequestBridge,
+        );
         if (steeringCleanup) turnControlCleanups.add(steeringCleanup);
       }
       clientsByTarget.set(target, { client, policy, requestClient: target.requestClient });
