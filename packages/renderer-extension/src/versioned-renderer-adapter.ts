@@ -975,14 +975,14 @@ export function modelSelectionForAgent(
                       })
                     : agent === "hermes"
                       ? hermesTransportModelId(model, permissionModeId)
-                    : agent === "qoder"
-                      ? encodeHarnessPluginRoute({
-                          harnessId: QODER_HARNESS_ID,
-                          ...(model ? { model } : {}),
-                          ...(thinkingOptionId ? { thinkingOptionId } : {}),
-                          ...(permissionModeId ? { permissionModeId } : {}),
-                        })
-                      : transportModelIdForAgent(agent);
+                      : agent === "qoder"
+                        ? encodeHarnessPluginRoute({
+                            harnessId: QODER_HARNESS_ID,
+                            ...(model ? { model } : {}),
+                            ...(thinkingOptionId ? { thinkingOptionId } : {}),
+                            ...(permissionModeId ? { permissionModeId } : {}),
+                          })
+                        : transportModelIdForAgent(agent);
   return transportModelId ? { model: transportModelId, reasoningEffort } : officialSelection;
 }
 

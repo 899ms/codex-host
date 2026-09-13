@@ -231,6 +231,7 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "hermes" && model) state.hermesModel = model;
     else if (agent === "hermes") delete state.hermesModel;
     if (agent === "qoder" && model) state.qoderModel = model;
+    else if (agent === "qoder") delete state.qoderModel;
     if (agent === "pi" && thinkingOptionId) state.piThinkingOptionId = thinkingOptionId;
     else if (agent === "pi") delete state.piThinkingOptionId;
     if (agent === "claude-code" && thinkingOptionId) {
