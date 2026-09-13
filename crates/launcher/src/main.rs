@@ -1274,7 +1274,6 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::path::{Path, PathBuf};
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
     use std::process::Command;
     #[cfg(target_os = "macos")]
     use std::process::Stdio;
