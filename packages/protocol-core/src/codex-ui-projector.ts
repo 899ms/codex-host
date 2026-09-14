@@ -288,7 +288,8 @@ function simpleUnifiedDiff(
 function coalesceSingleFileChanges(fileChanges: HostFileChange[]): HostFileChange[] {
   const first = fileChanges[0];
   const last = fileChanges.at(-1);
-  if (!first || (first.kind === "add" && last?.kind === "delete")) return [];
+  if (!first) return [];
+  if (first.kind === "add" && last?.kind === "delete") return [last];
 
   // Reduce adjacent chainable changes
   const reduced: HostFileChange[] = [];
