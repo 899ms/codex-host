@@ -49,6 +49,13 @@ The dedicated management connection SHALL initialize before Desktop clients. A m
 - **THEN** it SHALL use a unique management-only backend without depending on Desktop initialization
 - **AND** recovery records SHALL be interpreted before importing native credentials
 
+#### Scenario: Ordinary startup follows a retired supervisor without an exit receipt
+- **WHEN** no credential transaction or login stage is pending, the home lease is held, and a historical running supervisor is confirmed absent or its PID has been reused
+- **THEN** startup MAY retire that historical running record without an exit receipt and continue normal credential identity verification
+- **AND** this SHALL NOT be treated as proof that the historical process tree exited or as exit evidence for a credential change
+- **AND** live supervisors, failed identity inspection, unidentified spawn gaps and invalid or mismatched receipts SHALL remain blocked
+- **AND** pending-operation recovery, current backend stop and subsequent backend replacement SHALL retain strict exit checks
+
 #### Scenario: Management unsupported but native use is safe
 - **WHEN** no transaction or ownership conflict exists and management is unavailable because of storage, key or version capability
 - **THEN** the native single-account path SHALL retain ordinary native authentication semantics without creating plaintext credential backups
