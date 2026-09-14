@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { jsonObjectSchema, codexAccountListResultSchema } from "@codexhost/shared-contracts";
@@ -11,9 +14,13 @@ vi.mock("../src/codex-runtime/owned-official-backends.js", () => ({
 }));
 
 const prepared = new Set<PreparedLocalCodex>();
+const temporaryDirectories = new Set<string>();
 afterEach(async () => {
   for (const local of prepared) await local.close();
   prepared.clear();
+  for (const directory of temporaryDirectories)
+    await rm(directory, { recursive: true, force: true });
+  temporaryDirectories.clear();
   vi.clearAllMocks();
 });
 
@@ -83,10 +90,12 @@ function nativeFixture() {
 }
 
 async function startLocal() {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "codexhost-native-account-host-"));
+  temporaryDirectories.add(directory);
   const local = await prepareLocalCodex({
     stockCodexPath: "/synthetic/codex",
     arguments: ["app-server"],
-    environment: { CODEX_HOME: "/synthetic/codex-home" },
+    environment: { CODEX_HOME: path.join(directory, "missing-codex-home") },
     diagnosticOutput: new PassThrough(),
   });
   prepared.add(local);

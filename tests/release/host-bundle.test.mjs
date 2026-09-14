@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -37,14 +37,32 @@ async function runPackagedHost(host, directory, requests) {
   const official = path.join(directory, "official.mjs");
   await writeFile(
     official,
-    `
-    import readline from "node:readline";
-    for await (const line of readline.createInterface({ input: process.stdin })) {
-      const request = JSON.parse(line);
-      process.stdout.write(JSON.stringify({ id: request.id, result: { official: true } }) + "\\n");
-    }
+    `#!/usr/bin/env node
+    import { WebSocketServer } from ${JSON.stringify(import.meta.resolve("ws"))};
+
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0, perMessageDeflate: false });
+    server.on("connection", (socket) => {
+      socket.on("message", (frame) => {
+        const request = JSON.parse(frame.toString());
+        if (request.id === undefined) return;
+        const result = request.method === "account/read"
+          ? { account: null, requiresOpenaiAuth: true }
+          : { official: true };
+        socket.send(JSON.stringify({ id: request.id, result }));
+      });
+    });
+    server.on("listening", () => {
+      const address = server.address();
+      process.stderr.write("  listening on: ws://127.0.0.1:" + address.port + "\\n");
+    });
   `,
   );
+  await chmod(official, 0o755);
+  const officialCommand =
+    process.platform === "win32" ? path.join(directory, "official.cmd") : official;
+  if (process.platform === "win32") {
+    await writeFile(officialCommand, `@"${process.execPath}" "${official}" %*\r\n`);
+  }
   const environment = { ...process.env };
   for (const key of Object.keys(environment))
     if (key.startsWith("CODEXHOST_") || key === "NODE_PATH") delete environment[key];
@@ -53,12 +71,12 @@ async function runPackagedHost(host, directory, requests) {
     USERPROFILE: directory,
     CODEXHOST_DATA_DIR: path.join(directory, "data"),
     CODEXHOST_PLUGIN_DIRECTORY: path.join(directory, "user-plugins"),
-    CODEXHOST_STOCK_CODEX_PATH: process.execPath,
+    CODEXHOST_STOCK_CODEX_PATH: officialCommand,
     CODEXHOST_DEFAULT_AGENT: "codex",
     CODEXHOST_CLAUDE_COMMAND: path.join(directory, "missing-claude"),
     CODEXHOST_ANTIGRAVITY_COMMAND: path.join(directory, "missing-antigravity"),
   });
-  const child = spawn(process.execPath, [host, official], {
+  const child = spawn(process.execPath, [host, "app-server"], {
     cwd: directory,
     env: environment,
     stdio: ["pipe", "pipe", "pipe"],

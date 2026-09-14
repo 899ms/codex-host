@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Writable } from "node:stream";
@@ -38,6 +38,7 @@ export async function prepareLocalCodex(input: {
   const home = await canonicalCodexHome(
     input.environment.CODEX_HOME ?? path.join(homedir(), ".codex"),
   );
+  await mkdir(home, { recursive: true });
   const scope = new OfficialRuntimeScope({
     permanentHome: home,
     diagnosticOutput: input.diagnosticOutput,
