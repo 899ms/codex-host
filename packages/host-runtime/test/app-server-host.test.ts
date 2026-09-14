@@ -306,7 +306,6 @@ function createFixture(
       OfficialAppServerConnection | Promise<OfficialAppServerConnection>;
     updateCoordinator?: HostUpdateCoordinator;
     accountControl?: CodexAccountControl;
-    allowNativeAuthPassthrough?: boolean;
     officialRuntimeScope?: OfficialRuntimeScope;
     onDelegationApi?: (api: DelegationControlRegistration) => (() => void) | undefined;
   } = {},
@@ -359,9 +358,6 @@ function createFixture(
       : {}),
     ...(options.updateCoordinator ? { updateCoordinator: options.updateCoordinator } : {}),
     ...(options.accountControl ? { accountControl: options.accountControl } : {}),
-    ...(options.allowNativeAuthPassthrough === undefined
-      ? {}
-      : { allowNativeAuthPassthrough: options.allowNativeAuthPassthrough }),
     ...(options.officialRuntimeScope ? { officialRuntimeScope: options.officialRuntimeScope } : {}),
     ...(options.onDelegationApi ? { onDelegationApi: options.onDelegationApi } : {}),
   });
@@ -482,6 +478,37 @@ async function answerOfficialParentCwd(
   );
 }
 
+describe("AppServerHost official forwarding", () => {
+  it.each([
+    { method: "codexhost/unknown", params: {} },
+    {
+      method: "thread/start",
+      params: { model: "gpt-5", cwd: "/synthetic", unknownParam: "opaque" },
+    },
+    {
+      method: "turn/start",
+      params: {
+        threadId: "official-thread",
+        input: [{ type: "text", text: "synthetic" }],
+        unknownParam: "opaque",
+      },
+    },
+  ])("forwards $method unchanged and relays backend errors", async ({ method, params }) => {
+    const fixture = createFixture();
+    try {
+      await fixture.ready;
+      const request = { id: 1, method, params };
+      writeRequest(fixture.desktopInput, request);
+      expect(await readJsonLine(fixture.official.stdin)).toEqual(request);
+      const response = { id: 1, error: { code: -32601, message: "Synthetic backend error" } };
+      writeRequest(fixture.official.stdout, response);
+      expect(await fixture.collector.waitFor((message) => requestId(message, 1))).toEqual(response);
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+});
+
 describe("AppServerHost installed Harness plugins", () => {
   // A cold plugin import has its own 10s loader budget; RPC checks remain 2s.
   it("discovers an unknown plugin, serves its descriptor, routes a Thread, and closes it", async () => {
@@ -508,9 +535,10 @@ describe("AppServerHost installed Harness plugins", () => {
       `
       import { FakeHarnessAdapter } from ${JSON.stringify(pathToFileURL(path.resolve("packages/harness-adapter/dist/testing.js")).href)};
       import { writeFileSync } from "node:fs";
+      let accountInspections = 0;
       export function createHarnessAdapter() {
         const adapter = new FakeHarnessAdapter("sample-agent");
-        adapter.inspectAccount = async () => ({ email: "sample@example.com", credits: { usedPercent: 25, periodType: "weekly" } });
+        adapter.inspectAccount = async () => ({ email: "sample@example.com", credits: { usedPercent: ++accountInspections, periodType: "weekly" } });
         const close = adapter.close.bind(adapter);
         adapter.close = async () => { await close(); writeFileSync(new URL("closed", import.meta.url), "yes"); };
         return adapter;
@@ -527,6 +555,31 @@ describe("AppServerHost installed Harness plugins", () => {
       });
       expect(await fixture.collector.waitFor((message) => requestId(message, 901))).toMatchObject({
         result: { plugins: [{ id: "sample-agent", name: "Sample Agent", version: "1.0.0" }] },
+      });
+      writeRequest(fixture.desktopInput, {
+        id: 907,
+        method: "codexhost/harness/accounts/sources",
+        params: {},
+      });
+      expect(await fixture.collector.waitFor((message) => requestId(message, 907))).toMatchObject({
+        result: {
+          sources: [{ harnessId: "sample-agent", harnessName: "Sample Agent" }],
+        },
+      });
+      writeRequest(fixture.desktopInput, {
+        id: 908,
+        method: "codexhost/harness/accounts/inspect",
+        params: { harnessId: "sample-agent" },
+      });
+      expect(await fixture.collector.waitFor((message) => requestId(message, 908))).toMatchObject({
+        result: {
+          harnessId: "sample-agent",
+          harnessName: "Sample Agent",
+          account: {
+            email: "sample@example.com",
+            credits: { usedPercent: 1 },
+          },
+        },
       });
       writeRequest(fixture.desktopInput, {
         id: 902,
@@ -548,9 +601,20 @@ describe("AppServerHost installed Harness plugins", () => {
               harnessId: "sample-agent",
               harnessName: "Sample Agent",
               email: "sample@example.com",
-              credits: { usedPercent: 25 },
+              credits: { usedPercent: 1 },
             },
           ],
+        },
+      });
+      writeRequest(fixture.desktopInput, {
+        id: 909,
+        method: "codexhost/harness/accounts/inspect",
+        params: { harnessId: "sample-agent", refresh: true },
+      });
+      expect(await fixture.collector.waitFor((message) => requestId(message, 909))).toMatchObject({
+        result: {
+          harnessId: "sample-agent",
+          account: { credits: { usedPercent: 2 } },
         },
       });
       writeRequest(fixture.desktopInput, {
@@ -751,330 +815,147 @@ describe("AppServerHost HarnessAdapter projection", () => {
     }
   });
 
-  it("passes native auth through when unmanaged and routes it through global control when managed", async () => {
-    const unmanaged = createFixture();
-    try {
-      await unmanaged.ready;
-      writeRequest(unmanaged.desktopInput, { id: 903, method: "account/logout", params: {} });
-      const forwarded = await readJsonLine(unmanaged.official.stdin);
-      expect(forwarded).toMatchObject({ id: 903, method: "account/logout", params: {} });
-      unmanaged.official.stdout.write(`${JSON.stringify({ id: 903, result: {} })}\n`);
-      await expect(
-        unmanaged.collector.waitFor((message) => message.id === 903),
-      ).resolves.toMatchObject({ result: {} });
-    } finally {
-      await stopFixture(unmanaged);
-    }
-
-    const logout = vi.fn(async () => {});
-    const recover = vi.fn(async () => {});
-    const startLogin = vi.fn(async () => ({
-      accountId: "account-b",
-      loginId: "login-one",
-      verificationUrl: "https://example.test/device",
-      userCode: "CODE",
-    }));
-    const startNativeLogin = vi.fn(async (params: { type: string }) => {
-      const response =
-        params.type === "chatgptDeviceCode"
-          ? {
-              type: "chatgptDeviceCode" as const,
-              loginId: "login-one",
-              verificationUrl: "https://auth.openai.com/codex/device",
-              userCode: "CODE",
-            }
-          : {
-              type: "chatgpt" as const,
-              loginId: "native-oauth-operation",
-              authUrl: "https://auth.openai.com/authorize?synthetic=1",
-            };
-      return {
-        response,
-        completed: Promise.resolve({
-          loginId: response.loginId,
-          success: false,
-          error: "synthetic cancellation",
-          onboardingEntrypoint: null,
+  it.each([false, true])("preserves native auth with account management=%s", async (managed) => {
+    const accountControl = Object.assign(
+      new SingleNativeCodexAccount(() => ({
+        version: 2,
+        currentAccountId: null,
+        phase: "ready",
+        revision: 7,
+        accounts: [],
+      })),
+      {
+        refresh: vi.fn(async () => {
+          throw new Error("synthetic identity refresh failure");
         }),
-      };
-    });
-    const snapshot = () => ({
-      version: 2 as const,
-      currentAccountId: null,
-      phase: "ready" as const,
-      revision: 7,
-      capabilities: {
-        manage: true,
-        switch: true,
-        login: true,
-        delete: true,
-        logout: true,
-        recover: true,
       },
-      accounts: [],
-    });
-    const accountControl = {
-      snapshot,
-      currentAccountId: () => null,
-      switch: vi.fn(),
-      remove: vi.fn(),
-      startLogin,
-      startNativeLogin,
-      cancelLogin: vi.fn(),
-      logout,
-      recover,
-      observe: vi.fn(),
-      subscribeLogin: () => () => undefined,
-    } as unknown as CodexAccountControl;
-    const fallback = createFixture({ accountControl, allowNativeAuthPassthrough: true });
-    try {
-      await fallback.ready;
-      writeRequest(fallback.desktopInput, { id: 908, method: "account/logout", params: {} });
-      const forwarded = await readJsonLine(fallback.official.stdin);
-      expect(forwarded).toMatchObject({ id: 908, method: "account/logout", params: {} });
-      fallback.official.stdout.write(`${JSON.stringify({ id: 908, result: {} })}\n`);
-      await expect(
-        fallback.collector.waitFor((message) => message.id === 908),
-      ).resolves.toMatchObject({ result: {} });
-      expect(logout).not.toHaveBeenCalled();
-    } finally {
-      await stopFixture(fallback);
-    }
-
-    const managed = createFixture({ accountControl, allowNativeAuthPassthrough: false });
-    try {
-      await managed.ready;
-      writeRequest(managed.desktopInput, { id: 904, method: "account/logout", params: {} });
-      await expect(
-        managed.collector.waitFor((message) => message.id === 904),
-      ).resolves.toMatchObject({ result: {} });
-      expect(logout).toHaveBeenCalledOnce();
-      expect(managed.official.stdin.read()).toBeNull();
-
-      writeRequest(managed.desktopInput, {
-        id: 905,
-        method: "codexhost/account/recover",
-        params: {},
-      });
-      await expect(
-        managed.collector.waitFor((message) => message.id === 905),
-      ).resolves.toMatchObject({ result: { version: 2, revision: 7 } });
-      expect(recover).toHaveBeenCalledOnce();
-
-      writeRequest(managed.desktopInput, {
-        id: 906,
-        method: "account/login/start",
-        params: { type: "unsupported" },
-      });
-      await expect(
-        managed.collector.waitFor((message) => message.id === 906),
-      ).resolves.toHaveProperty("error");
-      expect(startLogin).not.toHaveBeenCalled();
-
-      writeRequest(managed.desktopInput, {
-        id: 907,
-        method: "account/login/start",
-        params: { type: "chatgptDeviceCode" },
-      });
-      await expect(
-        managed.collector.waitFor((message) => message.id === 907),
-      ).resolves.toMatchObject({
-        result: { type: "chatgptDeviceCode", loginId: "login-one", userCode: "CODE" },
-      });
-      expect(startLogin).not.toHaveBeenCalled();
-      expect(startNativeLogin).toHaveBeenCalledWith({ type: "chatgptDeviceCode" });
-
-      const nativeParams = {
-        type: "chatgpt",
-        codexStreamlinedLogin: true,
-        useHostedLoginSuccessPage: true,
-        appBrand: "codex",
-      };
-      writeRequest(managed.desktopInput, {
-        id: 909,
-        method: "account/login/start",
-        params: nativeParams,
-      });
-      await expect(
-        managed.collector.waitFor((message) => message.id === 909),
-      ).resolves.toMatchObject({
-        result: {
-          type: "chatgpt",
-          loginId: "native-oauth-operation",
-          authUrl: "https://auth.openai.com/authorize?synthetic=1",
-        },
-      });
-      expect(startNativeLogin).toHaveBeenCalledWith(nativeParams);
-      expect(managed.official.stdin.read()).toBeNull();
-    } finally {
-      await stopFixture(managed);
-    }
-  });
-
-  it("returns a strict managed logout result when the Account snapshot has recovery metadata", async () => {
-    const accountId = "00000000-0000-4000-8000-000000000011";
-    let state: CodexAccountListResult = {
-      version: 2,
-      currentAccountId: accountId,
-      phase: "ready",
-      revision: 4,
-      instanceId: "synthetic-instance",
-      cleanupRequired: true,
-      capabilities: {
-        manage: true,
-        switch: true,
-        login: true,
-        delete: true,
-        logout: true,
-        recover: true,
-      },
-      accounts: [{ accountId, label: "Managed" }],
-    };
-    const accountControl: CodexAccountControl = {
-      snapshot: () => state,
-      currentAccountId: () => state.currentAccountId,
-      async switch() {},
-      async remove() {},
-      async startLogin() {
-        throw new Error("unused");
-      },
-      async cancelLogin() {
-        return false;
-      },
-      async logout() {
-        state = { ...state, currentAccountId: null, phase: "ready", revision: 5 };
-      },
-      async recover() {},
-      observe() {},
-      subscribeLogin: () => () => undefined,
-    };
-    const fixture = createFixture({ accountControl, allowNativeAuthPassthrough: false });
+    );
+    const fixture = createFixture(managed ? { accountControl } : {});
     try {
       await fixture.ready;
-      writeRequest(fixture.desktopInput, {
-        id: 909,
-        method: "codexhost/account/logout",
+      const requests: JsonObject[] = [
+        { id: 903, method: "account/logout" },
+        { id: 904, method: "account/logout", params: null },
+        { id: 905, method: "account/logout", params: {} },
+        { id: 906, method: "account/login/start", params: { type: "chatgpt", futureField: true } },
+        { id: 907, method: "account/login/start", params: { type: "future-native-mode" } },
+        {
+          id: 908,
+          method: "account/login/cancel",
+          params: { loginId: "native-id", futureField: 1 },
+        },
+        { id: 909, method: "account/login/future", params: {} },
+        { id: 910, method: "account/login/start" },
+        { id: 911, method: "account/logout", params: false },
+        { id: 913, method: "account/logout", params: [] },
+        { id: 914, method: "account/login/cancel" },
+      ];
+      for (const request of requests) {
+        writeRequest(fixture.desktopInput, request);
+        expect(await readJsonLine(fixture.official.stdin)).toEqual(request);
+        const response =
+          request.id === 906
+            ? {
+                id: request.id,
+                result: { type: "chatgpt", loginId: "native-id", futureField: "kept" },
+              }
+            : request.id === 908
+              ? { id: request.id, result: { status: "canceled", futureField: true } }
+              : request.id === 907 || request.id === 910 || request.id === 911
+                ? {
+                    id: request.id,
+                    error: {
+                      code: -32602,
+                      message: "native rejection",
+                      data: { futureField: true },
+                    },
+                  }
+                : { id: request.id, result: {} };
+        fixture.official.stdout.write(`${JSON.stringify(response)}\n`);
+        expect(await fixture.collector.waitFor((message) => message.id === request.id)).toEqual(
+          response,
+        );
+      }
+      for (const notification of [
+        {
+          method: "account/login/completed",
+          params: { loginId: "native-id", success: true, futureField: true },
+        },
+        { method: "account/updated", params: { authMode: null, futureField: "kept" } },
+      ]) {
+        fixture.official.stdout.write(`${JSON.stringify(notification)}\n`);
+        expect(
+          await fixture.collector.waitFor((message) => message.method === notification.method),
+        ).toEqual(notification);
+      }
+      if (managed) await vi.waitFor(() => expect(accountControl.refresh).toHaveBeenCalled());
+      writeRequest(fixture.desktopInput, { id: 912, method: "account/read", params: {} });
+      expect(await readJsonLine(fixture.official.stdin)).toEqual({
+        id: 912,
+        method: "account/read",
         params: {},
       });
-      await expect(fixture.collector.waitFor((message) => message.id === 909)).resolves.toEqual({
-        id: 909,
-        result: { currentAccountId: null, phase: "ready", revision: 5 },
-      });
-      expect(state).toMatchObject({ instanceId: "synthetic-instance", cleanupRequired: true });
+      fixture.official.stdout.write(`${JSON.stringify({ id: 912, result: { account: null } })}\n`);
+      await expect(
+        fixture.collector.waitFor((message) => message.id === 912),
+      ).resolves.toMatchObject({ result: { account: null } });
     } finally {
       await stopFixture(fixture);
     }
   });
 
-  it.each(["admission", "transaction", "untrusted"] as const)(
-    "returns a fixed busy error without exposing %s details",
-    async (kind) => {
-      const { OfficialAdmissionError } = await import("../src/codex-runtime/official-work-gate.js");
-      const { NativeTransitionError } =
-        await import("../src/account/native-profile-transaction.js");
-      const accountId = "00000000-0000-4000-8000-000000000022";
-      const error =
-        kind === "admission"
-          ? new OfficialAdmissionError("busy", new Error("private native details"))
-          : kind === "transaction"
-            ? new NativeTransitionError("busy", true)
-            : Object.assign(new Error("secret native diagnostic"), { code: "busy" });
-      const state: CodexAccountListResult = {
-        version: 2,
-        currentAccountId: null,
-        phase: "ready",
-        revision: 1,
-        capabilities: { manage: true, switch: true, login: true, delete: true },
-        accounts: [{ accountId, label: "Target" }],
-      };
-      const accountControl: CodexAccountControl = {
-        snapshot: () => state,
-        currentAccountId: () => null,
-        async switch() {
-          throw error;
-        },
-        async remove() {},
-        async startLogin() {
-          throw new Error("unused");
-        },
-        async cancelLogin() {
-          return false;
-        },
-        async logout() {},
-        async recover() {},
-        observe() {},
-        subscribeLogin: () => () => undefined,
-      };
-      const fixture = createFixture({ accountControl, allowNativeAuthPassthrough: false });
-      try {
-        await fixture.ready;
-        writeRequest(fixture.desktopInput, {
-          id: 911,
-          method: "codexhost/account/switch",
-          params: { accountId },
-        });
-        await expect(
-          fixture.collector.waitFor((message) => message.id === 911),
-        ).resolves.toMatchObject({
-          error: {
-            code: -32084,
-            message: "Codex is busy",
-          },
-        });
-      } finally {
-        await stopFixture(fixture);
-      }
-    },
-  );
-
-  it("does not report a ready switch when control returns before its snapshot is ready", async () => {
-    const firstId = "00000000-0000-4000-8000-000000000021";
-    const secondId = "00000000-0000-4000-8000-000000000022";
-    let state: CodexAccountListResult = {
+  it("refreshes native-derived Account selection before returning an Account list", async () => {
+    const stale: CodexAccountListResult = {
       version: 2,
-      currentAccountId: firstId,
+      currentAccountId: null,
       phase: "ready",
       revision: 1,
-      capabilities: { manage: true, switch: true, login: true, delete: true },
-      accounts: [
-        { accountId: firstId, label: "First" },
-        { accountId: secondId, label: "Second" },
-      ],
+      accounts: [],
     };
-    const switchAccount = vi.fn(async (accountId: string) => {
-      state = { ...state, currentAccountId: accountId, phase: "changing", revision: 2 };
-    });
-    const accountControl: CodexAccountControl = {
-      snapshot: () => state,
-      currentAccountId: () => state.currentAccountId,
-      switch: switchAccount,
-      async remove() {},
-      async startLogin() {
-        throw new Error("unused");
-      },
-      async cancelLogin() {
-        return false;
-      },
-      async logout() {},
-      async recover() {},
-      observe() {},
-      subscribeLogin: () => () => undefined,
+    const fresh: CodexAccountListResult = {
+      ...stale,
+      currentAccountId: "native",
+      revision: 2,
+      accounts: [{ accountId: "native", label: "Observed native Account" }],
     };
-    const fixture = createFixture({ accountControl, allowNativeAuthPassthrough: false });
+    const refresh = vi.fn(async () => fresh);
+    const accountControl = Object.assign(new SingleNativeCodexAccount(() => stale), { refresh });
+    const fixture = createFixture({ accountControl });
     try {
       await fixture.ready;
-      writeRequest(fixture.desktopInput, {
-        id: 910,
-        method: "codexhost/account/switch",
-        params: { accountId: secondId },
+      writeRequest(fixture.desktopInput, { id: 908, method: "codexhost/account/list", params: {} });
+      await expect(fixture.collector.waitFor((message) => message.id === 908)).resolves.toEqual({
+        id: 908,
+        result: fresh,
       });
-      await expect(
-        fixture.collector.waitFor((message) => message.id === 910),
-      ).resolves.toMatchObject({
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
+  it.each([
+    "codexhost/account/switch",
+    "codexhost/account/logout",
+    "codexhost/account/login/start",
+    "codexhost/account/login/cancel",
+    "codexhost/account/delete",
+    "codexhost/account/recover",
+    "codexhost/account/rate-limit-reset/consume",
+  ])("forwards leftover Host account method %s as an unknown method", async (methodName) => {
+    const fixture = createFixture();
+    try {
+      await fixture.ready;
+      const request = { id: 910, method: methodName, params: { accountId: "account-b" } };
+      writeRequest(fixture.desktopInput, request);
+      expect(await readJsonLine(fixture.official.stdin)).toEqual(request);
+      fixture.official.stdout.write(
+        `${JSON.stringify({ id: 910, error: { code: -32601, message: "Method not found" } })}\n`,
+      );
+      await expect(fixture.collector.waitFor((message) => message.id === 910)).resolves.toEqual({
         id: 910,
-        error: { code: -32086, message: "Codex Account operation failed" },
+        error: { code: -32601, message: "Method not found" },
       });
-      expect(switchAccount).toHaveBeenCalledWith(secondId);
     } finally {
       await stopFixture(fixture);
     }
@@ -1844,47 +1725,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
     }
   });
 
-  it("initializes a new Desktop without stopping or attaching to an active login backend", async () => {
-    const exit = Promise.withResolvers<OfficialAppServerExit>();
-    const stop = vi.fn(async () => exit.resolve({ code: 0, signal: null }));
-    const connect = vi.fn(async (): Promise<OfficialAppServerConnection> => {
-      throw new Error("Desktop must not connect to authentication staging");
-    });
-    const scope = new OfficialRuntimeScope({
-      permanentHome: "/synthetic/permanent",
-      managedAccounts: true,
-      diagnosticOutput: new PassThrough(),
-      createBackend: () => ({ closed: exit.promise, start: async () => {}, connect, stop }),
-    });
-    scope.gate.initialized();
-    const change = scope.gate.beginChange();
-    await scope.owner.start({ mode: "management-only", homeOverride: "/synthetic/login" });
-    const fixture = createFixture({ officialRuntimeScope: scope });
-    try {
-      writeRequest(fixture.desktopInput, {
-        id: 901,
-        method: "initialize",
-        params: { clientInfo: { name: "codex_desktop", version: "synthetic" } },
-      });
-      await expect(
-        fixture.collector.waitFor((message) => message.id === 901),
-      ).resolves.toMatchObject({
-        result: { userAgent: "codexhost", codexHome: "/synthetic/permanent" },
-      });
-      expect(scope.gate.phase).toBe("changing");
-      expect(scope.owner.running).toBe(true);
-      expect(stop).not.toHaveBeenCalled();
-      expect(connect).not.toHaveBeenCalled();
-      await startPiThread(fixture);
-    } finally {
-      fixture.host.close();
-      await fixture.running;
-      await scope.close();
-      change.finish("unavailable");
-      rmSync(fixture.mappingStoreDirectory, { recursive: true, force: true });
-    }
-  });
-
   it("keeps the initialized Desktop client attached through managed Account recovery", async () => {
     const exit = Promise.withResolvers<OfficialAppServerExit>();
     const stdin = new PassThrough();
@@ -1919,8 +1759,9 @@ describe("AppServerHost HarnessAdapter projection", () => {
     }));
     const scope = new OfficialRuntimeScope({
       permanentHome: "/synthetic/permanent",
-      managedAccounts: true,
-      createBackend,
+      createBackend: createBackend.mockImplementationOnce(() => {
+        throw new Error("Synthetic initial startup failure");
+      }),
       diagnosticOutput: new PassThrough(),
     });
     const accountControl = new SingleNativeCodexAccount(() => ({
@@ -1928,18 +1769,11 @@ describe("AppServerHost HarnessAdapter projection", () => {
       currentAccountId: null,
       phase: scope.gate.phase,
       revision: scope.gate.revision,
-      capabilities: { manage: true, switch: false, login: false, delete: false, recover: true },
       accounts: [],
     }));
-    vi.spyOn(accountControl, "recover").mockImplementation(async () => {
-      await scope.owner.stop();
-      await scope.owner.start();
-      scope.gate.initialized();
-    });
     const fixture = createFixture({ officialRuntimeScope: scope, accountControl });
     const params = {
       clientInfo: { name: "codex_desktop", version: "synthetic" },
-      capabilities: { experimentalApi: true },
     };
     try {
       writeRequest(fixture.desktopInput, { id: 901, method: "initialize", params });
@@ -1947,18 +1781,10 @@ describe("AppServerHost HarnessAdapter projection", () => {
       expect(initial.error).toBeUndefined();
       expect(initial).toMatchObject({ result: { codexHome: "/synthetic/permanent" } });
       expect(scope.gate.phase).toBe("unavailable");
-      expect(createBackend).not.toHaveBeenCalled();
+      expect(createBackend).toHaveBeenCalledOnce();
       writeRequest(fixture.desktopInput, { method: "initialized" });
-      writeRequest(fixture.desktopInput, {
-        id: 902,
-        method: "codexhost/account/recover",
-        params: {},
-      });
-      await expect(
-        fixture.collector.waitFor((message) => message.id === 902),
-      ).resolves.toMatchObject({
-        result: { phase: "ready" },
-      });
+      await scope.owner.start();
+      scope.gate.initialized();
       expect(nativeRequests).toContainEqual(
         expect.objectContaining({ method: "initialize", params }),
       );
@@ -1970,7 +1796,7 @@ describe("AppServerHost HarnessAdapter projection", () => {
         result: { data: [] },
       });
       expect(fixture.collector.messages.filter((message) => message.id === 901)).toHaveLength(1);
-      expect(createBackend).toHaveBeenCalledOnce();
+      expect(createBackend).toHaveBeenCalledTimes(2);
     } finally {
       fixture.host.close();
       await fixture.running;
@@ -1998,14 +1824,17 @@ describe("AppServerHost HarnessAdapter projection", () => {
     });
     const scope = new OfficialRuntimeScope({
       permanentHome: "/synthetic/permanent",
-      managedAccounts: true,
       diagnosticOutput: new PassThrough(),
-      createBackend: () => ({
-        closed: exit.promise,
-        start: async () => {},
-        stop,
-        connect: async () => ({ stdin, stdout, stderr, closed: exit.promise, close: () => {} }),
-      }),
+      createBackend: vi
+        .fn(() => ({
+          closed: exit.promise,
+          start: async () => {},
+          stop,
+          connect: async () => ({ stdin, stdout, stderr, closed: exit.promise, close: () => {} }),
+        }))
+        .mockImplementationOnce(() => {
+          throw new Error("Synthetic initial startup failure");
+        }),
     });
     const fixture = createFixture({ officialRuntimeScope: scope });
     let finished = false;
@@ -2161,7 +1990,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
     const officialRuntimeScope = new OfficialRuntimeScope({
       permanentHome: "/synthetic/shared-home",
       diagnosticOutput: new PassThrough(),
-      allowNativeAuthPassthrough: true,
       createBackend: (): OwnedOfficialBackend => ({
         closed: backendClosed.promise,
         async start() {},
@@ -2197,15 +2025,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
       currentAccountId: null,
       phase: officialRuntimeScope.gate.phase,
       revision: officialRuntimeScope.gate.revision,
-      capabilities: {
-        manage: false,
-        switch: false,
-        login: false,
-        delete: false,
-        logout: false,
-        recover: false,
-        reason: "unsupported-storage",
-      },
       accounts: [],
     }));
     // This checks shared Mapping Store lifetime with explicit shared Host composition.
@@ -2215,7 +2034,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
       closeMappingStoreOnExit: false,
       officialRuntimeScope,
       accountControl,
-      allowNativeAuthPassthrough: true,
     });
     const second = createFixture({
       mappingStore,
@@ -2223,7 +2041,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
       closeMappingStoreOnExit: false,
       officialRuntimeScope,
       accountControl,
-      allowNativeAuthPassthrough: true,
     });
 
     try {
@@ -3502,45 +3319,18 @@ describe("AppServerHost HarnessAdapter projection", () => {
     await stopFixture(fixture);
   });
 
-  it("reads inactive Account quota without the official backend and records current native quota", async () => {
-    const inactiveUsage = vi.fn(async (accountId: string) => ({
-      accountId,
-      usage: null,
-      accountCredits: { usedPercent: 61, periodType: "weekly" as const },
-      freshness: "cached" as const,
-      observedAt: "2026-09-10T03:00:00.000Z",
-    }));
-    const recordUsage = vi.fn(async (accountId: string, accountCredits: JsonObject) => ({
-      accountId,
-      usage: null,
-      accountCredits,
-      freshness: "live" as const,
-      observedAt: "2026-09-10T03:01:00.000Z",
-    }));
+  it("inspects current Account quota and treats other Account ids as unknown", async () => {
     const snapshot = () => ({
       version: 2 as const,
       currentAccountId: "account-a",
       phase: "ready" as const,
       revision: 1,
-      capabilities: { manage: true, switch: true, login: true, delete: true },
-      accounts: [
-        { accountId: "account-a", label: "A", email: "a@example.com" },
-        { accountId: "account-b", label: "B", email: "b@example.com" },
-      ],
+      accounts: [{ accountId: "account-a", label: "A", email: "a@example.com" }],
     });
-    const accountControl = {
+    const accountControl: CodexAccountControl = {
       snapshot,
       currentAccountId: () => "account-a",
-      switch: vi.fn(),
-      remove: vi.fn(),
-      startLogin: vi.fn(),
-      cancelLogin: vi.fn(),
-      observe: vi.fn(),
-      subscribeLogin: () => () => undefined,
-      inspectInactiveUsage: inactiveUsage,
-      recordUsage,
-      cachedUsage: vi.fn(() => null),
-    } as unknown as CodexAccountControl;
+    };
     const fixture = createFixture({ accountControl });
     fixture.official.stdin.on("data", (chunk: Buffer) => {
       for (const line of chunk.toString("utf8").split("\n")) {
@@ -3570,14 +3360,8 @@ describe("AppServerHost HarnessAdapter projection", () => {
         fixture.collector.waitFor((message) => requestId(message, 46)),
       ).resolves.toMatchObject({
         id: 46,
-        result: {
-          accountId: "account-b",
-          freshness: "cached",
-          accountCredits: { usedPercent: 61 },
-        },
+        error: { code: -32086, message: "Unknown Codex Account" },
       });
-      expect(inactiveUsage).toHaveBeenCalledWith("account-b", true);
-      expect(recordUsage).not.toHaveBeenCalled();
 
       writeRequest(fixture.desktopInput, {
         id: 47,
@@ -3594,7 +3378,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
           accountCredits: { usedPercent: 12, periodType: "five_hour" },
         },
       });
-      expect(recordUsage).toHaveBeenCalledOnce();
     } finally {
       await stopFixture(fixture);
     }

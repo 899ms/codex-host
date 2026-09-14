@@ -1,49 +1,56 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  OfficialAdmissionError,
+  OfficialWorkGate,
+} from "../src/codex-runtime/official-work-gate.js";
 
-import { OfficialWorkGate } from "../src/codex-runtime/official-work-gate.js";
-
-describe("official work publication", () => {
-  it("does not duplicate an initialized publication", () => {
+describe("official work admission", () => {
+  it("admits requests only after initialization", () => {
     const gate = new OfficialWorkGate();
-    const listener = vi.fn();
-    gate.subscribe(listener);
+    expect(() => gate.admit()).toThrow("unavailable");
     gate.initialized();
-    gate.initialized();
-    expect(listener).toHaveBeenCalledOnce();
-    expect(gate.revision).toBe(1);
+    const first = gate.admit();
+    const second = gate.admit();
+    expect(gate.busy).toBe(true);
+    expect(() => gate.initialized()).toThrow("busy");
+    first();
+    first();
+    expect(gate.busy).toBe(true);
+    second();
+    expect(gate.busy).toBe(false);
   });
 
-  it("cannot finish a stopping change before an independent writer releases its lease", () => {
+  it("blocks new requests after backend loss while allowing pending requests to settle", () => {
     const gate = new OfficialWorkGate();
     gate.initialized();
     const release = gate.admit();
-    const recovery = gate.beginStoppingChange();
-    expect(gate.busy).toBe(true);
-    expect(() => recovery.assertIdle()).toThrow("busy");
-    expect(() => recovery.finish("ready")).toThrow("busy");
+    gate.unavailable();
+    expect(() => gate.admit()).toThrow("unavailable");
     release();
-    recovery.assertIdle();
-    recovery.finish("ready");
+    expect(gate.busy).toBe(false);
+    gate.initialized();
     expect(gate.phase).toBe("ready");
   });
 
-  it("does not interrupt an admitted request to recover", () => {
+  it("publishes only phase changes and isolates subscribers", () => {
     const gate = new OfficialWorkGate();
+    gate.subscribe(() => {
+      throw new Error("subscriber failure");
+    });
+    const listener = vi.fn();
+    const unsubscribe = gate.subscribe(listener);
     gate.initialized();
-    const release = gate.admit();
+    gate.initialized();
+    expect(gate.revision).toBe(1);
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
     gate.unavailable();
-    expect(() => gate.beginChange(true)).toThrow("busy");
-    release();
-    gate.beginChange(true).finish("ready");
+    expect(gate.revision).toBe(2);
+    expect(listener).toHaveBeenCalledOnce();
   });
 
-  it("keeps the exclusive change lease after native cleanup becomes unavailable", () => {
-    const gate = new OfficialWorkGate();
-    gate.initialized();
-    const change = gate.beginChange();
-    gate.unavailable();
-    expect(() => gate.beginChange(true)).toThrow("changing");
-    expect(() => change.finish("ready")).toThrow("unavailable");
-    expect(gate.phase).toBe("unavailable");
+  it("preserves admission error causes", () => {
+    const cause = new Error("transport failed");
+    expect(new OfficialAdmissionError("unavailable", cause).cause).toBe(cause);
   });
 });

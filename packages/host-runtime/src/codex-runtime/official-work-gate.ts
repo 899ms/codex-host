@@ -1,5 +1,5 @@
-export type OfficialAccountPhase = "ready" | "changing" | "unavailable";
-export type OfficialAdmissionCode = "busy" | "changing" | "unavailable";
+export type OfficialAccountPhase = "ready" | "unavailable";
+export type OfficialAdmissionCode = "busy" | "unavailable";
 
 export class OfficialAdmissionError extends Error {
   constructor(
@@ -11,18 +11,12 @@ export class OfficialAdmissionError extends Error {
   }
 }
 
-export interface OfficialChangeLease {
-  assertIdle(): void;
-  finish(phase: "ready" | "unavailable"): void;
-}
-
 /** One synchronous admission boundary shared by every client and Codex delegation. */
 export class OfficialWorkGate {
   #phase: OfficialAccountPhase = "unavailable";
   #revision = 0;
   readonly #requests = new Set<symbol>();
   readonly #listeners = new Set<() => void>();
-  #change: symbol | undefined;
 
   get phase(): OfficialAccountPhase {
     return this.#phase;
@@ -41,7 +35,7 @@ export class OfficialWorkGate {
     };
   }
   initialized(): void {
-    if (this.#change || this.busy) throw new OfficialAdmissionError("busy");
+    if (this.busy) throw new OfficialAdmissionError("busy");
     this.#publish("ready");
   }
   admit(): () => void {
@@ -50,38 +44,6 @@ export class OfficialWorkGate {
     this.#requests.add(request);
     return () => {
       this.#requests.delete(request);
-    };
-  }
-  beginChange(recovery = false): OfficialChangeLease {
-    return this.#beginChange(recovery);
-  }
-
-  /** Reject new work immediately; existing native work is ended by backend retirement. */
-  beginStoppingChange(): OfficialChangeLease {
-    return this.#beginChange(false, true);
-  }
-
-  #beginChange(recovery: boolean, stopWork = false): OfficialChangeLease {
-    if (this.#change || this.#phase === "changing") throw new OfficialAdmissionError("changing");
-    if (this.#phase !== "ready" && !recovery) throw new OfficialAdmissionError("unavailable");
-    // Recovery and metadata changes must not race independent Host credential writers.
-    if (!stopWork && this.busy) throw new OfficialAdmissionError("busy");
-    const token = Symbol();
-    this.#change = token;
-    this.#publish("changing");
-    return {
-      assertIdle: () => {
-        if (this.#phase === "unavailable") throw new OfficialAdmissionError("unavailable");
-        if (this.#change !== token || this.busy) throw new OfficialAdmissionError("busy");
-      },
-      finish: (phase) => {
-        if (this.#change !== token) return;
-        if (phase === "ready" && this.#phase === "unavailable")
-          throw new OfficialAdmissionError("unavailable");
-        if (phase === "ready" && this.busy) throw new OfficialAdmissionError("busy");
-        this.#change = undefined;
-        this.#publish(phase);
-      },
     };
   }
   unavailable(): void {

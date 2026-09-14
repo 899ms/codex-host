@@ -153,13 +153,11 @@ export async function runHostRuntime(input: {
           stockCodexPath,
           arguments: remoteControlPlan?.officialArguments ?? input.arguments,
           environment: delegationEnvironment,
-          sharedListener: !!remoteControlPlan,
           diagnosticOutput: process.stderr,
         });
         const shared = {
           officialRuntimeScope: official.officialRuntimeScope,
           accountControl: official.accountControl,
-          allowNativeAuthPassthrough: official.allowNativeAuthPassthrough,
         };
         if (!remoteControlPlan) {
           try {
@@ -242,7 +240,6 @@ export async function runHostRuntime(input: {
         permanentHome: path.resolve(
           delegationEnvironment.CODEX_HOME ?? path.join(homedir(), ".codex"),
         ),
-        allowNativeAuthPassthrough: true,
         diagnosticOutput: process.stderr,
         createBackend: () =>
           createOwnedUnixBackend({
@@ -258,15 +255,6 @@ export async function runHostRuntime(input: {
         currentAccountId: "remote-native",
         phase: officialRuntimeScope.gate.phase,
         revision: officialRuntimeScope.gate.revision,
-        capabilities: {
-          manage: false,
-          switch: false,
-          login: false,
-          delete: false,
-          recover: false,
-          logout: false,
-          reason: "ssh-single-account",
-        },
         accounts: [{ accountId: "remote-native", label: "Remote native Codex Account" }],
       }));
       const mappingStore = createProductionExternalThreadStore(delegationEnvironment);
@@ -288,7 +276,6 @@ export async function runHostRuntime(input: {
             closeMappingStoreOnExit: false,
             officialRuntimeScope,
             accountControl,
-            allowNativeAuthPassthrough: true,
             onDelegationApi: (api) => registry.register(api),
             ...(updateCoordinator ? { updateCoordinator } : {}),
           });

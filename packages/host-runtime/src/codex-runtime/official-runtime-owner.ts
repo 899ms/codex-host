@@ -45,18 +45,10 @@ interface Client {
   serverRequests: Map<string, string | number>;
   threads: Map<string, { params: JsonObject; generation: number; restoring?: Promise<void> }>;
 }
-export type OfficialBackendRole =
-  { kind: "permanent"; home: string } | { kind: "staging"; home: string };
-export interface OfficialRuntimeStartOptions {
-  homeOverride?: string;
-  mode?: "task" | "management-only";
-}
 export interface OfficialRuntimeOwnerOptions {
-  createBackend(role: OfficialBackendRole): OwnedOfficialBackend;
+  createBackend(): OwnedOfficialBackend;
   diagnosticOutput: Writable;
   gate: OfficialWorkGate;
-  permanentHome: string;
-  allowNativeAuthPassthrough?: boolean;
 }
 const object = (value: unknown): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -80,22 +72,17 @@ const RESUME_FIELDS = new Set([
 /** One process owner, many native client connections; never a per-Account pool. */
 export class OfficialRuntimeOwner {
   readonly gate: OfficialWorkGate;
-  readonly #factory: (role: OfficialBackendRole) => OwnedOfficialBackend;
-  readonly #permanentHome: string;
-  readonly #allowNativeAuthPassthrough: boolean;
+  readonly #factory: () => OwnedOfficialBackend;
   readonly #diagnosticOutput: Writable;
   readonly #clients = new Set<Client>();
   #backend: OwnedOfficialBackend | undefined;
   #generation = 0;
   #phase: "stopped" | "starting" | "running" | "stopping" | "unavailable" = "stopped";
   #starting: Promise<void> | undefined;
-  #startingKey: string | undefined;
   #stopping: Promise<void> | undefined;
 
   constructor(input: OfficialRuntimeOwnerOptions) {
     this.#factory = input.createBackend;
-    this.#permanentHome = input.permanentHome;
-    this.#allowNativeAuthPassthrough = input.allowNativeAuthPassthrough ?? false;
     this.#diagnosticOutput = input.diagnosticOutput;
     this.gate = input.gate;
   }
@@ -107,24 +94,14 @@ export class OfficialRuntimeOwner {
     return this.#phase === "running";
   }
 
-  start(options: OfficialRuntimeStartOptions = {}): Promise<void> {
-    const mode = options.mode ?? "task";
-    if (options.homeOverride !== undefined && mode !== "management-only")
-      return Promise.reject(new OfficialAdmissionError("unavailable"));
-    const role: OfficialBackendRole = options.homeOverride
-      ? { kind: "staging", home: options.homeOverride }
-      : { kind: "permanent", home: this.#permanentHome };
-    const startKey = JSON.stringify([role.kind, role.home, mode]);
-    if (this.#starting)
-      return this.#startingKey === startKey
-        ? this.#starting
-        : Promise.reject(new OfficialAdmissionError("unavailable"));
+  start(): Promise<void> {
+    if (this.#starting) return this.#starting;
     if (this.#backend || this.#phase !== "stopped")
       return Promise.reject(new OfficialAdmissionError("unavailable"));
     this.#phase = "starting";
     let backend: OwnedOfficialBackend;
     try {
-      backend = this.#factory(role);
+      backend = this.#factory();
     } catch {
       this.#phase = "stopped";
       return Promise.reject(new OfficialAdmissionError("unavailable"));
@@ -133,8 +110,7 @@ export class OfficialRuntimeOwner {
     const generation = ++this.#generation;
     void backend.closed.then(() => {
       if (this.#backend !== backend || this.#phase === "stopping") return;
-      // A relay closing is not itself proof that the native process tree exited.
-      // Remain unavailable until the owner's stop path validates process exit.
+      // Keep ownership until the backend stop path completes.
       this.#unavailable();
       void this.stop().catch(() => undefined);
     });
@@ -142,9 +118,7 @@ export class OfficialRuntimeOwner {
       try {
         await backend.start();
         if (this.#phase !== "starting") throw new OfficialAdmissionError("unavailable");
-        const clients = [...this.#clients].filter(
-          (client) => client.role === "management" || mode === "task",
-        );
+        const clients = [...this.#clients];
         // The Host management protocol must be initialized before Desktop can attach
         // to a managed listener. This also makes cold-start verification independent
         // of Desktop's initialize timing.
@@ -166,15 +140,12 @@ export class OfficialRuntimeOwner {
       }
     })();
     this.#starting = starting;
-    this.#startingKey = startKey;
     void starting.then(
       () => {
         this.#starting = undefined;
-        this.#startingKey = undefined;
       },
       () => {
         this.#starting = undefined;
-        this.#startingKey = undefined;
       },
     );
     return starting;
@@ -366,12 +337,13 @@ export class OfficialRuntimeOwner {
   }
 
   async #request(client: Client, method: string, params: JsonObject): Promise<JsonObject> {
-    this.#checkMethod(method, params);
+    this.#checkMethod(method);
     const finish = this.gate.admit();
+    let response: JsonObject | undefined;
     try {
       const runtime = await this.#connection(client);
       await this.#restore(client, runtime, method, params);
-      const response = await runtime.request(method, params);
+      response = await runtime.request(method, params);
       if (
         client.runtime !== runtime ||
         runtime.generation !== this.#generation ||
@@ -403,7 +375,7 @@ export class OfficialRuntimeOwner {
     if (typeof value.id !== "string" && typeof value.id !== "number")
       throw new Error("Official methods require a request ID");
     const params = object(value.params) ? value.params : {};
-    this.#checkMethod(value.method, params);
+    this.#checkMethod(value.method);
     const finish = this.gate.admit();
     let pendingKey: string | undefined;
     try {
@@ -429,17 +401,9 @@ export class OfficialRuntimeOwner {
     }
   }
 
-  #checkMethod(method: string, params: JsonObject): void {
-    if (
-      method === "initialize" ||
-      (!this.#allowNativeAuthPassthrough &&
-        (method.startsWith("account/login/") || method === "account/logout")) ||
-      method === "codexhost/account/activate" ||
-      "__codexhostAccountId" in params
-    ) {
-      throw new Error(
-        "Official authentication and legacy Account overrides require the current Host coordinator",
-      );
+  #checkMethod(method: string): void {
+    if (method === "initialize") {
+      throw new Error("Initialization cannot use the ordinary request path");
     }
   }
 

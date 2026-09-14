@@ -1,3 +1,5 @@
+import type { ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
@@ -7,15 +9,14 @@ import {
   OfficialRuntimeOwner,
   type OwnedOfficialBackend,
 } from "../src/codex-runtime/official-runtime-owner.js";
-import { OfficialRuntimeScope } from "../src/codex-runtime/official-runtime-scope.js";
 import { OfficialWorkGate } from "../src/codex-runtime/official-work-gate.js";
+import { createOwnedLoopbackBackend } from "../src/codex-runtime/owned-official-backends.js";
 import type { OfficialAppServerExit } from "../src/official-app-server-connection.js";
 
-function fixture(allowNativeAuthPassthrough = false) {
+function fixture() {
   let live = 0;
   let peak = 0;
   const events: string[] = [];
-  const roles: unknown[] = [];
   const backends: ReturnType<typeof backend>[] = [];
   function backend() {
     const exit = Promise.withResolvers<OfficialAppServerExit>();
@@ -119,8 +120,7 @@ function fixture(allowNativeAuthPassthrough = false) {
     };
   }
   const gate = new OfficialWorkGate();
-  const create = vi.fn((role: unknown) => {
-    roles.push(role);
+  const create = vi.fn(() => {
     const value = backend();
     backends.push(value);
     return value.native;
@@ -129,8 +129,6 @@ function fixture(allowNativeAuthPassthrough = false) {
     createBackend: create,
     diagnosticOutput: new PassThrough(),
     gate,
-    permanentHome: "/permanent",
-    allowNativeAuthPassthrough,
   });
   const attach = () => {
     const output: JsonObject[] = [];
@@ -149,12 +147,61 @@ function fixture(allowNativeAuthPassthrough = false) {
     if (!value) throw new Error("Missing synthetic connection");
     return value;
   };
-  return { owner, gate, create, attach, native, connection, events, roles, peak: () => peak };
+  return { owner, gate, create, attach, native, connection, events, peak: () => peak };
 }
 const initialization = {
   clientInfo: { name: "synthetic", version: "1" },
   capabilities: { experimentalApi: true },
 };
+
+describe("owned loopback backend", () => {
+  it("requires readiness, hashes capability authentication, and discards managed stderr", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 123,
+      stderr: new PassThrough(),
+      kill: vi.fn(() => {
+        queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+        return true;
+      }),
+    });
+    const spawnOfficial = vi.fn(() => child as unknown as ChildProcess) as unknown as typeof spawn;
+    const backend = createOwnedLoopbackBackend({
+      stockCodexPath: "/synthetic/codex",
+      arguments: ["app-server"],
+      environment: { CODEX_HOME: "/synthetic/home" },
+      spawnOfficial,
+    });
+    const stderr = vi.spyOn(process.stderr, "write");
+    try {
+      await expect(backend.connect()).rejects.toThrow("not ready");
+      const starting = backend.start();
+      child.stderr.write("synthetic credential-bearing failure\n");
+      child.stderr.write("listening on: ws://127.0.0.1:43821\n");
+      await starting;
+      expect(stderr).not.toHaveBeenCalled();
+      expect(spawnOfficial).toHaveBeenCalledWith(
+        "/synthetic/codex",
+        [
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:0",
+          "--ws-auth",
+          "capability-token",
+          "--ws-token-sha256",
+          expect.stringMatching(/^[a-f0-9]{64}$/),
+        ],
+        expect.objectContaining({ env: { CODEX_HOME: "/synthetic/home" } }),
+      );
+      expect(backend.processId).toBe(123);
+      await backend.stop();
+      await expect(backend.closed).resolves.toEqual({ code: null, signal: "SIGTERM" });
+      await expect(backend.connect()).rejects.toThrow("not ready");
+    } finally {
+      stderr.mockRestore();
+      await backend.stop();
+    }
+  });
+});
 
 describe("single official runtime owner", () => {
   it.each([
@@ -163,7 +210,7 @@ describe("single official runtime owner", () => {
     { via: "send", method: "account/rateLimits/read" },
     { via: "send", method: "account/read" },
   ])(
-    "ends pending $via $method on intentional stop without poisoning switch admission",
+    "ends pending $via $method on intentional stop and admits work after restart",
     async ({ via, method }) => {
       const f = fixture();
       const { client, output } = f.attach();
@@ -181,8 +228,8 @@ describe("single official runtime owner", () => {
         await vi.waitFor(() =>
           expect(connection.requests.some((r) => r.method === method)).toBe(true),
         );
-        const lease = f.gate.beginStoppingChange();
-        await expect(client.request(method, {})).rejects.toMatchObject({ code: "changing" });
+        f.gate.unavailable();
+        await expect(client.request(method, {})).rejects.toMatchObject({ code: "unavailable" });
         await f.owner.stop();
         if (via === "request") expect(await pending).toBeInstanceOf(Error);
         else {
@@ -191,13 +238,13 @@ describe("single official runtime owner", () => {
             expect.objectContaining({ id: "desktop-request", error: expect.any(Object) }),
           );
         }
-        expect(f.gate.phase).toBe("changing");
-        lease.assertIdle();
+        expect(f.gate.phase).toBe("unavailable");
+        expect(f.gate.busy).toBe(false);
         expect(f.create).toHaveBeenCalledOnce();
-        await expect(client.request(method, {})).rejects.toMatchObject({ code: "changing" });
+        await expect(client.request(method, {})).rejects.toMatchObject({ code: "unavailable" });
         expect(f.create).toHaveBeenCalledOnce();
         await f.owner.start();
-        lease.finish("ready");
+        f.gate.initialized();
         await client.request("account/rateLimits/read", {});
         expect(f.connection(1).requests.filter((r) => r.method === method)).toHaveLength(
           method === "account/rateLimits/read" ? 1 : 0,
@@ -296,12 +343,11 @@ describe("single official runtime owner", () => {
         "thread/goal/set",
         "process/spawn",
       ]);
-      f.gate.beginChange().finish("ready");
+      expect(f.gate.busy).toBe(false);
       expect(f.owner.running).toBe(true);
-      const recovery = f.gate.beginChange(true);
       await f.owner.stop();
       await f.owner.start();
-      recovery.finish("ready");
+      f.gate.initialized();
       expect(f.peak()).toBe(1);
     } finally {
       await f.owner.stop();
@@ -332,7 +378,34 @@ describe("single official runtime owner", () => {
     }
   });
 
-  it("keeps non-stopping changes blocked by pending credential reads", async () => {
+  it("releases admission when a native RPC completes", async () => {
+    const f = fixture();
+    const { client } = f.attach();
+    try {
+      await f.owner.start();
+      await client.initialize(initialization);
+      f.gate.initialized();
+      f.connection().setResponse(() => null);
+      const result = client.request("model/list", {});
+      await vi.waitFor(() =>
+        expect(f.connection().requests.some((request) => request.method === "model/list")).toBe(
+          true,
+        ),
+      );
+      const request = f.connection().requests.find((request) => request.method === "model/list");
+      if (!request) throw new Error("Missing synthetic native request");
+      expect(f.gate.busy).toBe(true);
+      f.connection().stdout.write(`${JSON.stringify({ id: request.id, result: { data: [] } })}\n`);
+      await expect(result).resolves.toMatchObject({ result: { data: [] } });
+      expect(f.gate.busy).toBe(false);
+      expect(f.gate.phase).toBe("ready");
+    } finally {
+      await f.owner.stop();
+      client.close();
+    }
+  });
+
+  it("tracks pending official credential reads as ordinary requests", async () => {
     const f = fixture();
     const { client } = f.attach();
     try {
@@ -341,7 +414,7 @@ describe("single official runtime owner", () => {
       f.gate.initialized();
       f.connection().setResponse(() => null);
       await client.send({ id: "auth", method: "account/read", params: { refreshToken: true } });
-      expect(() => f.gate.beginChange()).toThrow("busy");
+      expect(f.gate.busy).toBe(true);
       expect(f.gate.phase).toBe("ready");
     } finally {
       await f.owner.stop();
@@ -388,54 +461,24 @@ describe("single official runtime owner", () => {
     }
   });
 
-  it("does not create or publish a backend from managed scope startup", async () => {
-    const closed = Promise.withResolvers<OfficialAppServerExit>();
-    const createBackend = vi.fn((): OwnedOfficialBackend => ({
-      closed: closed.promise,
-      start: vi.fn(async () => {}),
-      connect: vi.fn(async () => {
-        throw new Error("must not connect");
-      }),
-      stop: vi.fn(async () => closed.resolve({ code: 0, signal: null })),
-    }));
-    const scope = new OfficialRuntimeScope({
-      createBackend,
-      diagnosticOutput: new PassThrough(),
-      permanentHome: "/permanent",
-      managedAccounts: true,
-    });
-
-    await expect(scope.start()).rejects.toMatchObject({ code: "unavailable" });
-    expect(createBackend).not.toHaveBeenCalled();
-    expect(scope.owner.running).toBe(false);
-    expect(scope.gate.phase).toBe("unavailable");
-
-    await scope.owner.start({ mode: "management-only" });
-    scope.gate.initialized();
-    await expect(scope.start()).resolves.toBeUndefined();
-    expect(createBackend).toHaveBeenCalledOnce();
-    await scope.owner.stop();
-    await expect(scope.start()).rejects.toMatchObject({ code: "unavailable" });
-    expect(createBackend).toHaveBeenCalledOnce();
-    await scope.close();
-  });
-
-  it("starts staging with only the persistent management client and initializes it once", async () => {
+  it("connects management first and initializes every attached client once", async () => {
     const f = fixture();
     const task = f.attach();
     task.client.configure(initialization);
     const management = f.owner.attachManagement(async () => {});
-    management.configure(initialization);
-    await f.owner.start({ homeOverride: "/staging", mode: "management-only" });
-    expect(f.roles).toEqual([{ kind: "staging", home: "/staging" }]);
-    expect(f.native().connections).toHaveLength(1);
+    const managementParams = { clientInfo: { name: "management", version: "1" } };
+    management.configure(managementParams);
+    await f.owner.start();
+    expect(f.native().connections).toHaveLength(2);
+    expect(f.connection().requests[0]?.params).toEqual(managementParams);
+    expect(f.connection(0, 1).requests[0]?.params).toEqual(initialization);
     expect(f.connection().requests.map((request) => request.method)).toEqual([
       "initialize",
       "initialized",
     ]);
     await Promise.all([
-      management.initialize(initialization),
-      management.initialize(initialization),
+      management.initialize(managementParams),
+      management.initialize(managementParams),
     ]);
     expect(f.connection().requests.map((request) => request.method)).toEqual([
       "initialize",
@@ -443,32 +486,66 @@ describe("single official runtime owner", () => {
     ]);
     await f.owner.stop();
     await f.owner.start();
-    expect(f.roles).toEqual([
-      { kind: "staging", home: "/staging" },
-      { kind: "permanent", home: "/permanent" },
-    ]);
     expect(f.native(1).connections).toHaveLength(2);
     await f.owner.stop();
   });
 
-  it("allows native authentication only for an explicitly unmanaged owner", async () => {
-    const managed = fixture();
-    const managedClient = managed.attach();
-    await managed.owner.start();
-    managed.gate.initialized();
-    await expect(managedClient.client.request("account/logout", {})).rejects.toThrow(
-      "Host coordinator",
-    );
-    await managed.owner.stop();
+  it.each(["request", "send"] as const)(
+    "forwards native auth through %s without retaining a login lease",
+    async (transport) => {
+      const f = fixture();
+      const { client, output } = f.attach();
+      try {
+        await f.owner.start();
+        f.gate.initialized();
+        f.connection().setResponse((request) => ({
+          id: request.id ?? null,
+          result: { type: "chatgpt", loginId: "native-id", futureField: true },
+        }));
+        const params = { type: "chatgpt", futureField: true };
+        if (transport === "request") {
+          await expect(client.request("account/login/start", params)).resolves.toMatchObject({
+            result: { loginId: "native-id", futureField: true },
+          });
+        } else {
+          await client.send({ id: 77, method: "account/login/start", params });
+          await vi.waitFor(() =>
+            expect(output).toContainEqual({
+              id: 77,
+              result: { type: "chatgpt", loginId: "native-id", futureField: true },
+            }),
+          );
+        }
+        expect(f.connection().requests[0]?.params).toEqual(params);
+        expect(f.gate.busy).toBe(false);
+        expect(f.gate.phase).toBe("ready");
+        const completed = {
+          method: "account/login/completed",
+          params: { loginId: "native-id", success: true, futureField: true },
+        };
+        f.connection().emit(completed);
+        await vi.waitFor(() => expect(output).toContainEqual(completed));
+        expect(f.gate.busy).toBe(false);
+      } finally {
+        await f.owner.stop();
+      }
+    },
+  );
 
-    const unmanaged = fixture(true);
-    const unmanagedClient = unmanaged.attach();
-    await unmanaged.owner.start();
-    unmanaged.gate.initialized();
-    await expect(unmanagedClient.client.request("account/logout", {})).resolves.toMatchObject({
-      result: {},
-    });
-    await unmanaged.owner.stop();
+  it("does not retain native login activity after its response or client detach", async () => {
+    const f = fixture();
+    const { client } = f.attach();
+    await f.owner.start();
+    f.gate.initialized();
+    f.connection().setResponse((request) => ({
+      id: request.id ?? null,
+      result: { loginId: "native-id" },
+    }));
+    await client.request("account/login/start", {});
+    client.close();
+    expect(f.gate.busy).toBe(false);
+    await f.owner.stop();
+    expect(f.gate.busy).toBe(false);
   });
 
   it("shares one process across clients and reinitializes without duplicate Desktop responses", async () => {
@@ -481,10 +558,9 @@ describe("single official runtime owner", () => {
       f.gate.initialized();
       expect(f.create).toHaveBeenCalledTimes(1);
       expect(f.native().connections).toHaveLength(2);
-      const change = f.gate.beginChange();
       await f.owner.stop();
       await f.owner.start();
-      change.finish("ready");
+      f.gate.initialized();
       expect(f.peak()).toBe(1);
       expect(f.events).toEqual(["start", "exit", "start"]);
       expect(f.native(1).connections).toHaveLength(2);
@@ -511,10 +587,9 @@ describe("single official runtime owner", () => {
         model: "original-model",
         cwd: "synthetic-cwd",
       });
-      const change = f.gate.beginChange();
       await f.owner.stop();
       await f.owner.start();
-      change.finish("ready");
+      f.gate.initialized();
       expect(f.connection(1).requests.map((r) => r.method)).toEqual(["initialize", "initialized"]);
       await a.client.request("turn/start", { threadId: "original", input: [] });
       expect(f.connection(1).requests.map((r) => r.method)).toEqual([
@@ -566,17 +641,15 @@ describe("single official runtime owner", () => {
           sandbox: "danger-full-access",
         });
 
-        const change = f.gate.beginChange();
         await f.owner.stop();
         await f.owner.start();
-        change.finish("ready");
+        f.gate.initialized();
         let generation = 1;
         if (dormant) {
-          // B had no user requests, so its loaded list is empty before switching back to A.
-          const back = f.gate.beginChange();
+          // A generation with no user requests must still preserve subscription parameters.
           await f.owner.stop();
           await f.owner.start();
-          back.finish("ready");
+          f.gate.initialized();
           generation++;
         }
         f.connection(generation).setResponse((request) => {
@@ -618,10 +691,9 @@ describe("single official runtime owner", () => {
           },
         ]);
 
-        const secondChange = f.gate.beginChange();
         await f.owner.stop();
         await f.owner.start();
-        secondChange.finish("ready");
+        f.gate.initialized();
         f.connection(generation + 1).setResponse((request) => {
           if (!request.method) return null;
           if (request.method === "thread/resume")
@@ -657,10 +729,9 @@ describe("single official runtime owner", () => {
       f.gate.initialized();
       await a.client.request("thread/resume", { threadId: "shared" });
       await b.client.request("thread/resume", { threadId: "shared" });
-      const change = f.gate.beginChange();
       await f.owner.stop();
       await f.owner.start();
-      change.finish("ready");
+      f.gate.initialized();
       await a.client.request("turn/interrupt", { threadId: "shared", turnId: "old" });
       await b.client.request("turn/interrupt", { threadId: "shared", turnId: "old" });
       for (const connection of f.native(1).connections) {
@@ -685,10 +756,9 @@ describe("single official runtime owner", () => {
       await b.client.initialize(initialization);
       f.gate.initialized();
       await a.client.request("thread/resume", { threadId: "unavailable-thread" });
-      const change = f.gate.beginChange();
       await f.owner.stop();
       await f.owner.start();
-      change.finish("ready");
+      f.gate.initialized();
       f.connection(1).setResponse((request) => ({
         id: request.id ?? null,
         ...(request.method === "thread/resume"
@@ -751,7 +821,7 @@ describe("single official runtime owner", () => {
     expect(f.gate.busy).toBe(false);
   });
 
-  it("requires explicit recovery after an unexpected backend exit", async () => {
+  it("requires initialization after restarting an unexpectedly exited backend", async () => {
     const f = fixture();
     const client = f.attach();
     await f.owner.start();
@@ -793,8 +863,6 @@ describe("single official runtime owner", () => {
         "synthetic reply send failure",
       );
       expect(f.gate.busy).toBe(false);
-      const change = f.gate.beginChange();
-      change.finish("ready");
     } finally {
       await f.owner.stop().catch(() => undefined);
     }
