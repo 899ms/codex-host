@@ -5,7 +5,6 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import type * as FileSystem from "node:fs/promises";
 import type * as NativeFiles from "../src/native-private-files.js";
-import type * as NativeLayout from "../src/account/native-account-layout.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OfficialRuntimeOwner } from "../src/codex-runtime/official-runtime-owner.js";
 import type { JsonObject } from "@codexhost/protocol-core";
@@ -69,12 +68,6 @@ vi.mock("../src/native-process-identity.js", () => ({
     pid === 41 ? "current" : null,
 }));
 vi.mock("../src/native-process-stop.js", () => ({ stopNativeProcesses: vi.fn(async () => {}) }));
-vi.mock("../src/account/native-account-layout.js", async (original) => ({
-  ...(await original<typeof NativeLayout>()),
-  inspectNativeAccountLayout: vi.fn(async () => {
-    throw new Error("Legacy layout must not gate startup");
-  }),
-}));
 vi.mock("../src/codex-runtime/official-cli-version.js", () => ({
   readOfficialCliVersion: vi.fn(async () => {
     throw new Error("Version is not a startup prerequisite");
@@ -148,7 +141,6 @@ vi.mock("../src/account/official-account-runtime.js", () => ({
 
 import { prepareLocalCodex } from "../src/native-account-host.js";
 import { stopNativeProcesses } from "../src/native-process-stop.js";
-import { inspectNativeAccountLayout } from "../src/account/native-account-layout.js";
 import { readOfficialCliVersion } from "../src/codex-runtime/official-cli-version.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -258,7 +250,6 @@ describe("ordinary native startup versus mutation recovery", () => {
       expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
       expect(prepared.officialRuntimeScope.owner.running).toBe(true);
       expect(lock).not.toHaveBeenCalled();
-      expect(inspectNativeAccountLayout).not.toHaveBeenCalled();
       expect(fixtureState.events).toEqual(["start"]);
       await prepared.officialRuntimeScope.start();
       expect(fixtureState.events).toEqual(["start"]);

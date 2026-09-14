@@ -58,7 +58,7 @@ Switching SHALL enter changing synchronously, reject new work before connection 
 
 ### Requirement: Ordinary startup SHALL be independent of Account collection
 
-Startup SHALL determine the permanent home and inspect whether credential Journal or login-stage records exist before launching native work. Existing or unreadable pending state SHALL require recovery or remain unavailable. With no pending state, startup SHALL launch one ordinary native backend without Account preflight, probe/restart, quota or exact-version allowlist checks. Collection and optional legacy credential import SHALL run after native startup; their failure SHALL NOT restart or disable native use. Management connections MAY initialize after Desktop clients. A Scope with pending recovery MUST NOT bypass failed recovery by starting an ordinary backend or publishing ready.
+Startup SHALL determine the permanent home and inspect whether credential Journal or login-stage records exist before launching native work. Existing or unreadable pending state SHALL require recovery or remain unavailable. With no pending state, startup SHALL launch one ordinary native backend without Account preflight, probe/restart, quota or exact-version allowlist checks. The existing Account module SHALL initialize collection after native startup without a forwarding control layer; collection failure SHALL NOT restart or disable native use. Startup SHALL NOT scan legacy registries or import credentials from other homes. Management connections MAY initialize after Desktop clients. A Scope with pending recovery MUST NOT bypass failed recovery by starting an ordinary backend or publishing ready.
 
 #### Scenario: Quota service is unavailable
 
@@ -89,7 +89,7 @@ Startup SHALL determine the permanent home and inspect whether credential Journa
 
 #### Scenario: Collection is slow or fails
 
-- **WHEN** collection initialization, legacy import or backup is delayed or fails after a clean native startup
+- **WHEN** collection initialization or backup is delayed or fails after a clean native startup
 - **THEN** native requests SHALL remain available without waiting for collection readiness or replacing the backend
 - **AND** idle collection lease loss SHALL disable management, not native work; lease loss during credential mutation SHALL retain fail-closed protection
 

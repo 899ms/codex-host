@@ -153,6 +153,7 @@ type RuntimeHook = (home: string) => void | Promise<void>;
 
 export class SyntheticNativeAccountRuntime implements NativeAccountRuntime {
   async reconcilePreviousWriter(): Promise<void> {}
+  async checkCredentialStorage(): Promise<void> {}
   readonly gate = new OfficialWorkGate();
   readonly starts: string[] = [];
   readonly verified: Array<CodexCredentialIdentity | null> = [];

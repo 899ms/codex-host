@@ -16,6 +16,7 @@ import type { CodexAccountControl } from "./codex-account-control.js";
 import type { NativeAccountRuntime } from "./native-account-runtime.js";
 import {
   type NativeAccountStore,
+  hasPendingNativeAccountMutation,
   matchProfile,
   newProfile,
   type NativeLoginStage,
@@ -52,6 +53,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
   readonly #listeners = new Set<(value: CodexAccountLoginCompleted) => void>();
   readonly #unsubscribe: () => void;
   #lastVault: NativeProfileVault;
+  #initializing: Promise<void> | undefined;
   #pending:
     | (NonNullable<CodexAccountListResult["pendingOperation"]> & {
         lease?: OfficialChangeLease;
@@ -68,7 +70,15 @@ export class NativeCodexAccounts implements CodexAccountControl {
   }) {
     this.#store = input.store;
     this.#runtime = input.runtime;
-    this.#lastVault = input.store.vault;
+    this.#lastVault = input.store.ready
+      ? input.store.vault
+      : {
+          version: 2,
+          homeId: input.store.homeId,
+          revision: 0,
+          lastOperationId: null,
+          accounts: [],
+        };
     this.#transaction = new NativeProfileTransaction(input.store, input.runtime);
     this.#quotas = new NativeAccountQuotas({
       files: input.store.files,
@@ -87,7 +97,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
     this.#unsubscribe = input.runtime.subscribe((value) => this.observe(value));
   }
   snapshot(): CodexAccountListResult {
-    let available = true;
+    let available = !this.#initializing;
     try {
       this.#lastVault = this.#store.vault;
     } catch {
@@ -131,7 +141,12 @@ export class NativeCodexAccounts implements CodexAccountControl {
   }
 
   async refresh(): Promise<CodexAccountListResult> {
-    if (this.#pending || this.#runtime.gate.phase !== "ready") return this.snapshot();
+    await this.#initializing?.catch(() => undefined);
+    return this.#refresh();
+  }
+  async #refresh(): Promise<CodexAccountListResult> {
+    if (!this.#store.ready || this.#pending || this.#runtime.gate.phase !== "ready")
+      return this.snapshot();
     const release = this.#runtime.gate.admit();
     try {
       await this.#store.captureCurrent();
@@ -141,14 +156,41 @@ export class NativeCodexAccounts implements CodexAccountControl {
     }
   }
 
-  async initialize(): Promise<void> {
-    if ((await this.#store.readJournal()) || (await this.#store.readStage())) await this.recover();
-    else await this.refresh();
+  initialize(): Promise<void> {
+    return (this.#initializing ??= this.#initialize()
+      .catch(async (error) => {
+        // Backup failure must not hide a pending mutation or an unreadable record.
+        if (await hasPendingNativeAccountMutation(this.#store.home).catch(() => true)) {
+          this.#runtime.gate.unavailable();
+          await this.#runtime.stop();
+        }
+        throw error;
+      })
+      .finally(() => {
+        this.#initializing = undefined;
+      }));
+  }
+  async #initialize(): Promise<void> {
+    if (!this.#store.ready) await this.#store.open();
+    if ((await this.#store.readJournal()) || (await this.#store.readStage())) await this.#recover();
+    else {
+      try {
+        await this.#runtime.checkCredentialStorage();
+      } catch (error) {
+        await this.#store.close();
+        throw error;
+      }
+      await this.#refresh();
+    }
     await this.#quotas
       .initialize(new Set(this.#store.vault.accounts.map((a) => a.accountId)))
       .catch(() => undefined);
   }
   async recover(): Promise<void> {
+    if (this.#initializing) await this.#initializing;
+    await this.#recover();
+  }
+  async #recover(): Promise<void> {
     if (this.#login) await this.cancelLogin(this.#login.stage.operationId);
     const change = this.#begin("recovery", true);
     try {
@@ -186,6 +228,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
     await this.#changeCredential(null, "logout");
   }
   async #changeCredential(accountId: string | null, kind: "switch" | "logout"): Promise<void> {
+    if (this.#initializing) await this.#initializing;
     const operationId = randomUUID();
     const change = this.#begin(kind, false, operationId, { stopWork: true });
     let attempted = false;
@@ -255,6 +298,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
 
   /** Settings-only addition/re-login; Desktop authentication goes directly to Codex. */
   async startLogin(accountId?: string): Promise<CodexAccountLoginStartResult> {
+    if (this.#initializing) await this.#initializing;
     const operationId = randomUUID();
     const starting = Promise.withResolvers<undefined>();
     let cancelledBeforeStage = false;
@@ -526,6 +570,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
     } = {},
   ): OfficialChangeLease {
     if (this.#pending) throw new OfficialAdmissionError("changing");
+    this.#store.assertOwnership();
     const { cancelStarting } = options;
     this.#pending = { operationId, kind, ...(cancelStarting ? { cancelStarting } : {}) };
     try {
@@ -576,16 +621,18 @@ export class NativeCodexAccounts implements CodexAccountControl {
       throw new NativeAccountError("unknown-account");
     return this.#quotas.inspect(account, refresh);
   }
-  recordUsage(
+  async recordUsage(
     accountId: string,
     credits: AccountCreditsSnapshot,
   ): Promise<CodexAccountUsageResult> {
+    if (this.#initializing) await this.#initializing;
     return this.#quotas.record(accountId, credits);
   }
   cachedUsage(accountId: string): CodexAccountUsageResult | null {
     return this.#quotas.get(accountId);
   }
   async close(): Promise<void> {
+    await this.#initializing?.catch(() => undefined);
     const operationId =
       this.#login?.stage.operationId ??
       (this.#pending?.kind === "login" ? this.#pending.operationId : undefined);

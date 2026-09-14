@@ -52,7 +52,6 @@ vi.mock("../src/codex-runtime/owned-official-backends.js", () => ({
 
 import { prepareLocalCodex } from "../src/native-account-host.js";
 import { NativeCodexCredentials } from "../src/account/native-codex-credentials.js";
-import { OfficialRuntimeClient } from "../src/codex-runtime/official-runtime-scope.js";
 import {
   SyntheticPrivateFiles as MemoryFiles,
   credential,
@@ -207,91 +206,22 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true })));
 });
 
-describe("legacy layout to native Account switching composition", () => {
-  it.each([false, true])(
-    "runs A → B → A and restarts without quota (%s)",
-    async (quotaUnavailable) => {
-      const f = await fixture();
-      native.quotaUnavailable = quotaUnavailable;
-      const prepared = await prepareLocalCodex(f.input);
-      const client = new OfficialRuntimeClient({
-        scope: prepared.officialRuntimeScope,
-        output: async () => {},
-      });
-      try {
-        await client.initialize();
-        await client.initializeProtocol({
-          clientInfo: { name: "synthetic-desktop", version: "test" },
-        });
-        await prepared.accountControl.refresh?.();
-        const initial = prepared.accountControl.snapshot();
-        expect(initial).toMatchObject({
-          phase: "ready",
-          legacyHistoryPreserved: true,
-          capabilities: { switch: true },
-        });
-        expect(initial.accounts).toHaveLength(2);
-        const other = initial.accounts.find(
-          (account) => account.accountId !== initial.currentAccountId,
-        );
-        if (!other || !initial.currentAccountId) throw new Error("Missing adopted identities");
-        await prepared.accountControl.switch(other.accountId);
-        expect(f.files.peek(f.home, "auth.json")?.toString()).toBe(
-          credential("b").serializeForNativeStore(),
-        );
-        await expect(
-          client.request("account/read", { refreshToken: false }),
-        ).resolves.toMatchObject({
-          result: { account: { email: credential("b").email } },
-        });
-        await prepared.accountControl.switch(initial.currentAccountId);
-        expect(f.files.peek(f.home, "auth.json")?.toString()).toBe(
-          credential("a").serializeForNativeStore(),
-        );
-        expect(native.stopExternal).toHaveBeenCalledTimes(2);
-        expect(native.peak).toBe(1);
-        for (const launch of native.launches)
-          expect(launch).toMatchObject({ environment: { CODEX_HOME: f.home } });
-        expect(f.files.peek(f.other, "auth.json")?.toString()).toBe(
-          credential("b").serializeForNativeStore(),
-        );
-      } finally {
-        await client.close();
-        await prepared.close();
-      }
-      for (const [file, bytes] of f.preserved) expect(await readFile(file, "utf8")).toBe(bytes);
-      // Existing managed state in the selected home is recovered, not mistaken for a foreign layout.
-      const restarted = await prepareLocalCodex(f.input);
-      try {
-        await restarted.accountControl.refresh?.();
-        expect(restarted.accountControl.snapshot().accounts).toHaveLength(2);
-        expect(restarted.accountControl.snapshot().phase).toBe("ready");
-        expect(native.quotaRequests).toBe(0);
-      } finally {
-        await restarted.close();
-      }
-    },
-  );
-
-  it("refuses replacement when external backend termination fails", async () => {
+describe("native startup ignores legacy account directories", () => {
+  it("collects only the official home, without importing or changing old directories", async () => {
     const f = await fixture();
+    const read = vi.spyOn(f.files, "read");
     const prepared = await prepareLocalCodex(f.input);
     try {
       await prepared.accountControl.refresh?.();
-      const initial = prepared.accountControl.snapshot();
-      const other = initial.accounts.find(
-        (account) => account.accountId !== initial.currentAccountId,
-      );
-      if (!other) throw new Error("Missing saved Account");
-      native.stopExternal.mockRejectedValue(new Error("exit unconfirmed"));
-      await expect(prepared.accountControl.switch(other.accountId)).rejects.toThrow();
-      expect(f.files.peek(f.home, "auth.json")?.toString()).toBe(
-        credential("a").serializeForNativeStore(),
-      );
-      expect(prepared.accountControl.snapshot().currentAccountId).toBe(initial.currentAccountId);
+      expect(prepared.accountControl.snapshot().accounts).toHaveLength(1);
+      expect(prepared.accountControl.snapshot().legacyHistoryPreserved).toBeUndefined();
+      expect(read.mock.calls.some(([directory]) => directory === f.other)).toBe(false);
+      expect(native.launches).toHaveLength(1);
+      expect(native.stopExternal).not.toHaveBeenCalled();
     } finally {
       await prepared.close();
     }
+    for (const [file, bytes] of f.preserved) expect(await readFile(file, "utf8")).toBe(bytes);
   });
 
   it.each(["current", "other"])(

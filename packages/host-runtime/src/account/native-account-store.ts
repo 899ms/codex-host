@@ -27,6 +27,24 @@ import {
   type StoredNativeCredential,
 } from "./native-profile-vault.js";
 
+/** Lightweight check independent of Vault readability or the native file helper. */
+export async function hasPendingNativeAccountMutation(home: string): Promise<boolean> {
+  for (const name of ["transaction.json", "login.json"]) {
+    try {
+      await lstat(path.join(home, ".codexhost-native-accounts", name));
+      return true;
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        ["ENOENT", "ENOTDIR"].includes(String(error.code))
+      ))
+        throw error;
+    }
+  }
+  return false;
+}
+
 export interface PrivateCredentialFiles {
   ensureDirectory(directory: string): Promise<void>;
   read(directory: string, name: string): Promise<Buffer | null>;
@@ -169,6 +187,9 @@ export class NativeAccountStore {
       await this.close();
       throw error;
     }
+  }
+  get ready(): boolean {
+    return this.#ready;
   }
   assertFileOwnership(): void {
     if (!this.#lease) throw new NativeAccountError("recovery-required");

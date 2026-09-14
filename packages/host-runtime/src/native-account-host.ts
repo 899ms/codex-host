@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { lstat, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -11,11 +11,10 @@ import {
   SingleNativeCodexAccount,
   UnavailableCodexAccounts,
 } from "./account/codex-account-control.js";
-import { canonicalCodexHome } from "./account/native-account-layout.js";
-import { BackgroundCodexAccounts } from "./account/background-codex-accounts.js";
-import { collectLegacyNativeAccounts } from "./account/collect-legacy-native-accounts.js";
-import { NativeAccountStore } from "./account/native-account-store.js";
-import { NativeAccountError } from "./account/native-profile-vault.js";
+import {
+  NativeAccountStore,
+  hasPendingNativeAccountMutation,
+} from "./account/native-account-store.js";
 import { NativeCodexAccounts } from "./account/native-codex-accounts.js";
 import { OfficialAccountRuntime } from "./account/official-account-runtime.js";
 import { officialEnvironment } from "./app-server-host.js";
@@ -80,18 +79,15 @@ function stagingEnvironment(source: NodeJS.ProcessEnv, home: string): NodeJS.Pro
     CODEX_HOME: home,
   };
 }
-async function exists(file: string): Promise<boolean> {
+async function canonicalCodexHome(home: string): Promise<string> {
+  const absolute = path.resolve(home);
   try {
-    await lstat(file);
-    return true;
+    return await realpath(absolute);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      ["ENOENT", "ENOTDIR"].includes(String(error.code))
-    )
-      return false;
-    throw error;
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    const parent = path.dirname(absolute);
+    if (parent === absolute) throw error;
+    return path.join(await canonicalCodexHome(parent), path.basename(absolute));
   }
 }
 function blocked(
@@ -191,14 +187,6 @@ function nativeFallback(
   };
 }
 
-/** Existence only: unreadable records are unknown, not a clean startup. */
-async function hasPendingMutation(root: string): Promise<boolean> {
-  return (
-    (await exists(path.join(root, "transaction.json"))) ||
-    (await exists(path.join(root, "login.json")))
-  );
-}
-
 /** Ordinary startup owns a backend, not an Account recovery transaction. */
 export async function prepareLocalCodex(input: LocalCodexOptions): Promise<PreparedLocalCodex> {
   const home = await canonicalCodexHome(
@@ -207,7 +195,7 @@ export async function prepareLocalCodex(input: LocalCodexOptions): Promise<Prepa
   const root = path.join(home, ".codexhost-native-accounts");
   let pending: boolean;
   try {
-    pending = await hasPendingMutation(root);
+    pending = await hasPendingNativeAccountMutation(home);
   } catch {
     return blocked(home, input.diagnosticOutput, "recovery-required");
   }
@@ -225,7 +213,6 @@ export async function prepareLocalCodex(input: LocalCodexOptions): Promise<Prepa
   );
   const processFiles = new NativePrivateFiles({ launcher, environment: input.environment });
   const files = new NativePrivateFiles({ launcher, environment: input.environment });
-  let accounts: NativeCodexAccounts | undefined;
   const store = new NativeAccountStore({
     home,
     files,
@@ -281,72 +268,7 @@ export async function prepareLocalCodex(input: LocalCodexOptions): Promise<Prepa
           });
     },
   });
-  const preservePendingRecovery = async (): Promise<void> => {
-    // A record may appear between the lightweight check and collection opening.
-    // A collection failure must not conceal that new recovery obligation.
-    if (await hasPendingMutation(root).catch(() => true)) {
-      scope.gate.unavailable();
-      await scope.owner.stop();
-    }
-  };
-  const initializeAccounts = async (): Promise<CodexAccountControl> => {
-    try {
-      if (!(await store.open({ allowLocked: true })))
-        throw new NativeAccountError("keyring-unavailable");
-      const runtime = new OfficialAccountRuntime({
-        owner: scope.owner,
-        sharedCodexHome: home,
-        environment: input.environment,
-        readCredentials: (directory) => store.readCredentials(directory),
-        reconcilePreviousWriter: () => recoveryRecord.reconcile(),
-        stopExternalProcesses: async () => {
-          await stopNativeProcesses({
-            launcher,
-            executableNames: [path.basename(input.stockCodexPath), "codex", "codex.exe"],
-            environment: input.environment,
-          });
-          // A dead supervisor alone proves nothing. Only the successful native
-          // writer census/termination allows retiring a clean historical witness.
-          if (!(await store.readJournal()) && !(await store.readStage()))
-            await recoveryRecord.reconcile({ externalWritersStopped: true });
-        },
-      });
-      if (!pending) await runtime.checkCredentialStorage();
-      accounts = new NativeCodexAccounts({ store, runtime });
-      try {
-        await accounts.initialize();
-        await collectLegacyNativeAccounts(
-          store,
-          path.resolve(input.environment.CODEXHOST_DATA_DIR ?? path.join(homedir(), ".codexhost")),
-        );
-      } catch {
-        await preservePendingRecovery();
-        input.diagnosticOutput.write(
-          pending
-            ? "codexhost: Codex Account recovery is required\n"
-            : "codexhost: Codex Account collection synchronization failed\n",
-        );
-      }
-      return accounts;
-    } catch {
-      await preservePendingRecovery();
-      input.diagnosticOutput.write("codexhost: Codex Account collection is unavailable\n");
-      await store.close();
-      return new UnavailableCodexAccounts(
-        pending ? "recovery-required" : "unsupported-storage",
-        () => ({
-          phase: scope.gate.phase,
-          revision: scope.gate.revision,
-        }),
-      );
-    }
-  };
-  let background: BackgroundCodexAccounts | undefined;
-  let control: CodexAccountControl;
-  if (pending) {
-    // No ordinary backend is launched until the actual Journal/stage is resolved.
-    control = await initializeAccounts();
-  } else {
+  if (!pending) {
     try {
       await scope.start();
     } catch (error) {
@@ -354,21 +276,35 @@ export async function prepareLocalCodex(input: LocalCodexOptions): Promise<Prepa
       await rm(processDirectory, { recursive: true, force: true });
       throw error;
     }
-    background = new BackgroundCodexAccounts(
-      new UnavailableCodexAccounts("unsupported-storage", () => ({
-        phase: scope.gate.phase,
-        revision: scope.gate.revision,
-      })),
-      initializeAccounts,
-    );
-    control = background;
   }
+  const runtime = new OfficialAccountRuntime({
+    owner: scope.owner,
+    sharedCodexHome: home,
+    environment: input.environment,
+    readCredentials: (directory) => store.readCredentials(directory),
+    reconcilePreviousWriter: () => recoveryRecord.reconcile(),
+    stopExternalProcesses: async () => {
+      await stopNativeProcesses({
+        launcher,
+        executableNames: [path.basename(input.stockCodexPath), "codex", "codex.exe"],
+        environment: input.environment,
+      });
+      // Supervisor death alone is not proof of child exit.
+      if (!(await store.readJournal()) && !(await store.readStage()))
+        await recoveryRecord.reconcile({ externalWritersStopped: true });
+    },
+  });
+  const accounts = new NativeCodexAccounts({ store, runtime });
+  const initializing = accounts.initialize().catch(() => {
+    input.diagnosticOutput.write("codexhost: Codex Account initialization failed\n");
+  });
+  // Only unfinished credential mutations hold startup; collection runs in the background.
+  if (pending) await initializing;
   return {
     officialRuntimeScope: scope,
-    accountControl: control,
+    accountControl: accounts,
     close: async () => {
-      await background?.settled();
-      await accounts?.close();
+      await accounts.close();
       await scope.close();
       await store.close();
       await rm(processDirectory, { recursive: true, force: true });

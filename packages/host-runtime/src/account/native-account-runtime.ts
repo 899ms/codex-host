@@ -5,6 +5,7 @@ import type { CodexCredentialIdentity } from "./native-codex-credentials.js";
 /** Sole owned native process. A staging home never serves Desktop work. */
 export interface NativeAccountRuntime {
   readonly gate: OfficialWorkGate;
+  checkCredentialStorage(): Promise<void>;
   preflight(): Promise<void>;
   /** Stop and confirm this Host's owned process tree. */
   stop(): Promise<void>;
