@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -689,6 +689,68 @@ describe("AppServerHost installed Harness plugins", () => {
       }
     }
   }, 10_000);
+
+  it("stops later plugin batches when Host closes during a blocked factory", async () => {
+    const ids = ["a-agent", "b-agent", "c-agent", "d-agent", "e-agent"];
+    const directory = mkdtempSync(path.join(tmpdir(), "codexhost-plugin-close-"));
+    const started = path.join(directory, "started");
+    mkdirSync(started);
+    const release = path.join(directory, "release");
+    writeFileSync(
+      path.join(directory, "enabled.json"),
+      JSON.stringify({ version: 1, enabled: ids }),
+    );
+    for (const id of ids) {
+      const location = path.join(directory, id);
+      mkdirSync(location);
+      writeFileSync(
+        path.join(location, "manifest.json"),
+        JSON.stringify({
+          manifestVersion: 1,
+          id,
+          name: id,
+          version: "1.0.0",
+          adapterApiVersion: 1,
+          entry: "index.mjs",
+        }),
+      );
+      writeFileSync(
+        path.join(location, "index.mjs"),
+        `
+      import { access, writeFile } from "node:fs/promises";
+      import { FakeHarnessAdapter } from ${JSON.stringify(pathToFileURL(path.resolve("packages/harness-adapter/dist/testing.js")).href)};
+      const started = ${JSON.stringify(pathToFileURL(path.join(started, id)).href)};
+      const release = ${JSON.stringify(pathToFileURL(release).href)};
+      export async function createHarnessAdapter() {
+        await writeFile(new URL(started), "yes");
+        for (;;) {
+          try {
+            await access(new URL(release));
+            return new FakeHarnessAdapter(${JSON.stringify(id)});
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+        }
+      }
+    `,
+      );
+    }
+    const fixture = createFixture({ pluginDirectory: directory, externalAdapters: new Map() });
+    try {
+      await fixture.ready;
+      await vi.waitFor(() => expect(readdirSync(started)).toHaveLength(4));
+      fixture.host.close();
+      await expect(fixture.running).resolves.toBe(0);
+      expect(readdirSync(started).sort()).toEqual(["a-agent", "b-agent", "c-agent", "d-agent"]);
+    } finally {
+      writeFileSync(release, "ok");
+      try {
+        await stopFixture(fixture);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  }, 3_000);
 
   it("binds DeepSeek Session Import after its Adapter has been dynamically loaded", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "codexhost-dynamic-import-"));

@@ -1,4 +1,4 @@
-import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -441,6 +441,51 @@ describe("Harness plugin discovery and loading", () => {
       );
       expect(inspections).toHaveLength(ids.length);
       expect(inspections.every((inspection) => inspection.status === "ready")).toBe(true);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("stops taking later plugins when the load is aborted", async () => {
+    const ids = ["a-agent", "b-agent", "c-agent", "d-agent", "e-agent"];
+    const directory = await root(ids);
+    const started = path.join(directory, "started");
+    await mkdir(started);
+    const release = path.join(directory, "release");
+    const controller = new AbortController();
+    for (const id of ids) {
+      await plugin(directory, id, {
+        code: `
+      import { access, writeFile } from "node:fs/promises";
+      import { FakeHarnessAdapter } from ${JSON.stringify(fakeModule)};
+      const started = ${JSON.stringify(pathToFileURL(path.join(started, id)).href)};
+      const release = ${JSON.stringify(pathToFileURL(release).href)};
+      export async function createHarnessAdapter() {
+        await writeFile(new URL(started), "yes");
+        for (;;) {
+          try {
+            await access(new URL(release));
+            return new FakeHarnessAdapter(${JSON.stringify(id)});
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+        }
+      }
+    `,
+      });
+    }
+    const pending = loadHarnessPlugins({
+      roots: [directory],
+      context,
+      loadTimeoutMs: 5_000,
+      signal: controller.signal,
+    });
+    await vi.waitFor(async () => expect(await readdir(started)).toHaveLength(4));
+    controller.abort();
+    const registry = await pending;
+    try {
+      expect((await readdir(started)).sort()).toEqual(["a-agent", "b-agent", "c-agent", "d-agent"]);
+      expect(registry.list().map(({ id }) => id)).not.toContain("e-agent");
     } finally {
       await registry.close();
     }

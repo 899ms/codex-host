@@ -47,6 +47,8 @@ export interface LoadHarnessPluginsOptions {
   reservedIds?: ReadonlySet<string>;
   /** Bound for one plugin's asynchronous import and factory. Defaults to 10s. */
   loadTimeoutMs?: number;
+  /** Stop taking new candidates and cancel in-flight import/factory waits. */
+  signal?: AbortSignal;
   /** Defaults to true. Disable only when the caller intentionally needs cold instances. */
   warmup?: boolean;
   /** Dedicated runtime owners (e.g. a Broker) may instantiate only their requested plugin. */
@@ -101,10 +103,12 @@ async function loadAdapter(
   timeoutMs: number,
   diagnose: (diagnostic: HarnessPluginDiagnostic) => void,
   warmup: boolean,
+  signal?: AbortSignal,
 ): Promise<HarnessAdapter> {
   const { manifest } = candidate;
   let expired = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   const operation = (async () => {
     const entry = await pluginResourcePath(candidate.root, manifest.entry);
     if (!/\.(?:mjs|js)$/u.test(entry))
@@ -136,23 +140,38 @@ async function loadAdapter(
     return value;
   })();
   try {
-    const adapter = await Promise.race([
+    const races: Array<Promise<HarnessAdapter | undefined>> = [
       operation,
-      new Promise<never>((_, reject) => {
+      new Promise((_, reject) => {
         timer = setTimeout(() => {
           expired = true;
           reject(new PluginLoadTimeout());
         }, timeoutMs);
       }),
-    ]);
+    ];
+    if (signal) {
+      races.push(
+        new Promise((_, reject) => {
+          onAbort = () => {
+            expired = true;
+            reject(new PluginLoadCancelled());
+          };
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
+        }),
+      );
+    }
+    const adapter = await Promise.race(races);
     if (!adapter) throw new PluginLoadTimeout();
     return adapter;
   } finally {
     if (timer) clearTimeout(timer);
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
   }
 }
 
 class PluginLoadTimeout extends Error {}
+class PluginLoadCancelled extends Error {}
 
 /** Discover all manifests before importing any module, so duplicate IDs never win a race. */
 export async function loadHarnessPlugins(
@@ -251,6 +270,7 @@ export async function loadHarnessPlugins(
   // Each plugin gets a full import/factory budget. Four workers overlap a slow
   // neighbor without shrinking later plugins to whatever time remains.
   // Filesystem discovery and synchronous plugin execution are not preemptible.
+  if (options.signal?.aborted) return registry;
   let next = 0;
   const loaded = new Map<
     Candidate,
@@ -258,8 +278,10 @@ export async function loadHarnessPlugins(
   >();
   const worker = async (): Promise<void> => {
     for (;;) {
+      if (options.signal?.aborted) return;
       const candidate = pending[next++];
       if (!candidate) return;
+      if (options.signal?.aborted) return;
       const { manifest } = candidate;
       const descriptor = harnessPluginDescriptorSchema.parse({
         id: manifest.id,
@@ -281,8 +303,14 @@ export async function loadHarnessPlugins(
             timeoutMs,
             diagnose,
             options.warmup !== false,
+            options.signal,
           );
+          if (options.signal?.aborted) {
+            await adapter.close().catch(() => diagnose({ id: manifest.id, code: "cleanupFailed" }));
+            return;
+          }
         } catch (error) {
+          if (error instanceof PluginLoadCancelled) return;
           failure = error instanceof PluginLoadTimeout ? "loadTimeout" : "loadFailed";
           adapter = unavailableAdapter(descriptor, failure);
         }
