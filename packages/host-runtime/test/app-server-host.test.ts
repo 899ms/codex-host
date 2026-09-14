@@ -694,7 +694,9 @@ describe("AppServerHost installed Harness plugins", () => {
     const ids = ["a-agent", "b-agent", "c-agent", "d-agent", "e-agent"];
     const directory = mkdtempSync(path.join(tmpdir(), "codexhost-plugin-close-"));
     const started = path.join(directory, "started");
+    const finished = path.join(directory, "finished");
     mkdirSync(started);
+    mkdirSync(finished);
     const release = path.join(directory, "release");
     writeFileSync(
       path.join(directory, "enabled.json"),
@@ -720,16 +722,21 @@ describe("AppServerHost installed Harness plugins", () => {
       import { access, writeFile } from "node:fs/promises";
       import { FakeHarnessAdapter } from ${JSON.stringify(pathToFileURL(path.resolve("packages/harness-adapter/dist/testing.js")).href)};
       const started = ${JSON.stringify(pathToFileURL(path.join(started, id)).href)};
+      const finished = ${JSON.stringify(pathToFileURL(path.join(finished, id)).href)};
       const release = ${JSON.stringify(pathToFileURL(release).href)};
       export async function createHarnessAdapter() {
         await writeFile(new URL(started), "yes");
-        for (;;) {
-          try {
-            await access(new URL(release));
-            return new FakeHarnessAdapter(${JSON.stringify(id)});
-          } catch {
-            await new Promise((resolve) => setTimeout(resolve, 20));
+        try {
+          for (;;) {
+            try {
+              await access(new URL(release));
+              return new FakeHarnessAdapter(${JSON.stringify(id)});
+            } catch {
+              await new Promise((resolve) => setTimeout(resolve, 20));
+            }
           }
+        } finally {
+          await writeFile(new URL(finished), "yes");
         }
       }
     `,
@@ -744,6 +751,9 @@ describe("AppServerHost installed Harness plugins", () => {
       expect(readdirSync(started).sort()).toEqual(["a-agent", "b-agent", "c-agent", "d-agent"]);
     } finally {
       writeFileSync(release, "ok");
+      await vi.waitFor(() =>
+        expect(readdirSync(finished).sort()).toEqual(readdirSync(started).sort()),
+      );
       try {
         await stopFixture(fixture);
       } finally {

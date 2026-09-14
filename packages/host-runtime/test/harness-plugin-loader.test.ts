@@ -450,7 +450,9 @@ describe("Harness plugin discovery and loading", () => {
     const ids = ["a-agent", "b-agent", "c-agent", "d-agent", "e-agent"];
     const directory = await root(ids);
     const started = path.join(directory, "started");
+    const finished = path.join(directory, "finished");
     await mkdir(started);
+    await mkdir(finished);
     const release = path.join(directory, "release");
     const controller = new AbortController();
     for (const id of ids) {
@@ -459,16 +461,21 @@ describe("Harness plugin discovery and loading", () => {
       import { access, writeFile } from "node:fs/promises";
       import { FakeHarnessAdapter } from ${JSON.stringify(fakeModule)};
       const started = ${JSON.stringify(pathToFileURL(path.join(started, id)).href)};
+      const finished = ${JSON.stringify(pathToFileURL(path.join(finished, id)).href)};
       const release = ${JSON.stringify(pathToFileURL(release).href)};
       export async function createHarnessAdapter() {
         await writeFile(new URL(started), "yes");
-        for (;;) {
-          try {
-            await access(new URL(release));
-            return new FakeHarnessAdapter(${JSON.stringify(id)});
-          } catch {
-            await new Promise((resolve) => setTimeout(resolve, 20));
+        try {
+          for (;;) {
+            try {
+              await access(new URL(release));
+              return new FakeHarnessAdapter(${JSON.stringify(id)});
+            } catch {
+              await new Promise((resolve) => setTimeout(resolve, 20));
+            }
           }
+        } finally {
+          await writeFile(new URL(finished), "yes");
         }
       }
     `,
@@ -487,6 +494,10 @@ describe("Harness plugin discovery and loading", () => {
       expect((await readdir(started)).sort()).toEqual(["a-agent", "b-agent", "c-agent", "d-agent"]);
       expect(registry.list().map(({ id }) => id)).not.toContain("e-agent");
     } finally {
+      await writeFile(release, "ok");
+      await vi.waitFor(async () =>
+        expect((await readdir(finished)).sort()).toEqual((await readdir(started)).sort()),
+      );
       await registry.close();
     }
   });
