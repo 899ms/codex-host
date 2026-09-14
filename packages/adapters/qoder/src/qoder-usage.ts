@@ -32,6 +32,7 @@ export class QoderUsageTracker {
   #contextUsagePercent: number | undefined;
   #contextWindowTokens: number;
   #contextUsedTokens: number | undefined;
+  #latestInputTokens: number | undefined;
   #cacheHitRatePercent: number | undefined;
   #planFiveHourUsedPercent: number | undefined;
   #planFiveHourResetsAtUnix: number | undefined;
@@ -58,6 +59,15 @@ export class QoderUsageTracker {
   observeAssistant(message: SDKAssistantMessage): void {
     const rawUsage = message.message?.usage as Record<string, unknown> | undefined;
     if (!rawUsage) return;
+
+    const inputParts = [
+      rawUsage.input_tokens,
+      rawUsage.cache_read_input_tokens,
+      rawUsage.cache_creation_input_tokens,
+    ].filter(isNonNegativeSafeInteger);
+    if (inputParts.length > 0) {
+      this.#latestInputTokens = inputParts.reduce((sum, tokens) => sum + tokens, 0);
+    }
 
     if (isNonNegativeSafeInteger(rawUsage.input_tokens)) {
       this.#inputTokens = (this.#inputTokens ?? 0) + rawUsage.input_tokens;
@@ -285,11 +295,8 @@ export class QoderUsageTracker {
 
     if (usedTokens === undefined && this.#contextUsagePercent !== undefined && windowTokens > 0) {
       usedTokens = Math.round((windowTokens * this.#contextUsagePercent) / 100);
-    } else if (
-      usedTokens === undefined &&
-      (this.#inputTokens !== undefined || this.#cachedInputTokens !== undefined)
-    ) {
-      usedTokens = (this.#inputTokens ?? 0) + (this.#cachedInputTokens ?? 0);
+    } else if (usedTokens === undefined) {
+      usedTokens = this.#latestInputTokens;
     }
 
     if (usedTokens !== undefined && windowTokens > 0) {

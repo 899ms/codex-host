@@ -59,5 +59,5 @@ export function mapToQoderPermissionMode(
   ) {
     return str as QoderPermissionMode;
   }
-  return "default";
+  return undefined;
 }

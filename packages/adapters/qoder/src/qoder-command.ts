@@ -83,15 +83,17 @@ export function resolveQoderExecutable(
       },
       dependencies,
     ) ??
-    resolveHarnessExecutable(
-      qoderFallbackSpec,
-      {
-        environment: input.environment ?? process.env,
-        ...(input.homeDirectory ? { homeDirectory: input.homeDirectory } : {}),
-        platform,
-      },
-      dependencies,
-    );
+    (input.command !== undefined
+      ? undefined
+      : resolveHarnessExecutable(
+          qoderFallbackSpec,
+          {
+            environment: input.environment ?? process.env,
+            ...(input.homeDirectory ? { homeDirectory: input.homeDirectory } : {}),
+            platform,
+          },
+          dependencies,
+        ));
 
   if (!resolution) throw new QoderExecutableError("Qoder CLI is not installed");
   return targetPath(platform).isAbsolute(resolution.executable)

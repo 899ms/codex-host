@@ -147,16 +147,14 @@ export function encodeQoderModelRef(value: string): HarnessModelRef {
 }
 
 export function decodeQoderModelRef(ref: HarnessModelRef): string | undefined {
-  const parsed = harnessModelRefSchema.parse(ref);
-  if (!parsed.id.startsWith(QODER_MODEL_REF_PREFIX)) {
-    throw new Error("Qoder Model Ref belongs to another Adapter");
-  }
-  const encoded = parsed.id.slice(QODER_MODEL_REF_PREFIX.length);
-  if (encoded.length === 0) throw new Error("Qoder Model Ref is empty");
+  const parsed = harnessModelRefSchema.safeParse(ref);
+  if (!parsed.success || !parsed.data.id.startsWith(QODER_MODEL_REF_PREFIX)) return undefined;
+  const encoded = parsed.data.id.slice(QODER_MODEL_REF_PREFIX.length);
   try {
-    return Buffer.from(encoded, "base64url").toString("utf8");
+    const value = Buffer.from(encoded, "base64url").toString("utf8");
+    return encodeQoderModelRef(value).id === parsed.data.id ? value : undefined;
   } catch {
-    throw new Error("Qoder Model Ref is not valid base64url");
+    return undefined;
   }
 }
 

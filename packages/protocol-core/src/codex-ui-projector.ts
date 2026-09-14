@@ -103,15 +103,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function nestedString(value: unknown, keys: readonly string[]): string | undefined {
+function nestedString(
+  value: unknown,
+  keys: readonly string[],
+  preserveText = false,
+): string | undefined {
   if (!isRecord(value)) return undefined;
   for (const key of keys) {
     const field = value[key];
-    if (typeof field === "string" && field.trim().length > 0) return field.trim();
+    if (typeof field === "string" && (preserveText || field.trim().length > 0))
+      return preserveText ? field : field.trim();
   }
   for (const wrapper of ["input", "arguments", "params"] as const) {
-    const nested = nestedString(value[wrapper], keys);
-    if (nested) return nested;
+    const nested = nestedString(value[wrapper], keys, preserveText);
+    if (nested !== undefined) return nested;
   }
   return undefined;
 }
@@ -228,12 +233,15 @@ export function normalizeDisplayPath(filePath: string, cwd?: string): string | n
   const normalizedCwd = cwd.trim().replaceAll("\\", "/").replace(/\/+$/, "");
   if (normalizedCwd.length === 0) return normalizedFile.replace(/^\.\//, "");
 
-  if (normalizedFile.toLowerCase() === normalizedCwd.toLowerCase() || normalizedFile === ".") {
+  const windowsPath = /^[a-zA-Z]:\//.test(normalizedCwd) || normalizedCwd.startsWith("//");
+  const comparisonFile = windowsPath ? normalizedFile.toLowerCase() : normalizedFile;
+  const comparisonCwd = windowsPath ? normalizedCwd.toLowerCase() : normalizedCwd;
+  if (comparisonFile === comparisonCwd || normalizedFile === ".") {
     return null;
   }
 
-  const cwdPrefix = normalizedCwd.toLowerCase() + "/";
-  if (normalizedFile.toLowerCase().startsWith(cwdPrefix)) {
+  const cwdPrefix = comparisonCwd + "/";
+  if (comparisonFile.startsWith(cwdPrefix)) {
     const rel = normalizedFile.slice(cwdPrefix.length);
     return rel.length > 0 ? rel : null;
   }
@@ -277,69 +285,10 @@ function simpleUnifiedDiff(
   ].join("\n");
 }
 
-function extractHunkContent(unifiedDiff: string): string {
-  const lines = unifiedDiff.replaceAll("\r\n", "\n").split("\n");
-  const firstHunkIndex = lines.findIndex((line) => line.startsWith("@@"));
-  if (firstHunkIndex !== -1) {
-    const hunkLines = lines.slice(firstHunkIndex);
-    while (hunkLines.length > 0 && hunkLines[hunkLines.length - 1]?.trim() === "") {
-      hunkLines.pop();
-    }
-    return hunkLines.join("\n");
-  }
-  const nonHeaderLines = lines.filter(
-    (line) =>
-      !line.startsWith("diff --git") &&
-      !line.startsWith("--- ") &&
-      !line.startsWith("+++ ") &&
-      !line.startsWith("index ") &&
-      !line.startsWith("new file mode") &&
-      !line.startsWith("deleted file mode"),
-  );
-  while (nonHeaderLines.length > 0 && nonHeaderLines[nonHeaderLines.length - 1]?.trim() === "") {
-    nonHeaderLines.pop();
-  }
-  return nonHeaderLines.join("\n");
-}
-
-function mergeFileDiffs(filePath: string, diffs: string[], kind: HostFileChange["kind"]): string {
-  const normalized = filePath.replaceAll("\\", "/");
-  const isAbsolute = normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized);
-  const aPath = isAbsolute ? normalized : `a/${normalized}`;
-  const bPath = isAbsolute ? normalized : `b/${normalized}`;
-  const oldHeader = kind === "add" ? "/dev/null" : aPath;
-  const newHeader = kind === "delete" ? "/dev/null" : bPath;
-
-  const header = [`diff --git ${aPath} ${bPath}`, `--- ${oldHeader}`, `+++ ${newHeader}`].join(
-    "\n",
-  );
-
-  const hunks = diffs.map(extractHunkContent).filter((hunk) => hunk.length > 0);
-
-  if (hunks.length === 0) {
-    return `${header}\n`;
-  }
-  return `${header}\n${hunks.join("\n")}\n`;
-}
-
-function coalesceSingleFileChanges(fileChanges: HostFileChange[]): HostFileChange {
+function coalesceSingleFileChanges(fileChanges: HostFileChange[]): HostFileChange[] {
   const first = fileChanges[0];
-  if (!first) throw new Error("coalesceSingleFileChanges requires at least one file change");
-  if (fileChanges.length === 1) return first;
-
-  const last = fileChanges[fileChanges.length - 1] ?? first;
-
-  let overallKind: HostFileChange["kind"] = "update";
-  if (first.kind === "add" && last.kind !== "delete") {
-    overallKind = "add";
-  } else if (last.kind === "delete") {
-    overallKind = "delete";
-  } else if (
-    fileChanges.some((c) => c.kind === "add") &&
-    !fileChanges.some((c) => c.kind === "delete")
-  ) {
-    overallKind = "add";
-  }
+  const last = fileChanges.at(-1);
+  if (!first || (first.kind === "add" && last?.kind === "delete")) return [];
 
   // Reduce adjacent chainable changes
   const reduced: HostFileChange[] = [];
@@ -371,39 +320,7 @@ function coalesceSingleFileChanges(fileChanges: HostFileChange[]): HostFileChang
     }
   }
 
-  const single = reduced[0];
-  if (reduced.length === 1 && single) {
-    if (single.kind === overallKind) {
-      return single;
-    }
-    return {
-      path: single.path,
-      kind: overallKind,
-      ...(single.oldText !== undefined ? { oldText: single.oldText } : {}),
-      ...(single.newText !== undefined ? { newText: single.newText } : {}),
-      unifiedDiff:
-        single.oldText !== undefined && single.newText !== undefined
-          ? simpleUnifiedDiff(
-              single.path,
-              overallKind === "add" ? "" : single.oldText,
-              single.newText,
-              overallKind === "delete" ? "update" : overallKind,
-            )
-          : single.unifiedDiff,
-    };
-  }
-
-  const diffs = reduced.map((c) => c.unifiedDiff);
-  const filePath = last.path;
-  const mergedDiff = mergeFileDiffs(filePath, diffs, overallKind);
-
-  return {
-    path: filePath,
-    kind: overallKind,
-    unifiedDiff: mergedDiff,
-    ...(first.oldText !== undefined ? { oldText: first.oldText } : {}),
-    ...(last.newText !== undefined ? { newText: last.newText } : {}),
-  };
+  return reduced;
 }
 
 export function coalesceFileChanges(changes: HostFileChange[]): HostFileChange[] {
@@ -411,7 +328,11 @@ export function coalesceFileChanges(changes: HostFileChange[]): HostFileChange[]
 
   const groups = new Map<string, HostFileChange[]>();
   for (const change of changes) {
-    const key = change.path.replaceAll("\\", "/").toLowerCase();
+    const normalized = change.path.replaceAll("\\", "/");
+    const key =
+      /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith("//")
+        ? normalized.toLowerCase()
+        : normalized;
     const existing = groups.get(key);
     if (existing) {
       existing.push(change);
@@ -422,7 +343,7 @@ export function coalesceFileChanges(changes: HostFileChange[]): HostFileChange[]
 
   const result: HostFileChange[] = [];
   for (const fileChanges of groups.values()) {
-    result.push(coalesceSingleFileChanges(fileChanges));
+    result.push(...coalesceSingleFileChanges(fileChanges));
   }
   return result;
 }
@@ -448,17 +369,21 @@ export function fileChangeFromTool(
   const displayedPath = normalizeDisplayPath(rawPath, cwd);
   if (!displayedPath) return null;
   if (isWriteTool(toolName)) {
-    const content = nestedString(args, [
-      "content",
-      "new_string",
-      "newString",
-      "newText",
-      "file_text",
-      "text",
-      "new",
-      "CodeContent",
-      "codeContent",
-    ]);
+    const content = nestedString(
+      args,
+      [
+        "content",
+        "new_string",
+        "newString",
+        "newText",
+        "file_text",
+        "text",
+        "new",
+        "CodeContent",
+        "codeContent",
+      ],
+      true,
+    );
     if (content === undefined) return null;
     return [
       {
@@ -470,29 +395,37 @@ export function fileChangeFromTool(
       },
     ];
   }
-  const oldText = nestedString(args, [
-    "old_string",
-    "oldString",
-    "old_str",
-    "oldStr",
-    "oldText",
-    "old_text",
-    "old",
-    "TargetContent",
-    "targetContent",
-  ]);
-  const newText = nestedString(args, [
-    "new_string",
-    "newString",
-    "new_str",
-    "newStr",
-    "newText",
-    "new_text",
-    "content",
-    "new",
-    "ReplacementContent",
-    "replacementContent",
-  ]);
+  const oldText = nestedString(
+    args,
+    [
+      "old_string",
+      "oldString",
+      "old_str",
+      "oldStr",
+      "oldText",
+      "old_text",
+      "old",
+      "TargetContent",
+      "targetContent",
+    ],
+    true,
+  );
+  const newText = nestedString(
+    args,
+    [
+      "new_string",
+      "newString",
+      "new_str",
+      "newStr",
+      "newText",
+      "new_text",
+      "content",
+      "new",
+      "ReplacementContent",
+      "replacementContent",
+    ],
+    true,
+  );
   if (oldText === undefined || newText === undefined) return null;
   return [
     {

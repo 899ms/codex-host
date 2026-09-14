@@ -83,7 +83,7 @@ export function installDraftPrewarmPolicyBridge(
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
   const isRemoteControlHost = hostId.startsWith("remote-control:");
-  const retireResponses = isRemoteControlHost ? () => {} : retainResponses(bridge, hostId, target);
+  let retireResponses = isRemoteControlHost ? () => {} : retainResponses(bridge, hostId, target);
   const knownExternalThreadIds = new Set<string>();
   const knownOfficialThreadIds = new Set<string>();
   const threadOwnershipResolutions = new Map<string, Promise<"external" | "codex">>();
@@ -120,6 +120,10 @@ export function installDraftPrewarmPolicyBridge(
         activeBridge.prewarmThreadStart = originalPrewarm;
       }
       activeBridge = nextBridge;
+      if (!isRemoteControlHost) {
+        retireResponses();
+        retireResponses = retainResponses(activeBridge, hostId, target);
+      }
       originalSend = activeBridge.sendRequest;
       originalPrewarm = activeBridge.prewarmThreadStart;
     } else {

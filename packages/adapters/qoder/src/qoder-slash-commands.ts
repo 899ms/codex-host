@@ -84,7 +84,7 @@ export function mapQoderSlashCommands(
       invocation: `/${cleanName}`,
       label: humanize(cleanName).trim() || cleanName,
       ...(desc && desc.length > 0 ? { description: desc.slice(0, 512) } : {}),
-      argumentMode: hasArg ? "text" : "none",
+      argumentMode: hasArg || isQoderCompactionCommand(id) ? "text" : "none",
     });
   }
 

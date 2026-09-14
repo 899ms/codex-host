@@ -731,7 +731,7 @@ export class QoderSession implements HarnessSession {
       }
 
       const toolId = typeof rawBlock.id === "string" ? rawBlock.id : `tool-${randomUUID()}`;
-      const itemId = hostItemIdSchema.parse(toolId);
+      const itemId = hostItemIdSchema.parse(toolId.trim() ? toolId : `tool-${randomUUID()}`);
       const toolName = typeof rawBlock.name === "string" ? rawBlock.name : "unknown";
       const toolArgs = (rawBlock.input as JsonValue) ?? {};
 
@@ -921,7 +921,7 @@ export class QoderSession implements HarnessSession {
     const lastAssistantMessageUuid = this.#activeTurn.lastAssistantMessageUuid;
     this.#activeTurn = null;
 
-    const nativeTurnRef = this.#createNativeTurnRef(result.uuid || userMessageUuid);
+    const nativeTurnRef = this.#createNativeTurnRef(userMessageUuid);
     const checkpoint: NativeCheckpointRef | undefined = lastAssistantMessageUuid
       ? nativeCheckpointRefSchema.parse({
           harnessId: "qoder",
@@ -1629,6 +1629,12 @@ export class QoderSession implements HarnessSession {
         const nativeModel = this.#state.effectiveModel
           ? decodeQoderModelRef(this.#state.effectiveModel)
           : undefined;
+        if (this.#state.effectiveModel && !nativeModel) {
+          return {
+            ok: false,
+            error: { code: "invalidRequest", message: "Invalid Qoder Model Ref", retryable: false },
+          };
+        }
 
         if (typeof this.#query.request === "function") {
           try {

@@ -1655,7 +1655,7 @@ describe("Codex UI projector", () => {
       };
       expect(patchParams.changes[0]?.path).toBe("sample.txt");
       expect(patchParams.changes[0]?.kind.type).toBe("add");
-      expect(patchParams.changes[0]?.diff).toBe("This is a sample file.");
+      expect(patchParams.changes[0]?.diff).toBe("This is a sample file.\n");
 
       const diffMsg = started.messages.find((m) => m.method === "turn/diff/updated");
       expect(diffMsg).toBeDefined();
@@ -1718,7 +1718,7 @@ describe("Codex UI projector", () => {
       expect(coalesced[0]?.unifiedDiff).toContain("+final version");
     });
 
-    it("coalesces disjoint edits on the same file under a single diff header", () => {
+    it("keeps disjoint edits as independent diffs", () => {
       const edit1Changes = fileChangeFromTool("edit_file", {
         path: "sample.txt",
         old_string: "function foo() {}",
@@ -1735,10 +1735,10 @@ describe("Codex UI projector", () => {
       const edit2 = edit2Changes?.[0] ?? { path: "", kind: "update", unifiedDiff: "" };
 
       const coalesced = coalesceFileChanges([edit1, edit2]);
-      expect(coalesced).toHaveLength(1);
-      const diff = coalesced[0]?.unifiedDiff ?? "";
+      expect(coalesced).toEqual([edit1, edit2]);
+      const diff = coalesced.map((change) => change.unifiedDiff).join("\n");
       const headers = diff.match(/^diff --git\s+/gm);
-      expect(headers).toHaveLength(1);
+      expect(headers).toHaveLength(2);
       expect(diff).toContain("+function foo() { return 1; }");
       expect(diff).toContain("+function bar() { return 2; }");
     });
@@ -1863,5 +1863,35 @@ describe("Codex UI projector", () => {
       expect(turnDiff).toContain("@@ -0,0 +1,4 @@");
       expect(turnDiff).toContain("+这是一个示例文件。");
     });
+  });
+  it("preserves case-sensitive paths, empty content, whitespace, and net-empty changes", () => {
+    expect(normalizeDisplayPath("/Repo/file", "/repo")).toBe("/Repo/file");
+    expect(normalizeDisplayPath("C:/Repo/file", "c:/repo")).toBe("file");
+    const edit = (path: string) => {
+      const change = fileChangeFromTool("edit", {
+        path,
+        old_string: "a",
+        new_string: "b",
+      })?.[0];
+      if (!change) throw new Error("Expected a file edit");
+      return change;
+    };
+    expect(coalesceFileChanges([edit("Foo.ts"), edit("foo.ts")])).toHaveLength(2);
+    const write = fileChangeFromTool("write_to_file", {
+      TargetFile: "empty.txt",
+      CodeContent: "",
+    })?.[0];
+    if (!write) throw new Error("Expected an empty file write");
+    expect(write.newText).toBe("");
+    expect(
+      fileChangeFromTool("replace_file_content", {
+        TargetFile: "file.txt",
+        TargetContent: "  old\\n",
+        ReplacementContent: "",
+      })?.[0],
+    ).toMatchObject({ oldText: "  old\\n", newText: "" });
+    expect(
+      coalesceFileChanges([write, { path: "empty.txt", kind: "delete", unifiedDiff: "" }]),
+    ).toEqual([]);
   });
 });

@@ -189,7 +189,7 @@ describe("Qoder Slash Commands Capability", () => {
         invocation: "/compact",
         label: "Compact",
         description: "Compresses context",
-        argumentMode: "none",
+        argumentMode: "text",
       });
       expect(catalog.commands[1]).toEqual({
         id: "qoder.plan",
@@ -225,7 +225,7 @@ describe("Qoder Slash Commands Capability", () => {
         id: "qoder.compact",
         invocation: "/compact",
         label: "Compact",
-        argumentMode: "none",
+        argumentMode: "text",
       });
       expect(catalog.commands[1]).toEqual({
         id: "qoder.review",

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { HarnessOutput } from "@codexhost/harness-adapter";
 import {
   harnessInspectionSchema,
+  harnessModelRefSchema,
   harnessPermissionModeIdSchema,
   harnessThinkingOptionIdSchema,
   hostTurnIdSchema,
@@ -133,6 +134,26 @@ class OutputCollector {
 
 describe("QoderAdapter", () => {
   describe("inspect()", () => {
+    it("retries an expired synchronous discovery failure", async () => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(0);
+      const resolveExecutable = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new QoderExecutableError("missing");
+        })
+        .mockReturnValue("qodercli");
+      const adapter = new QoderAdapter({ resolveExecutable, getAvailableModels: async () => [] });
+      try {
+        expect((await adapter.inspect()).status).toBe("notInstalled");
+        now.mockReturnValue(5001);
+        expect((await adapter.inspect()).status).toBe("ready");
+        expect(resolveExecutable).toHaveBeenCalledTimes(2);
+      } finally {
+        now.mockRestore();
+        await adapter.close();
+      }
+    });
+
     it("returns notInstalled when executable is not found", async () => {
       const adapter = new QoderAdapter({
         resolveExecutable: () => {
@@ -1133,6 +1154,15 @@ describe("QoderAdapter", () => {
   });
 
   describe("Executable discovery", () => {
+    it("does not replace an explicit missing command with the fallback", () => {
+      expect(() =>
+        resolveQoderExecutable(
+          { command: "/missing/qodercli", environment: { PATH: "/bin" }, platform: "linux" },
+          { isExecutable: (candidate) => candidate === "/bin/qoder" },
+        ),
+      ).toThrow(QoderExecutableError);
+    });
+
     it("resolves the Windows npm shim to Qoder's JavaScript entrypoint", () => {
       const shim = String.raw`C:\npm\qodercli.cmd`;
       const entrypoint = String.raw`C:\npm\node_modules\@qoder-ai\qodercli\bundle\qodercli.js`;
@@ -1147,6 +1177,22 @@ describe("QoderAdapter", () => {
   });
 
   describe("Model catalog encoding and decoding", () => {
+    it.each(["qoder-model-v1.", "qoder-model-v1.YQ.", "qoder-model-v1.YR", "other-model"])(
+      "rejects invalid model ref %s before starting a query",
+      async (id) => {
+        const model = harnessModelRefSchema.parse({ id });
+        expect(decodeQoderModelRef(model)).toBeUndefined();
+        const queryFactory = vi.fn();
+        const adapter = new QoderAdapter({ queryFactory });
+        expect(await adapter.open({ kind: "create", cwd: "/project", model })).toMatchObject({
+          ok: false,
+          error: { code: "invalidRequest" },
+        });
+        expect(queryFactory).not.toHaveBeenCalled();
+        await adapter.close();
+      },
+    );
+
     it("encodes and decodes model refs to opaque transport-safe strings", () => {
       const modelRef = encodeQoderModelRef("claude-3-7-sonnet@20250219/thinking");
       expect(/^[A-Za-z0-9._~-]+$/.test(modelRef.id)).toBe(true);
@@ -1542,165 +1588,167 @@ describe("QoderAdapter", () => {
   });
 
   describe("Tool use & tool result lifecycle", () => {
-    it("waits for tool_result before completing toolExecution item and reflects failure", async () => {
-      const fakeQuery = new FakeQoderQuery();
-      const adapter = new QoderAdapter({
-        resolveExecutable: () => "D:/tools/qodercli.exe",
-        queryFactory: () => fakeQuery,
-      });
+    it.each(["call_abc_1", " "])(
+      "completes tool result for SDK id %j and reflects failure",
+      async (nativeToolId) => {
+        const fakeQuery = new FakeQoderQuery();
+        const adapter = new QoderAdapter({
+          resolveExecutable: () => "D:/tools/qodercli.exe",
+          queryFactory: () => fakeQuery,
+        });
 
-      const openResult = await adapter.open({ kind: "create", cwd: "D:/workspace" });
-      if (!openResult.ok) throw new Error("open failed");
-      const session = openResult.value;
-      const collector = new OutputCollector(session.outputs);
+        const openResult = await adapter.open({ kind: "create", cwd: "D:/workspace" });
+        if (!openResult.ok) throw new Error("open failed");
+        const session = openResult.value;
+        const collector = new OutputCollector(session.outputs);
 
-      const turnId = hostTurnIdSchema.parse("turn-tools");
-      await session.execute({
-        type: "turn.start",
-        turnId,
-        input: [{ type: "text", text: "Execute tool" }],
-      });
+        const turnId = hostTurnIdSchema.parse("turn-tools");
+        await session.execute({
+          type: "turn.start",
+          turnId,
+          input: [{ type: "text", text: "Execute tool" }],
+        });
 
-      // Assistant requests tool_use
-      fakeQuery.push({
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "tool_use",
-              id: "call_abc_1",
-              name: "ReadFile",
-              input: { path: "src/index.ts" },
-            },
-          ],
-        },
-      } as SDKAssistantMessage);
+        // Assistant requests tool_use
+        fakeQuery.push({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: nativeToolId,
+                name: "ReadFile",
+                input: { path: "src/index.ts" },
+              },
+            ],
+          },
+        } as SDKAssistantMessage);
 
-      await collector.waitFor(
-        (o) =>
-          o.kind === "event" &&
-          o.event.type === "item.started" &&
-          o.event.item.type === "toolExecution",
-      );
+        await collector.waitFor(
+          (o) =>
+            o.kind === "event" &&
+            o.event.type === "item.started" &&
+            o.event.item.type === "toolExecution",
+        );
 
-      // Crucial check: tool is NOT completed yet!
-      const prematureCompleted = collector.outputs.find(
-        (o) =>
-          o.kind === "event" &&
-          o.event.type === "item.completed" &&
-          o.event.snapshot.item.type === "toolExecution",
-      );
-      expect(prematureCompleted).toBeUndefined();
+        // Crucial check: tool is NOT completed yet!
+        const prematureCompleted = collector.outputs.find(
+          (o) =>
+            o.kind === "event" &&
+            o.event.type === "item.completed" &&
+            o.event.snapshot.item.type === "toolExecution",
+        );
+        expect(prematureCompleted).toBeUndefined();
 
-      // Subsequent user message brings tool_result
-      fakeQuery.push({
-        type: "user",
-        message: {
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "call_abc_1",
-              content: "file content here",
-              is_error: false,
-            },
-          ],
-        },
-      } as unknown as SDKUserMessage);
+        // Subsequent user message brings tool_result
+        fakeQuery.push({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: nativeToolId,
+                content: "file content here",
+                is_error: false,
+              },
+            ],
+          },
+        } as unknown as SDKUserMessage);
 
-      const toolCompletedEvent = await collector.waitFor(
-        (o) =>
-          o.kind === "event" &&
-          o.event.type === "item.completed" &&
-          o.event.snapshot.item.type === "toolExecution" &&
-          o.event.snapshot.item.itemId === "call_abc_1",
-      );
-      expect(toolCompletedEvent).toBeDefined();
-      if (
-        toolCompletedEvent.kind === "event" &&
-        toolCompletedEvent.event.type === "item.completed"
-      ) {
-        const item = toolCompletedEvent.event.snapshot.item;
-        if (item.type === "toolExecution") {
-          expect(toolCompletedEvent.event.snapshot.outcome.status).toBe("succeeded");
-          const firstOutput = item.output?.content[0];
-          if (firstOutput?.type === "text") {
-            expect(firstOutput.text).toBe("file content here");
+        const toolCompletedEvent = await collector.waitFor(
+          (o) =>
+            o.kind === "event" &&
+            o.event.type === "item.completed" &&
+            o.event.snapshot.item.type === "toolExecution",
+        );
+        expect(toolCompletedEvent).toBeDefined();
+        if (
+          toolCompletedEvent.kind === "event" &&
+          toolCompletedEvent.event.type === "item.completed"
+        ) {
+          const item = toolCompletedEvent.event.snapshot.item;
+          if (item.type === "toolExecution") {
+            expect(toolCompletedEvent.event.snapshot.outcome.status).toBe("succeeded");
+            const firstOutput = item.output?.content[0];
+            if (firstOutput?.type === "text") {
+              expect(firstOutput.text).toBe("file content here");
+            }
           }
         }
-      }
 
-      // Now test failing tool execution
-      fakeQuery.push({
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "tool_use",
-              id: "call_abc_2",
-              name: "Bash",
-              input: { command: "exit 1" },
-            },
-          ],
-        },
-      } as SDKAssistantMessage);
+        // Now test failing tool execution
+        fakeQuery.push({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "call_abc_2",
+                name: "Bash",
+                input: { command: "exit 1" },
+              },
+            ],
+          },
+        } as SDKAssistantMessage);
 
-      await collector.waitFor(
-        (o) =>
-          o.kind === "event" &&
-          o.event.type === "item.started" &&
-          o.event.item.itemId === "call_abc_2",
-      );
+        await collector.waitFor(
+          (o) =>
+            o.kind === "event" &&
+            o.event.type === "item.started" &&
+            o.event.item.itemId === "call_abc_2",
+        );
 
-      fakeQuery.push({
-        type: "user",
-        message: {
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "call_abc_2",
-              content: "command failed with error",
-              is_error: true,
-            },
-          ],
-        },
-      } as unknown as SDKUserMessage);
+        fakeQuery.push({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "call_abc_2",
+                content: "command failed with error",
+                is_error: true,
+              },
+            ],
+          },
+        } as unknown as SDKUserMessage);
 
-      const failedCompletedEvent = await collector.waitFor(
-        (o) =>
-          o.kind === "event" &&
-          o.event.type === "item.completed" &&
-          o.event.snapshot.item.type === "toolExecution" &&
-          o.event.snapshot.item.itemId === "call_abc_2",
-      );
-      expect(failedCompletedEvent).toBeDefined();
-      if (
-        failedCompletedEvent.kind === "event" &&
-        failedCompletedEvent.event.type === "item.completed"
-      ) {
-        const item = failedCompletedEvent.event.snapshot.item;
-        if (item.type === "toolExecution") {
-          const outcome = failedCompletedEvent.event.snapshot.outcome;
-          expect(outcome.status).toBe("failed");
-          if (outcome.status === "failed") {
-            expect(outcome.error.message).toBe("command failed with error");
+        const failedCompletedEvent = await collector.waitFor(
+          (o) =>
+            o.kind === "event" &&
+            o.event.type === "item.completed" &&
+            o.event.snapshot.item.type === "toolExecution" &&
+            o.event.snapshot.item.itemId === "call_abc_2",
+        );
+        expect(failedCompletedEvent).toBeDefined();
+        if (
+          failedCompletedEvent.kind === "event" &&
+          failedCompletedEvent.event.type === "item.completed"
+        ) {
+          const item = failedCompletedEvent.event.snapshot.item;
+          if (item.type === "toolExecution") {
+            const outcome = failedCompletedEvent.event.snapshot.outcome;
+            expect(outcome.status).toBe("failed");
+            if (outcome.status === "failed") {
+              expect(outcome.error.message).toBe("command failed with error");
+            }
           }
         }
-      }
 
-      fakeQuery.push({
-        type: "result",
-        subtype: "success",
-      } as SDKResultMessage);
+        fakeQuery.push({
+          type: "result",
+          subtype: "success",
+        } as SDKResultMessage);
 
-      await collector.waitFor((o) => o.kind === "event" && o.event.type === "turn.completed");
+        await collector.waitFor((o) => o.kind === "event" && o.event.type === "turn.completed");
 
-      await session.close();
-      await adapter.close();
-    });
+        await session.close();
+        await adapter.close();
+      },
+    );
 
     it("tags pre-tool message as commentary and post-tool terminal message as final_answer", async () => {
       const fakeQuery = new FakeQoderQuery();
@@ -1827,6 +1875,14 @@ describe("QoderAdapter", () => {
       const session = openResult.value;
       const collector = new OutputCollector(session.outputs);
 
+      expect(
+        await session.execute({
+          type: "permissionMode.select",
+          permissionModeId: harnessPermissionModeIdSchema.parse("unknown"),
+        }),
+      ).toMatchObject({ ok: false, error: { code: "invalidRequest" } });
+      expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+
       const acceptEditsMode = harnessPermissionModeIdSchema.parse("acceptEdits");
       const selectResult = await session.execute({
         type: "permissionMode.select",
@@ -1879,9 +1935,13 @@ describe("QoderAdapter", () => {
   describe("Native Turn identity persistence", () => {
     it("emits turn.completed with valid nativeTurnRef on success", async () => {
       const fakeQuery = new FakeQoderQuery();
+      let userMessages: AsyncIterable<SDKUserMessage> | undefined;
       const adapter = new QoderAdapter({
         resolveExecutable: () => "D:/tools/qodercli.exe",
-        queryFactory: () => fakeQuery,
+        queryFactory: ({ prompt }) => {
+          if (typeof prompt !== "string") userMessages = prompt;
+          return fakeQuery;
+        },
       });
 
       const openResult = await adapter.open({ kind: "create", cwd: "D:/workspace" });
@@ -1895,6 +1955,9 @@ describe("QoderAdapter", () => {
         turnId,
         input: [{ type: "text", text: "Hello" }],
       });
+
+      const userMessage = await userMessages?.[Symbol.asyncIterator]().next();
+      expect(userMessage?.value.uuid).toMatch(/^qoder-msg-/);
 
       fakeQuery.push({
         type: "result",
@@ -1910,7 +1973,7 @@ describe("QoderAdapter", () => {
         expect(completed.event.nativeTurnRef).toBeDefined();
         const parsed = nativeTurnRefSchema.parse(completed.event.nativeTurnRef);
         expect(parsed.harnessId).toBe("qoder");
-        expect(parsed.nativeTurnKey).toBe("qoder-result-uuid-1234");
+        expect(parsed.nativeTurnKey).toBe(userMessage?.value.uuid);
         expect(parsed.nativeSessionId).toBe(session.initialState.nativeRef?.nativeSessionId);
         expect(parsed.formatVersion).toBe(1);
       }
@@ -2136,6 +2199,29 @@ describe("QoderAdapter", () => {
   });
 
   describe("QoderUsageTracker", () => {
+    it("keeps aggregate usage while deriving context from the latest request", () => {
+      const tracker = new QoderUsageTracker();
+      for (const input of [100, 200]) {
+        tracker.observeAssistant({
+          message: {
+            usage: {
+              input_tokens: input,
+              output_tokens: 10,
+              cache_read_input_tokens: 50,
+              cache_creation_input_tokens: 25,
+            },
+          },
+        } as SDKAssistantMessage);
+      }
+      expect(tracker.snapshot()).toMatchObject({
+        inputTokens: 300,
+        outputTokens: 20,
+        cachedInputTokens: 100,
+        cacheWriteInputTokens: 50,
+        contextUsedTokens: 275,
+      });
+    });
+
     it("resolves context window for default and gemini models", () => {
       expect(resolveQoderContextWindow()).toBe(QODER_DEFAULT_CONTEXT_WINDOW_TOKENS);
       expect(resolveQoderContextWindow("claude-3-5-sonnet")).toBe(200_000);

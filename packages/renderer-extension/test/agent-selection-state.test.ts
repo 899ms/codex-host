@@ -657,4 +657,22 @@ describe("Renderer draft Agent controller", () => {
     expect(agents.thinkingOptionForAgent(restored, "qoder")).toBe(qoderThinking);
     expect(agents.permissionModeForAgent(restored, "qoder")).toBe(permissionMode);
   });
+  it("restores, reads, updates and clears CodeBuddy thinking independently of Qoder", () => {
+    const agents = controller();
+    const composer = {};
+    const high = harnessThinkingOptionIdSchema.parse("high");
+    const low = harnessThinkingOptionIdSchema.parse("low");
+    agents.mount(composer, ["default"]);
+    agents.setExternalThinkingOption(composer, "qoder", low);
+    agents.restore(composer, "codebuddy", undefined, high);
+    expect(agents.thinkingOptionForAgent(composer, "codebuddy")).toBe(high);
+    agents.setExternalThinkingOption(composer, "codebuddy", low);
+    expect(agents.thinkingOptionForAgent(composer, "codebuddy")).toBe(low);
+    agents.setExternalThinkingOption(composer, "codebuddy");
+    expect(agents.thinkingOptionForAgent(composer, "codebuddy")).toBeUndefined();
+    agents.restore(composer, "codebuddy", undefined, high);
+    agents.restore(composer, "codebuddy");
+    expect(agents.thinkingOptionForAgent(composer, "codebuddy")).toBeUndefined();
+    expect(agents.thinkingOptionForAgent(composer, "qoder")).toBe(low);
+  });
 });

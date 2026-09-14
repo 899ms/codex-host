@@ -29,8 +29,11 @@ import {
   resolveQoderExecutable,
 } from "./qoder-command.js";
 import { mapQoderSnapshot } from "./qoder-history.js";
-import { parseQoderModelCatalog } from "./qoder-models.js";
-import { QODER_PERMISSION_MODE_CATALOG } from "./qoder-permission-modes.js";
+import { decodeQoderModelRef, parseQoderModelCatalog } from "./qoder-models.js";
+import {
+  mapToQoderPermissionMode,
+  QODER_PERMISSION_MODE_CATALOG,
+} from "./qoder-permission-modes.js";
 import { QODER_FALLBACK_COMMAND_CATALOG } from "./qoder-slash-commands.js";
 import type {
   ForkSessionOptions,
@@ -125,7 +128,7 @@ export class QoderAdapter implements HarnessAdapter {
       if (inFlight) return inFlight;
     }
 
-    const task = (async () => {
+    const task = Promise.resolve().then(async () => {
       try {
         const executable = this.#resolveExecutable({
           ...(this.#commandOverride ? { command: this.#commandOverride } : {}),
@@ -201,15 +204,37 @@ export class QoderAdapter implements HarnessAdapter {
         this.#inspections.set(cacheKey, { result: errorResult, refreshAfter: now + 5_000 });
         return errorResult;
       } finally {
-        this.#inFlightInspections.delete(cacheKey);
+        if (this.#inFlightInspections.get(cacheKey) === task) {
+          this.#inFlightInspections.delete(cacheKey);
+        }
       }
-    })();
+    });
 
     this.#inFlightInspections.set(cacheKey, task);
     return task;
   }
 
   async open(input: OpenSessionInput): Promise<HarnessResult<HarnessSession>> {
+    if ("model" in input && input.model && !decodeQoderModelRef(input.model)) {
+      return {
+        ok: false,
+        error: { code: "invalidRequest", message: "Invalid Qoder Model Ref", retryable: false },
+      };
+    }
+    if (
+      "permissionModeId" in input &&
+      input.permissionModeId &&
+      !mapToQoderPermissionMode(input.permissionModeId)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalidRequest",
+          message: "Invalid Qoder permission mode",
+          retryable: false,
+        },
+      };
+    }
     const environment = qoderEnvironment(input.environment ?? this.#environment);
     let pathToQoderCLIExecutable: string | undefined;
     try {

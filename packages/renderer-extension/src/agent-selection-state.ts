@@ -250,6 +250,9 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "kiro-cli" && thinkingOptionId) {
       state.kiroCliThinkingOptionId = thinkingOptionId;
     } else if (agent === "kiro-cli") delete state.kiroCliThinkingOptionId;
+    if (agent === "codebuddy" && thinkingOptionId) {
+      state.codeBuddyThinkingOptionId = thinkingOptionId;
+    } else if (agent === "codebuddy") delete state.codeBuddyThinkingOptionId;
     if (agent === "qoder" && thinkingOptionId) {
       state.qoderThinkingOptionId = thinkingOptionId;
     } else if (agent === "qoder") delete state.qoderThinkingOptionId;
@@ -311,6 +314,7 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "omp") return state.ompThinkingOptionId;
     if (agent === "antigravity") return state.antigravityThinkingOptionId;
     if (agent === "kiro-cli") return state.kiroCliThinkingOptionId;
+    if (agent === "codebuddy") return state.codeBuddyThinkingOptionId;
     if (agent === "qoder") return state.qoderThinkingOptionId;
     return undefined;
   }
@@ -405,6 +409,10 @@ export class DraftAgentController<Composer extends object> {
       state.kiroCliThinkingOptionId = thinkingOptionId;
     } else if (agent === "kiro-cli") {
       delete state.kiroCliThinkingOptionId;
+    } else if (agent === "codebuddy" && thinkingOptionId) {
+      state.codeBuddyThinkingOptionId = thinkingOptionId;
+    } else if (agent === "codebuddy") {
+      delete state.codeBuddyThinkingOptionId;
     } else if (agent === "qoder" && thinkingOptionId) {
       state.qoderThinkingOptionId = thinkingOptionId;
     } else if (agent === "qoder") {
