@@ -708,10 +708,7 @@ describe("Renderer Codex Accounts page", () => {
     }));
     const client = {
       listCodexAccounts: vi.fn(async () =>
-        accountSnapshot(
-          [{ accountId: "work", label: "Work", email: "work@example.com" }],
-          "work",
-        ),
+        accountSnapshot([{ accountId: "work", label: "Work", email: "work@example.com" }], "work"),
       ),
       inspectCodexAccountUsage,
     };
@@ -737,9 +734,7 @@ describe("Renderer Codex Accounts page", () => {
     expect(visibleText(content)).toContain("2 张");
     expect(visibleText(content)).not.toContain("登录");
     expect(visibleText(content)).not.toContain("添加 Codex 账号");
-    expect(
-      descendants(content).some(({ textContent }) => textContent === "使用重置"),
-    ).toBe(false);
+    expect(descendants(content).some(({ textContent }) => textContent === "使用重置")).toBe(false);
     scope.dispose();
   });
 });
