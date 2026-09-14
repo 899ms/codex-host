@@ -114,7 +114,7 @@ Host 的锁不能阻止其他客户端以后写共享凭据。成功要求目标
 | 第三方身份、无法解释的摘要或 Journal 不匹配 | 不覆盖文件，保留记录并要求恢复 |
 | 同身份重登 | 依据字节摘要和安装事实区分授权版本，不降级原生轮换后的 Token |
 
-任何可能刷新目标 Token 的启动之前须持久化安装阶段。`lastOperationId` 是 Vault 提交收据；补偿前持久保存最新目标和 rollback 意图。recover 根据事实执行同一事务，不删除 Journal 来假装成功。认证验证使用原生接口，不发送 Model Turn。
+任何可能刷新目标 Token 的启动之前须持久化安装阶段。`lastOperationId` 是 Vault 提交收据；补偿前持久保存最新目标和 rollback 意图。recover 根据事实执行同一事务，不删除 Journal 来假装成功。账号验证使用原生 `account/read`（允许官方刷新凭据）并复核落盘身份，不发送 Model Turn，也不查询 `account/rateLimits/read`。启动、恢复、登录和切换均不以额度或额度服务可用性作为准入／提交条件；Model 请求能否实际执行由官方后端判断。
 
 ## 7. 登录与退出
 
@@ -140,7 +140,7 @@ v2 快照包含 `ready/changing/unavailable`、Host instance、revision、已提
 
 ## 9. 额度与旧布局
 
-当前额度走正式原生后台；非当前额度由 Host 直接查询 WHAM，不启动额外后台或隐式切换。OAuth 刷新使用每账号 single-flight、修改租约、身份复核和最新 Vault CAS。失败保留 last-good 和获取时间，不补零。只有当前账号能消费重置卡，消费请求不自动重试。Thread 累计用量与账号额度分离。
+额度展示独立于启动和账号验证，查询失败不关闭账号准入。当前额度走正式原生后台；非当前额度由 Host 直接查询 WHAM，不启动额外后台或隐式切换。OAuth 刷新使用每账号 single-flight、修改租约、身份复核和最新 Vault CAS。失败保留 last-good 和获取时间，不补零。只有当前账号能消费重置卡，消费请求不自动重试。Thread 累计用量与账号额度分离。
 
 有效旧登记的当前账号已使用正式 home，且其他 home 无托管状态或进程记录时，可以在恢复、原生验证及退出确认后只读接入缺失凭据。单次 Vault CAS 同时保存账号及 `legacyRegistryDigest`，不覆盖已有授权，不因重启复活已删除账号。正式 home 的托管状态走正常恢复；损坏登记、foreign home、孤立绑定和未知退出状态不绕过校验。
 
