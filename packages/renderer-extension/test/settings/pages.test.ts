@@ -661,6 +661,63 @@ describe("Renderer Codex Accounts page", () => {
     accounts: [...accounts],
   });
 
+  it("offers login rather than switching or querying quota for a missing legacy credential", async () => {
+    const client = {
+      listCodexAccounts: vi.fn(async () =>
+        accountSnapshot(
+          [
+            {
+              accountId: "legacy",
+              label: "Legacy",
+              email: "legacy@example.com",
+              requiresLogin: true,
+            },
+          ],
+          null,
+        ),
+      ),
+      deleteCodexAccount: vi.fn(),
+      switchCodexAccount: vi.fn(),
+      logoutCodexAccount: vi.fn(),
+      recoverCodexAccounts: vi.fn(),
+      startCodexAccountLogin: vi.fn(),
+      cancelCodexAccountLogin: vi.fn(),
+      inspectCodexAccountUsage: vi.fn(),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => client,
+    ).find(({ id }) => id === "accounts");
+    if (!page) throw new Error("Accounts page is not registered");
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(
+          descendants(content).some(({ dataset }) => dataset.accountFocus === "legacy:login"),
+        ).toBe(true),
+      );
+      const buttons = descendants(content);
+      expect(
+        buttons.find(({ dataset }) => dataset.accountFocus === "legacy:activate")?.disabled,
+      ).toBe(true);
+      expect(buttons.find(({ dataset }) => dataset.accountFocus === "legacy:login")?.disabled).toBe(
+        false,
+      );
+      expect(client.inspectCodexAccountUsage).not.toHaveBeenCalled();
+    } finally {
+      scope.dispose();
+    }
+  });
+
   it("renders cached Accounts before live metadata refresh completes", async () => {
     const refresh = Promise.withResolvers<CodexAccountListResult>();
     const cachedAccount = {

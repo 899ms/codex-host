@@ -35,6 +35,8 @@ export const codexAccountSchema = z
     label: nonBlankTextSchema.max(256),
     email: z.string().email().max(320).optional(),
     planType: codexAccountPlanTypeSchema.optional(),
+    /** Legacy metadata retained when its credential was never backed up. */
+    requiresLogin: z.boolean().optional(),
   })
   .strict();
 export type CodexAccountSummary = z.infer<typeof codexAccountSchema>;

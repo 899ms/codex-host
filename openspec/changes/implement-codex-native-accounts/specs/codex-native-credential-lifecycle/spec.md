@@ -1,11 +1,23 @@
 ## ADDED Requirements
 
 ### Requirement: The Vault SHALL preserve complete native credentials securely
-One atomic private Vault SHALL store metadata, committed current and plaintext inactive credentials without additional encryption. The permanent native file SHALL remain authoritative for current credentials. Native bytes, unknown fields, digest checks and OS file permissions SHALL be preserved. Legacy encrypted Vault, transaction and login payloads SHALL be validated with the existing key and converted under the home lease using per-file CAS; partial conversion SHALL be resumable. No API SHALL create new OS keys. Plaintext stores SHALL NOT access the OS keyring.
+One atomic private v2 Vault SHALL store metadata and complete plaintext credential copies for all saved Accounts, including the current Account, without additional encryption or a persisted current-account selector. The permanent native file SHALL determine current identity; public current metadata SHALL be derived from observed issuer, subject and workspace identity, not email or Token equality. Native bytes, unknown fields, digest checks and OS file permissions SHALL be preserved. Legacy encrypted Vault, transaction and login payloads SHALL be validated with the existing key and converted under the home lease using per-file CAS; partial conversion SHALL be resumable. No API SHALL create new OS keys. Plaintext stores SHALL NOT access the OS keyring.
 
 #### Scenario: Current native credentials rotate
 - **WHEN** an owned backend refreshes its credentials before confirmed stop
 - **THEN** the transaction SHALL preserve the final native bytes rather than an earlier cached snapshot
+
+#### Scenario: External login, logout or Token rotation is observed
+- **WHEN** ordinary startup, Account-list refresh or a credential change synchronizes native state without a pending operation
+- **THEN** Host SHALL collect new identities and update matching credential copies without writing native auth, restarting the backend just for collection, or querying quota
+- **AND** external logout SHALL retain saved copies but derive no current Account, without restoring login implicitly
+- **AND** an observed selection change alone SHALL advance the public snapshot revision
+
+#### Scenario: A v1 Vault or Journal is opened
+- **WHEN** the old Vault persisted current with no credential copy for that entry
+- **THEN** migration SHALL preserve IDs, revision and operation receipts, remove the Vault selector and fill the missing copy only from matching actual credentials
+- **AND** unavailable copies SHALL retain metadata with requiresLogin and SHALL NOT be offered for switching until re-authenticated
+- **AND** pending v1 Journals SHALL retain source/target selection evidence and be recovered before ordinary collection
 
 #### Scenario: An existing Vault's key cannot be obtained
 - **WHEN** the OS key required to migrate existing ciphertext is unavailable
@@ -18,10 +30,10 @@ One atomic private Vault SHALL store metadata, committed current and plaintext i
 - **AND** Rust primitives SHALL remain generic file/key/process capabilities without Account or OAuth semantics
 
 ### Requirement: One transaction executor SHALL recover from durable facts
-Switch, first activation, current re-login and logout SHALL share one native credential transaction. Journal source/target and before/after Vault, actual credential identity/digest and operation receipts SHALL determine recovery. Durable commit followed by a lost acknowledgement or cleanup error MUST NOT roll back current. Compensation SHALL first preserve any latest target grant durably.
+Switch, first activation, current re-login and logout SHALL share one native credential transaction. Journal source/target, before/after credential collections with temporary transaction selections, actual credential identity/digest and operation receipts SHALL determine recovery. Durable commit followed by a lost acknowledgement or cleanup error MUST NOT roll back current. Compensation SHALL first preserve any latest target grant durably.
 
 #### Scenario: Installed first login crashes before commit
-- **WHEN** a Journal proves installation but current is still null
+- **WHEN** a Journal proves installation but the credential collection commit is incomplete
 - **THEN** recovery SHALL interpret that operation before automatic native credential import
 
 #### Scenario: Same-current re-login has rotated
@@ -29,7 +41,7 @@ Switch, first activation, current re-login and logout SHALL share one native cre
 - **THEN** recovery SHALL not restore the older authorization or replay a stale staged candidate
 
 #### Scenario: Unknown native identity is observed
-- **WHEN** actual credentials cannot be explained by the Vault and Journal
+- **WHEN** a pending operation exists and actual credentials cannot be explained by its Vault and Journal facts
 - **THEN** Host SHALL preserve evidence and reject the transition without first starting a writer that could refresh the unknown credentials
 
 ### Requirement: Login SHALL isolate staging and report saved state accurately

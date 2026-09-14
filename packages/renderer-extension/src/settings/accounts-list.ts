@@ -216,9 +216,10 @@ export function renderAccountRows(
     activate.type = "button";
     activate.className = "settings-account-action";
     activate.textContent = messages.accountUse;
-    activate.title = messages.accountDefaultHint;
+    activate.title = account.requiresLogin ? messages.accountSignIn : messages.accountDefaultHint;
     activate.dataset.accountFocus = `${account.accountId}:activate`;
-    activate.disabled = input.actionsDisabled || input.switchDisabled;
+    activate.disabled =
+      input.actionsDisabled || input.switchDisabled || account.requiresLogin === true;
     activate.addEventListener("click", input.onActivate);
     actions.append(activate);
   }
@@ -229,7 +230,7 @@ export function renderAccountRows(
   signIn.dataset.accountFocus = `${account.accountId}:login`;
   signIn.disabled = input.actionsDisabled || input.loginDisabled;
   signIn.addEventListener("click", input.onSignIn);
-  if (account.email) more.push(signIn);
+  if (account.email && !account.requiresLogin) more.push(signIn);
   else actions.append(signIn);
   if (input.usage) {
     const refresh = document.createElement("button");

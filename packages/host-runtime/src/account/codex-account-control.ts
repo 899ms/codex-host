@@ -12,6 +12,8 @@ import type { NativeChatgptLogin, NativeChatgptLoginParams } from "./native-chat
 /** Global Codex Account control plane. Credentials never cross this boundary. */
 export interface CodexAccountControl {
   snapshot(): CodexAccountListResult;
+  /** Refresh native-derived selection and collect credentials without changing native auth. */
+  refresh?(): Promise<CodexAccountListResult>;
   currentAccountId(): string | null;
   switch(accountId: string): Promise<void>;
   remove(accountId: string): Promise<void>;

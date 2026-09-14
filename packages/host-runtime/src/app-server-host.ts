@@ -1555,7 +1555,7 @@ export class AppServerHost {
   }
 
   async #codexAccountSnapshot() {
-    return this.#accountControl.snapshot();
+    return this.#accountControl.refresh?.() ?? this.#accountControl.snapshot();
   }
 
   async #handleCodexAccountRequest(request: JsonRpcRequest): Promise<void> {

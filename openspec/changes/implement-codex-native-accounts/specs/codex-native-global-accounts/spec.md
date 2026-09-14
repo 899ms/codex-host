@@ -5,7 +5,7 @@ Managed Codex SHALL use one canonical permanent home and at most one live Host-o
 
 #### Scenario: Switch A to B
 - **WHEN** the user selects saved B
-- **THEN** Host SHALL save stopped A's latest credentials, install B, restart and authenticate B before committing current=B
+- **THEN** Host SHALL save stopped A's latest credentials, install B, restart and authenticate B before committing the credential collection and publishing native-derived current=B
 - **AND** Desktop, Host, external Harnesses and native Thread IDs SHALL remain intact
 - **AND** subsequent Turns in existing Codex Threads SHALL use the new global identity without replaying earlier requests
 
@@ -131,8 +131,8 @@ Managed native ChatGPT OAuth and device-code login SHALL use the same Account co
 - **AND** staging, retired-generation results and saved-but-unavailable state SHALL NOT be announced as authenticated readiness
 - **AND** an observer failure or slow Desktop writer SHALL NOT roll back committed credentials or hold the credential-change admission lease
 
-### Requirement: Public Account state SHALL express global committed facts
-The browser-safe v2 Account snapshot SHALL expose ready/changing/unavailable, revision and Host identity, capabilities, committed current metadata and necessary operation/cleanup status, but no credentials or private paths. Only Settings SHALL offer global switching. Composer SHALL not submit per-draft Account selectors; Harness locking SHALL remain independent.
+### Requirement: Public Account state SHALL express global observed and committed facts
+The browser-safe v2 Account snapshot SHALL expose ready/changing/unavailable, revision and Host identity, capabilities, native-derived current metadata, saved Accounts (including requiresLogin for unavailable legacy copies) and necessary operation/cleanup status, but no credentials or private paths. Only Settings SHALL offer global switching. Composer SHALL not submit per-draft Account selectors; Harness locking SHALL remain independent.
 
 #### Scenario: Commit succeeds but cleanup fails
 - **WHEN** the Vault commit is durable but cleanup or native readiness is incomplete

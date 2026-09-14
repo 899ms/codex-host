@@ -446,7 +446,9 @@ export function createAccountsSettingsPage(
         for (const accountId of [...usageByAccountId.keys()]) {
           if (!keep.has(accountId)) usageByAccountId.delete(accountId);
         }
-        const pending = saved.filter((account) => !usageByAccountId.has(account.accountId));
+        const pending = saved.filter(
+          (account) => !account.requiresLogin && !usageByAccountId.has(account.accountId),
+        );
         if (!inspect || pending.length === 0) {
           render();
           return;

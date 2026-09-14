@@ -5,7 +5,7 @@
 ## Decisions
 
 1. **单个受管后台**：`OfficialRuntimeOwner` 统一拥有管理和 Desktop 连接、工作准入、generation 与订阅；任务和认证 staging 不并行。
-2. **统一事务**：`NativeCodexAccounts` 负责操作归属，`NativeProfileTransaction` 执行切换、激活、重登、退出和恢复。Vault 的 revision、current、lastOperationId 与 Journal 共同表达持久事实。
+2. **统一事务**：`NativeCodexAccounts` 负责操作归属，`NativeProfileTransaction` 执行切换、激活、重登、退出和恢复。Vault 的 revision、lastOperationId 与 Journal 共同表达持久事实；集合保存全部凭据副本，当前身份由原生文件推导，只有未决事务持久记录 source/target 选择。
 3. **中断切换**：进入 changing，停止受管及当次检测到的其他 Codex 后端，安装凭据并重启验证。登录、退出也在 changing 下直接停止受管后端，但不主动停止外部后端。新请求立即拒绝，旧 RPC 明确失败，不排队或重放；不扫描或追踪会话是否空闲。busy 仅表示在途请求租约；删除非当前账号不停止后台，恢复先确认受管后台退出。额度请求本地超时或客户端分离不单独关闭全局准入，真实连接故障仍使 Codex unavailable。
 4. **有限外部终止**：跨 CODEX_HOME 匹配 Codex 可执行文件名，核对 PID／启动身份后有界终止；不关闭编辑器、不递归停止外部工具子进程、不追杀自动重启实例。启动、普通关闭、回滚和恢复不执行此批次。
 5. **私有明文存储**：完整凭据字节保存在 Vault、Journal 和 staging 中，受权限、租约、容量及 CAS 保护。旧密文使用已有密钥原地转换，失败保留原数据，部分转换可恢复。

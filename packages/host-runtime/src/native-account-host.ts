@@ -15,7 +15,7 @@ import { canonicalCodexHome, inspectNativeAccountLayout } from "./account/native
 import { NativeAccountStore } from "./account/native-account-store.js";
 import { importLegacyAccountCredentials } from "./account/legacy-account-credentials.js";
 import { NativeCodexCredentials } from "./account/native-codex-credentials.js";
-import { NativeAccountError, profileCurrent } from "./account/native-profile-vault.js";
+import { NativeAccountError } from "./account/native-profile-vault.js";
 import { NativeCodexAccounts } from "./account/native-codex-accounts.js";
 import { OfficialAccountRuntime } from "./account/official-account-runtime.js";
 import { officialEnvironment } from "./app-server-host.js";
@@ -427,7 +427,8 @@ export async function prepareLocalCodex(input: LocalCodexOptions): Promise<Prepa
             },
           });
           await runtime.start();
-          await runtime.verify(profileCurrent(store.vault)?.identity ?? null);
+          await runtime.verify((await store.readCredentials())?.identity ?? null);
+          await store.captureCurrent();
           change.finish("ready");
         } catch (error) {
           change.finish("unavailable");

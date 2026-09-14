@@ -4,7 +4,11 @@ import { lstat, rm } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { NativePrivateFileLease } from "../native-private-files.js";
-import { NativeCodexCredentials, sameCodexCredentialIdentity } from "./native-codex-credentials.js";
+import {
+  NativeCodexCredentials,
+  sameCodexCredentialIdentity,
+  type CodexCredentialIdentity,
+} from "./native-codex-credentials.js";
 import {
   NativeAccountError,
   nativeDigest,
@@ -82,6 +86,8 @@ export class NativeAccountStore {
   #lease: NativePrivateFileLease | undefined;
   #ready = false;
   #vault: NativeProfileVault | undefined;
+  #observedIdentity: CodexCredentialIdentity | null = null;
+  #observationRevision = 0;
   #mutations: Promise<void> = Promise.resolve();
 
   constructor(input: {
@@ -136,15 +142,21 @@ export class NativeAccountStore {
       if (bytes) {
         try {
           this.#vault = parseVault(bytes, this.homeId);
+          if (JSON.parse(bytes.toString("utf8")).version === 1)
+            await this.files.replace(
+              this.directory,
+              "vault.json",
+              serializePrivate(this.#vault),
+              nativeDigest(bytes),
+            );
         } finally {
           bytes.fill(0);
         }
       } else {
         const initial: NativeProfileVault = {
-          version: 1,
+          version: 2,
           homeId: this.homeId,
           revision: 0,
-          currentAccountId: null,
           lastOperationId: null,
           accounts: [],
         };
@@ -169,6 +181,58 @@ export class NativeAccountStore {
     this.assertOwnership();
     if (!this.#vault) throw new NativeAccountError("recovery-required");
     return structuredClone(this.#vault);
+  }
+  /** Derived from the last native file observation, never persisted as selection. */
+  get currentAccountId(): string | null {
+    const identity = this.#observedIdentity;
+    return identity
+      ? (this.#vault?.accounts.find((a) => sameCodexCredentialIdentity(a.identity, identity))
+          ?.accountId ?? null)
+      : null;
+  }
+  get observationRevision(): number {
+    return this.#observationRevision;
+  }
+  #observe(identity: CodexCredentialIdentity | null): void {
+    if (JSON.stringify(identity) !== JSON.stringify(this.#observedIdentity)) {
+      this.#observedIdentity = identity ? { ...identity } : null;
+      this.#observationRevision++;
+    }
+  }
+  /** Collect official credentials without ever writing auth.json or inferring a login.
+   * Serialize with other collection writes; pending credential transactions win. */
+  captureCurrent(): Promise<NativeCodexCredentials | null> {
+    const pending = this.#mutations.then(async () => {
+      if ((await this.readJournal()) || (await this.readStage()))
+        throw new NativeAccountError("recovery-required");
+      const current = await this.readCredentials();
+      if (!current) return null;
+      const before = await this.reload();
+      const next = structuredClone(before);
+      let account = next.accounts.find((a) =>
+        sameCodexCredentialIdentity(a.identity, current.identity),
+      );
+      if (!account) {
+        account = newProfile(current);
+        next.accounts.push(account);
+      } else {
+        account.payload = this.snapshotCredential(account, current);
+        if (current.email) account.email = current.email;
+        if (current.planType) account.planType = current.planType;
+      }
+      if (sameVault(before, next)) return current;
+      if (credentialDigest(await this.readCredentials()) !== credentialDigest(current))
+        throw new NativeAccountError("credential-conflict");
+      next.revision++;
+      next.lastOperationId = randomUUID();
+      await this.replaceVault(next, before);
+      return current;
+    });
+    this.#mutations = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
   }
   async reload(): Promise<NativeProfileVault> {
     this.assertOwnership();
@@ -233,11 +297,16 @@ export class NativeAccountStore {
   async readCredentials(home = this.home): Promise<NativeCodexCredentials | null> {
     this.assertOwnership();
     const bytes = await (home === this.home ? this.#homeFiles : this.files).read(home, "auth.json");
-    if (!bytes) return null;
+    if (!bytes) {
+      if (home === this.home) this.#observe(null);
+      return null;
+    }
     try {
       const text = bytes.toString("utf8");
       if (!Buffer.from(text).equals(bytes)) throw new Error("utf8");
-      return NativeCodexCredentials.parse(text);
+      const credential = NativeCodexCredentials.parse(text);
+      if (home === this.home) this.#observe(credential.identity);
+      return credential;
     } catch {
       throw new NativeAccountError("unsupported-storage");
     } finally {
@@ -331,7 +400,7 @@ export class NativeAccountStore {
     const stage: NativeLoginStage = {
       version: 1,
       operationId,
-      sourceAccountId: this.vault.currentAccountId,
+      sourceAccountId: this.currentAccountId,
       expiresAt: Date.now() + 10 * 60_000,
       ...(requestedAccountId ? { requestedAccountId } : {}),
       ...(options.activateOnSuccess ? { activateOnSuccess: true } : {}),
@@ -382,8 +451,9 @@ export class NativeAccountStore {
     expected: NativeCodexCredentials,
     target: NativeCodexCredentials,
   ): Promise<void> {
+    await this.readCredentials();
     await this.mutate((next) => {
-      if (next.currentAccountId === accountId) throw new NativeAccountError("credential-conflict");
+      if (this.currentAccountId === accountId) throw new NativeAccountError("credential-conflict");
       const account = next.accounts.find((a) => a.accountId === accountId);
       if (
         !account ||
@@ -405,7 +475,7 @@ export function newProfile(
   credential: NativeCodexCredentials,
   accountId: string = randomUUID(),
 ): NativeProfileAccount {
-  return {
+  const account: NativeProfileAccount = {
     accountId,
     identity: { ...credential.identity },
     label: credential.email ?? `Codex ${accountId.slice(0, 8)}`,
@@ -413,6 +483,8 @@ export function newProfile(
     ...(credential.planType ? { planType: credential.planType } : {}),
     payload: null,
   };
+  account.payload = snapshotCredential(account, credential);
+  return account;
 }
 export function matchProfile(
   credential: NativeCodexCredentials | null,

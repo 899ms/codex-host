@@ -972,6 +972,37 @@ describe("AppServerHost HarnessAdapter projection", () => {
     }
   });
 
+  it("refreshes native-derived Account selection before returning an Account list", async () => {
+    const stale: CodexAccountListResult = {
+      version: 2,
+      currentAccountId: null,
+      phase: "ready",
+      revision: 1,
+      capabilities: { manage: false, switch: false, login: false, delete: false },
+      accounts: [],
+    };
+    const fresh: CodexAccountListResult = {
+      ...stale,
+      currentAccountId: "native",
+      revision: 2,
+      accounts: [{ accountId: "native", label: "Observed native Account" }],
+    };
+    const refresh = vi.fn(async () => fresh);
+    const accountControl = Object.assign(new SingleNativeCodexAccount(() => stale), { refresh });
+    const fixture = createFixture({ accountControl });
+    try {
+      await fixture.ready;
+      writeRequest(fixture.desktopInput, { id: 908, method: "codexhost/account/list", params: {} });
+      await expect(fixture.collector.waitFor((message) => message.id === 908)).resolves.toEqual({
+        id: 908,
+        result: fresh,
+      });
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
   it("returns a strict managed logout result when the Account snapshot has recovery metadata", async () => {
     const accountId = "00000000-0000-4000-8000-000000000011";
     let state: CodexAccountListResult = {
