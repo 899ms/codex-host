@@ -9,7 +9,6 @@ import { z } from "zod";
 import { NativeAccountStore } from "../src/account/native-account-store.js";
 import { NativeCodexAccounts } from "../src/account/native-codex-accounts.js";
 import { OfficialAccountRuntime } from "../src/account/official-account-runtime.js";
-import { readOfficialCliVersion } from "../src/codex-runtime/official-cli-version.js";
 import { OfficialProcessRecord } from "../src/codex-runtime/official-process-record.js";
 import {
   OfficialRuntimeClient,
@@ -116,7 +115,6 @@ describe.skipIf(!stock || !launcher)("real official CLI with an isolated signed-
         sharedCodexHome: home,
         readCredentials: (directory) => store.readCredentials(directory),
         environment,
-        nativeVersion: () => readOfficialCliVersion(stock, environment),
         // This randomized private test home has no external users. Keep the real
         // owned-writer reconciliation; application-wide inventory has its own tests.
         reconcilePreviousWriter: () => record.reconcile(),
@@ -129,6 +127,8 @@ describe.skipIf(!stock || !launcher)("real official CLI with an isolated signed-
       try {
         await store.open();
         accounts = new NativeCodexAccounts({ store, runtime });
+        await scope.owner.start({ mode: "task" });
+        scope.gate.initialized();
         await accounts.initialize();
         expect(accounts.snapshot()).toMatchObject({ phase: "ready", currentAccountId: null });
         expect(scope.owner.running).toBe(true);

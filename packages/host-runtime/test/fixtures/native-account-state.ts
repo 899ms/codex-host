@@ -152,6 +152,7 @@ export class SyntheticNativeAccountKeys implements NativeAccountKeys {
 type RuntimeHook = (home: string) => void | Promise<void>;
 
 export class SyntheticNativeAccountRuntime implements NativeAccountRuntime {
+  async reconcilePreviousWriter(): Promise<void> {}
   readonly gate = new OfficialWorkGate();
   readonly starts: string[] = [];
   readonly verified: Array<CodexCredentialIdentity | null> = [];
@@ -333,6 +334,14 @@ export async function createNativeAccountTestState(
         runtime,
         ...(fetch ? { fetch } : {}),
       });
+      if (
+        !(await store.readJournal()) &&
+        !(await store.readStage()) &&
+        runtime.gate.phase !== "ready"
+      ) {
+        await runtime.start();
+        runtime.gate.initialized();
+      }
       await manager.initialize();
       return manager;
     },

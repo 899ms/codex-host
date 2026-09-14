@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NativeProfileTransaction } from "../src/account/native-profile-transaction.js";
 import {
@@ -28,6 +28,15 @@ afterEach(async () => {
 });
 
 describe("native profile transaction combinations", () => {
+  it("does not stop or inspect credentials when there is no Journal to recover", async () => {
+    const { state, transaction } = await switchingState();
+    const stop = vi.spyOn(state.runtime, "stop");
+    const read = vi.spyOn(state.store, "readCredentials");
+    await expect(transaction.recover()).resolves.toBe("none");
+    expect(stop).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("captures the stopped latest A1 to A2 snapshot and completes A to B to A", async () => {
     const { state, b1, transaction } = await switchingState();
     const a2 = credential("a", 2);

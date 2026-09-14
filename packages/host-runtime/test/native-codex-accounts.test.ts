@@ -222,6 +222,8 @@ describe("native Codex Account manager combinations", () => {
     });
     attachManager(state, manager);
 
+    await state.runtime.start();
+    state.runtime.gate.initialized();
     await manager.initialize();
     expect(manager.snapshot()).toMatchObject({ phase: "ready", cleanupRequired: false });
     expect(state.store.vault.accounts).toHaveLength(2);

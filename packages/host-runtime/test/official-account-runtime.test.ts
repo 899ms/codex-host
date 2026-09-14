@@ -50,7 +50,6 @@ async function fixture(stopExternalProcesses?: () => Promise<void>) {
       return management;
     }),
   };
-  const version = vi.fn(async () => "0.153.4");
   const reconcile = vi.fn(async () => {});
   const environment: NodeJS.ProcessEnv = {};
   const runtime = new OfficialAccountRuntime({
@@ -58,7 +57,6 @@ async function fixture(stopExternalProcesses?: () => Promise<void>) {
     sharedCodexHome: "/synthetic/home",
     readCredentials,
     environment,
-    nativeVersion: version,
     reconcilePreviousWriter: reconcile,
     stopExternalProcesses: stopExternalProcesses ?? (async () => {}),
   });
@@ -69,7 +67,6 @@ async function fixture(stopExternalProcesses?: () => Promise<void>) {
     responses,
     owner,
     management,
-    version,
     reconcile,
     environment,
     runtime,
@@ -102,7 +99,10 @@ describe("official native account checks", () => {
     await f.runtime.start();
     expect(f.owner.attachManagement).toHaveBeenCalledTimes(1);
     expect(f.management.configure).toHaveBeenCalledTimes(1);
-    expect(f.management.initialize).toHaveBeenCalledTimes(1);
+    expect(f.management.initialize).toHaveBeenCalledWith({
+      clientInfo: { name: "codexhost_account_management", version: "1" },
+      capabilities: { experimentalApi: true },
+    });
     expect(f.owner.start).toHaveBeenCalledWith({ mode: "task" });
     expect(f.owner.controlRequest.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
@@ -143,23 +143,17 @@ describe("official native account checks", () => {
       "account/read",
     ]);
   });
-  it("rejects unsupported versions before bootstrapping or changing any credential", async () => {
+  it("uses native capability checks without an executable version allowlist", async () => {
     const f = await fixture();
     f.owner.running = false;
-    f.version.mockResolvedValue("0.153.5");
-    await expect(f.runtime.preflight()).rejects.toMatchObject({ code: "unsupported-version" });
-    expect(f.owner.start).not.toHaveBeenCalled();
-    expect(f.owner.controlRequest).not.toHaveBeenCalled();
+    await f.runtime.preflight();
+    expect(f.owner.start).toHaveBeenCalledOnce();
+    expect(f.owner.controlRequest.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "account/read",
+    ]);
   });
-  it("validates version before start and stops a newly started unsupported store", async () => {
-    const unsupportedVersion = await fixture();
-    unsupportedVersion.owner.running = false;
-    unsupportedVersion.version.mockResolvedValue("0.153.5");
-    await expect(unsupportedVersion.runtime.start()).rejects.toMatchObject({
-      code: "unsupported-version",
-    });
-    expect(unsupportedVersion.owner.start).not.toHaveBeenCalled();
-
+  it("stops a newly started unsupported store", async () => {
     const unsupportedStore = await fixture();
     unsupportedStore.owner.running = false;
     unsupportedStore.responses["config/read"] = {
@@ -258,8 +252,11 @@ describe("official native account checks", () => {
     expect(f.owner.start).toHaveBeenCalledWith({ mode: "management-only" });
     expect(f.owner.stop).not.toHaveBeenCalled();
     expect(f.owner.running).toBe(true);
+    await expect(f.runtime.reconcilePreviousWriter()).rejects.toMatchObject({ code: "busy" });
     await f.runtime.stop();
     expect(f.owner.stop).toHaveBeenCalledTimes(1);
+    expect(f.reconcile).toHaveBeenCalledOnce();
+    await f.runtime.reconcilePreviousWriter();
     expect(f.reconcile).toHaveBeenCalledTimes(2);
     expect(f.owner.running).toBe(false);
   });

@@ -1,826 +1,475 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
+import type * as FileSystem from "node:fs/promises";
+import type * as NativeFiles from "../src/native-private-files.js";
+import type * as NativeLayout from "../src/account/native-account-layout.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OfficialRuntimeOwner } from "../src/codex-runtime/official-runtime-owner.js";
+import type { JsonObject } from "@codexhost/protocol-core";
+import { SyntheticPrivateFiles, credential } from "./fixtures/native-account-state.js";
+import { nativeDigest } from "../src/account/native-profile-vault.js";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const native = vi.hoisted(() => {
-  interface FixtureFiles {
-    contents: Map<string, Buffer>;
-    activeLeases: number;
-    ensureDirectory(directory: string): Promise<void>;
-    read(directory: string, name: string): Promise<Buffer | null>;
-    replace(
-      directory: string,
-      name: string,
-      content: Uint8Array,
-      expected: string | null,
-    ): Promise<void>;
-    remove(directory: string, name: string, expected: string): Promise<void>;
-    lock(
-      directory: string,
-      name: string,
-    ): Promise<{
-      closed: Promise<{ code: number; signal: null }>;
-      release(): Promise<void>;
-    }>;
-  }
-  interface Fixture {
-    layout: object;
-    files: FixtureFiles;
-    key: Buffer | null;
-    keyReadError?: Error;
-    initializationError?: Error;
-    startBeforeInitializationError: boolean;
-    reconcileError?: Error;
-    staleProcessRecord: boolean;
-    version: string;
-    events: string[];
-    managedSnapshot: {
-      version: 2;
-      currentAccountId: string | null;
-      phase: "ready" | "changing" | "unavailable";
-      revision: number;
-      capabilities: {
-        manage: boolean;
-        switch: boolean;
-        login: boolean;
-        delete: boolean;
-        recover: boolean;
-        logout: boolean;
-        reason?: "recovery-required";
-      };
-      accounts: [];
-    };
-  }
-  const state = {
-    current: null as Fixture | null,
-    fileConstructions: 0,
-    keyConstructions: 0,
-    recordConstructions: 0,
-    runtimeConstructions: 0,
-    accountConstructions: 0,
-    accountInstances: [] as object[],
-    nativeLaunches: [] as unknown[],
-    externalStop: undefined as (() => Promise<void>) | undefined,
-  };
-  const current = (): Fixture => {
-    if (!state.current) throw new Error("native account host fixture is unavailable");
-    return state.current;
-  };
-  class NativePrivateFiles {
-    constructor(input: unknown) {
-      void input;
-      state.fileConstructions++;
-    }
-    withReadOnlyDirectoryAccess(): this {
-      return this;
-    }
-    ensureDirectory(directory: string): Promise<void> {
-      return current().files.ensureDirectory(directory);
-    }
-    read(directory: string, name: string): Promise<Buffer | null> {
-      return current().files.read(directory, name);
-    }
-    replace(
-      directory: string,
-      name: string,
-      content: Uint8Array,
-      expected: string | null,
-    ): Promise<void> {
-      return current().files.replace(directory, name, content, expected);
-    }
-    remove(directory: string, name: string, expected: string): Promise<void> {
-      return current().files.remove(directory, name, expected);
-    }
-    lock(directory: string, name: string) {
-      return current().files.lock(directory, name);
-    }
-  }
-  class NativeSecretKeys {
-    constructor(input: unknown) {
-      void input;
-      state.keyConstructions++;
-    }
-    async read(): Promise<Buffer | null> {
-      const fixture = current();
-      if (fixture.keyReadError) throw fixture.keyReadError;
-      return fixture.key ? Buffer.from(fixture.key) : null;
-    }
-  }
-  class OfficialProcessRecord {
-    constructor(input: unknown) {
-      void input;
-      state.recordConstructions++;
-    }
-    async reconcile(options: { allowMissingExitReceipt?: boolean } = {}): Promise<void> {
-      if (current().reconcileError) throw current().reconcileError;
-      if (current().staleProcessRecord) {
-        if (!options.allowMissingExitReceipt)
-          throw new Error("Official process tree exit is unconfirmed");
-        current().staleProcessRecord = false;
-      }
-    }
-    wrap(factory: (receipt: { directory: string; name: string; tag: string }) => object): object {
-      return factory({ directory: "/synthetic", name: "process.json", tag: "fixture" });
-    }
-  }
-  class OfficialAccountRuntime {
-    readonly owner: {
-      gate: { initialized(): void; unavailable(): void };
-      start(input: { mode: "management-only" }): Promise<void>;
-      stop(): Promise<void>;
-    };
-    readonly nativeVersion: () => Promise<string>;
-    readonly reconcilePreviousWriter: () => Promise<void>;
-    constructor(input: {
-      owner: OfficialAccountRuntime["owner"];
-      nativeVersion(): Promise<string>;
-      reconcilePreviousWriter(): Promise<void>;
-      stopExternalProcesses?(): Promise<void>;
-    }) {
-      state.runtimeConstructions++;
-      state.externalStop = input.stopExternalProcesses;
-      this.owner = input.owner;
-      this.nativeVersion = input.nativeVersion;
-      this.reconcilePreviousWriter = input.reconcilePreviousWriter;
-    }
-    async initializeFixture(): Promise<void> {
-      await this.nativeVersion();
-      await this.reconcilePreviousWriter();
-      const fixture = current();
-      if (fixture.initializationError) {
-        if (fixture.startBeforeInitializationError) {
-          await this.owner.start({ mode: "management-only" });
-          this.owner.gate.unavailable();
-        }
-        throw fixture.initializationError;
-      }
-      await this.owner.start({ mode: "management-only" });
-      this.owner.gate.initialized();
-    }
-    stop(): Promise<void> {
-      current().events.push("runtime-stop");
-      return this.owner.stop();
-    }
-  }
-  class NativeCodexAccounts {
-    constructor(
-      private readonly input: {
-        runtime: OfficialAccountRuntime;
-      },
-    ) {
-      state.accountConstructions++;
-      state.accountInstances.push(this);
-    }
-    initialize(): Promise<void> {
-      return this.input.runtime.initializeFixture();
-    }
-    async close(): Promise<void> {
-      current().events.push("accounts-close");
-    }
-    snapshot() {
-      return structuredClone(current().managedSnapshot);
-    }
-    currentAccountId(): string | null {
-      return this.snapshot().currentAccountId;
-    }
-    switch(): Promise<void> {
-      return Promise.reject(new Error("fixture account operation unavailable"));
-    }
-    remove(): Promise<void> {
-      return Promise.reject(new Error("fixture account operation unavailable"));
-    }
-    startLogin(): Promise<never> {
-      return Promise.reject(new Error("fixture account operation unavailable"));
-    }
-    cancelLogin(): Promise<boolean> {
-      return Promise.resolve(false);
-    }
-    logout(): Promise<void> {
-      return Promise.reject(new Error("fixture account operation unavailable"));
-    }
-    recover(): Promise<void> {
-      return Promise.reject(new Error("fixture account recovery unavailable"));
-    }
-    observe(): void {}
-    subscribeLogin(): () => void {
-      return () => undefined;
-    }
-  }
+const fixtureState = vi.hoisted(() => ({
+  files: undefined as SyntheticPrivateFiles | undefined,
+  events: [] as string[],
+  externalStop: undefined as (() => Promise<void>) | undefined,
+  failCapability: false,
+  unreadableJournal: false,
+}));
+vi.mock("node:fs/promises", async (original) => {
+  const fs = await original<typeof FileSystem>();
   return {
-    state,
-    current,
-    NativePrivateFiles,
-    NativeSecretKeys,
-    OfficialProcessRecord,
-    OfficialAccountRuntime,
-    NativeCodexAccounts,
+    ...fs,
+    lstat: async (...args: Parameters<typeof fs.lstat>) => {
+      if (fixtureState.unreadableJournal && String(args[0]).endsWith("transaction.json"))
+        throw Object.assign(new Error("Permission denied"), { code: "EACCES" });
+      return fs.lstat(...args);
+    },
   };
 });
-
-vi.mock("../src/account/native-account-layout.js", () => ({
-  canonicalCodexHome: async (home: string) => path.resolve(home),
-  inspectNativeAccountLayout: async () => native.current().layout,
+function privateFiles(): SyntheticPrivateFiles {
+  if (!fixtureState.files) throw new Error("Missing fixture files");
+  return fixtureState.files;
+}
+vi.mock("../src/native-private-files.js", async (original) => ({
+  ...(await original<typeof NativeFiles>()),
+  NativePrivateFiles: class {
+    withReadOnlyDirectoryAccess() {
+      return this;
+    }
+    ensureDirectory(directory: string) {
+      return privateFiles().ensureDirectory(directory);
+    }
+    read(directory: string, name: string) {
+      return privateFiles().read(directory, name);
+    }
+    replace(directory: string, name: string, content: Uint8Array, expected: string | null) {
+      return privateFiles().replace(directory, name, content, expected);
+    }
+    remove(directory: string, name: string, expected: string) {
+      return privateFiles().remove(directory, name, expected);
+    }
+    lock(directory: string, name: string) {
+      return privateFiles().lock(directory, name);
+    }
+  },
 }));
-vi.mock("../src/native-private-files.js", () => ({
-  NativePrivateFiles: native.NativePrivateFiles,
-}));
-vi.mock("../src/native-secret-keys.js", () => ({ NativeSecretKeys: native.NativeSecretKeys }));
-vi.mock("../src/codex-runtime/official-process-record.js", () => ({
-  OfficialProcessRecord: native.OfficialProcessRecord,
-}));
-vi.mock("../src/account/official-account-runtime.js", () => ({
-  OfficialAccountRuntime: native.OfficialAccountRuntime,
-}));
-vi.mock("../src/account/native-codex-accounts.js", () => ({
-  NativeCodexAccounts: native.NativeCodexAccounts,
-}));
-vi.mock("../src/codex-runtime/official-cli-version.js", () => ({
-  readOfficialCliVersion: async () => native.current().version,
+vi.mock("../src/native-secret-keys.js", () => ({
+  NativeSecretKeys: class {
+    async read() {
+      return null;
+    }
+  },
 }));
 vi.mock("../src/native-process-identity.js", () => ({
-  readNativeProcessIdentity: async () => null,
+  readNativeProcessIdentity: async (_launcher: string, pid: number) =>
+    pid === 41 ? "current" : null,
 }));
-vi.mock("../src/native-process-stop.js", () => ({
-  stopNativeProcesses: vi.fn(async () => undefined),
+vi.mock("../src/native-process-stop.js", () => ({ stopNativeProcesses: vi.fn(async () => {}) }));
+vi.mock("../src/account/native-account-layout.js", async (original) => ({
+  ...(await original<typeof NativeLayout>()),
+  inspectNativeAccountLayout: vi.fn(async () => {
+    throw new Error("Legacy layout must not gate startup");
+  }),
+}));
+vi.mock("../src/codex-runtime/official-cli-version.js", () => ({
+  readOfficialCliVersion: vi.fn(async () => {
+    throw new Error("Version is not a startup prerequisite");
+  }),
 }));
 vi.mock("../src/codex-runtime/owned-official-backends.js", () => ({
-  createOwnedLoopbackBackend: () => createBackend(),
-  createOwnedStdioBackend: () => createBackend(),
-}));
-
-vi.mock("../src/remote-official-app-server.js", () => ({
-  createLoopbackOfficialAppServerListener: (input: unknown) => {
-    native.state.nativeLaunches.push(input);
-    const backend = createBackend();
+  createOwnedLoopbackBackend: () => {
+    const closed = Promise.withResolvers<{ code: number; signal: null }>();
     return {
-      closed: backend.closed,
-      processId: backend.processId,
-      async listen() {
-        await backend.start();
-        return "ws://127.0.0.1:43210";
+      processId: 41,
+      closed: closed.promise,
+      async start() {
+        fixtureState.events.push("start");
       },
-      close: () => backend.stop(),
+      async connect() {
+        throw new Error("No fixture protocol client");
+      },
+      async stop() {
+        fixtureState.events.push("stop");
+        closed.resolve({ code: 0, signal: null });
+      },
     };
+  },
+}));
+vi.mock("../src/account/official-account-runtime.js", () => ({
+  OfficialAccountRuntime: class {
+    constructor(
+      private readonly input: {
+        owner: OfficialRuntimeOwner;
+        reconcilePreviousWriter(): Promise<void>;
+        stopExternalProcesses(): Promise<void>;
+      },
+    ) {
+      fixtureState.externalStop = input.stopExternalProcesses;
+    }
+    get gate() {
+      return this.input.owner.gate;
+    }
+    async checkCredentialStorage() {
+      if (fixtureState.failCapability) throw new Error("Unsupported account capabilities");
+    }
+    async preflight() {
+      fixtureState.events.push("preflight");
+      if (fixtureState.failCapability) throw new Error("Unsupported account capabilities");
+    }
+    async stop() {
+      await this.input.owner.stop();
+    }
+    async reconcilePreviousWriter() {
+      await this.input.reconcilePreviousWriter();
+    }
+    async start(home?: string) {
+      await this.input.owner.start(
+        home ? { homeOverride: home, mode: "management-only" } : { mode: "task" },
+      );
+    }
+    async verify() {
+      fixtureState.events.push("verify");
+    }
+    async stopExternalProcesses() {
+      await this.input.stopExternalProcesses();
+    }
+    subscribe() {
+      return () => {};
+    }
+    async controlRequest(): Promise<JsonObject> {
+      return {};
+    }
   },
 }));
 
 import { prepareLocalCodex } from "../src/native-account-host.js";
-import { OfficialRuntimeClient } from "../src/codex-runtime/official-runtime-scope.js";
-import { nativeDigest, parseJournal } from "../src/account/native-profile-vault.js";
 import { stopNativeProcesses } from "../src/native-process-stop.js";
+import { inspectNativeAccountLayout } from "../src/account/native-account-layout.js";
+import { readOfficialCliVersion } from "../src/codex-runtime/official-cli-version.js";
 
-interface HostFixture {
-  root: string;
-  home: string;
-  data: string;
-  launcher: string;
-  files: ReturnType<typeof createFiles>;
-  input(overrides?: { launcher?: string; sharedListener?: boolean }): {
-    stockCodexPath: string;
-    arguments: string[];
-    environment: NodeJS.ProcessEnv;
-    sharedListener: boolean;
-    diagnosticOutput: Writable;
-  };
-}
-
-const temporaryRoots: string[] = [];
-
-function fileKey(directory: string, name: string): string {
-  return path.join(directory, name);
-}
-
-function createFiles(events: string[]) {
-  const contents = new Map<string, Buffer>();
-  return {
-    contents,
-    activeLeases: 0,
-    ensureDirectory: vi.fn(async () => {}),
-    read: vi.fn(async (directory: string, name: string) => {
-      const value = contents.get(fileKey(directory, name));
-      return value ? Buffer.from(value) : null;
-    }),
-    replace: vi.fn(
-      async (directory: string, name: string, content: Uint8Array, expected: string | null) => {
-        void expected;
-        contents.set(fileKey(directory, name), Buffer.from(content));
-      },
-    ),
-    remove: vi.fn(async (directory: string, name: string, expected: string) => {
-      void expected;
-      contents.delete(fileKey(directory, name));
-    }),
-    lock: vi.fn(async () => {
-      const closed = Promise.withResolvers<{ code: number; signal: null }>();
-      const files = native.current().files;
-      files.activeLeases++;
-      let released = false;
-      return {
-        closed: closed.promise,
-        release: async () => {
-          if (released) return;
-          released = true;
-          events.push("lease-release");
-          files.activeLeases--;
-          closed.resolve({ code: 0, signal: null });
-        },
-      };
-    }),
-  };
-}
-
-function createBackend() {
-  const fixture = native.current();
-  const closed = Promise.withResolvers<{ code: number; signal: null }>();
-  return {
-    closed: closed.promise,
-    processId: 41,
-    async start() {
-      fixture.events.push("backend-start");
-    },
-    async connect() {
-      throw new Error("fixture backend has no protocol connection");
-    },
-    async stop() {
-      fixture.events.push("backend-stop");
-      closed.resolve({ code: 0, signal: null });
-    },
-  };
-}
-
-async function fixture(
-  options: {
-    keyAvailable?: boolean;
-    initializationError?: Error;
-    startBeforeInitializationError?: boolean;
-    reconcileError?: Error;
-    staleProcessRecord?: boolean;
-    layout?: object;
-  } = {},
-): Promise<HostFixture> {
-  const root = await mkdtemp(path.join(tmpdir(), "codexhost-native-account-host-"));
-  temporaryRoots.push(root);
-  const home = path.join(root, "home");
-  const data = path.join(root, "data");
-  await mkdir(home, { recursive: true });
-  await mkdir(data, { recursive: true });
-  const events: string[] = [];
-  const files = createFiles(events);
-  native.state.current = {
-    layout: options.layout ?? { kind: "new" },
-    files,
-    key: options.keyAvailable === false ? null : Buffer.alloc(32, 0x5a),
-    ...(options.initializationError ? { initializationError: options.initializationError } : {}),
-    startBeforeInitializationError: options.startBeforeInitializationError ?? false,
-    ...(options.reconcileError ? { reconcileError: options.reconcileError } : {}),
-    staleProcessRecord: options.staleProcessRecord ?? false,
-    version: "0.153.4",
-    events,
-    managedSnapshot: {
-      version: 2,
-      currentAccountId: null,
-      phase: options.initializationError ? "unavailable" : "ready",
-      revision: 1,
-      capabilities: {
-        manage: true,
-        switch: true,
-        login: true,
-        delete: true,
-        recover: true,
-        logout: true,
-        ...(options.initializationError ? { reason: "recovery-required" as const } : {}),
-      },
-      accounts: [],
-    },
-  };
-  const launcher = path.join(root, "codexhost-launcher");
-  return {
-    root,
-    home,
-    data,
-    launcher,
-    files,
-    input(overrides = {}) {
-      return {
-        stockCodexPath: path.join(root, "codex"),
-        arguments: ["app-server"],
-        environment: {
-          CODEX_HOME: home,
-          CODEXHOST_DATA_DIR: data,
-          ...(overrides.launcher === undefined
-            ? { CODEXHOST_LAUNCHER_EXECUTABLE: launcher }
-            : overrides.launcher
-              ? { CODEXHOST_LAUNCHER_EXECUTABLE: overrides.launcher }
-              : {}),
-        },
-        sharedListener: overrides.sharedListener ?? false,
-        diagnosticOutput: new Writable({
-          write(_chunk, _encoding, done) {
-            done();
-          },
-        }),
-      };
-    },
-  };
-}
-
-beforeEach(() => {
-  vi.mocked(stopNativeProcesses).mockClear();
-  native.state.externalStop = undefined;
-  native.state.current = null;
-  native.state.fileConstructions = 0;
-  native.state.keyConstructions = 0;
-  native.state.recordConstructions = 0;
-  native.state.runtimeConstructions = 0;
-  native.state.accountConstructions = 0;
-  native.state.accountInstances.length = 0;
-  native.state.nativeLaunches.length = 0;
-});
-
+const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
-  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true })));
+  for (const close of cleanups.splice(0).reverse()) await close();
 });
-
-describe("local native Account composition", () => {
-  it("allows native authentication pass-through with no launcher and no managed state", async () => {
-    const f = await fixture();
-    const prepared = await prepareLocalCodex(f.input({ launcher: "" }));
-    expect(prepared.accountControl.snapshot().capabilities.reason).toBe("unsupported-storage");
-    expect(native.state.fileConstructions).toBe(0);
-    await prepared.close();
+async function fixture() {
+  vi.clearAllMocks();
+  fixtureState.events = [];
+  fixtureState.externalStop = undefined;
+  fixtureState.failCapability = false;
+  fixtureState.unreadableJournal = false;
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "codexhost-startup-test-")));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const home = path.join(root, "home");
+  const directory = path.join(home, ".codexhost-native-accounts");
+  await mkdir(home);
+  const files = new SyntheticPrivateFiles();
+  const remove = files.remove.bind(files);
+  vi.spyOn(files, "remove").mockImplementation(async (directory, name, expected) => {
+    await remove(directory, name, expected);
+    // The lightweight startup check uses real directory entries, while credential
+    // contents use the fixture store. Mirror recovery-record deletion in both.
+    if (directory.startsWith(`${root}${path.sep}`))
+      await rm(path.join(directory, name), { force: true });
   });
-
-  it("blocks a missing launcher when a managed directory already exists", async () => {
-    const f = await fixture();
-    await mkdir(path.join(f.home, ".codexhost-native-accounts"));
-    const prepared = await prepareLocalCodex(f.input({ launcher: "" }));
-    expect(prepared.accountControl.snapshot().capabilities.reason).toBe("recovery-required");
-    expect(native.state.fileConstructions).toBe(0);
-    await expect(prepared.officialRuntimeScope.start()).rejects.toMatchObject({
-      code: "unavailable",
-    });
-    await prepared.close();
-  });
-
-  it("blocks multiple legacy homes before constructing keys, files, or a backend", async () => {
-    const f = await fixture({
-      layout: { kind: "migration-required", reason: "multiple-homes", homes: [] },
-    });
-    const input = f.input();
-    const diagnostic = vi.spyOn(input.diagnosticOutput, "write");
-    const prepared = await prepareLocalCodex(input);
-    expect(diagnostic).toHaveBeenCalledWith(
-      "codexhost: Codex Account startup blocked (migration-required)\n",
-    );
-    expect(prepared.accountControl.snapshot().capabilities.reason).toBe("migration-required");
-    expect(native.state.fileConstructions).toBe(0);
-    expect(native.state.keyConstructions).toBe(0);
-    expect(native.state.recordConstructions).toBe(0);
-    expect(native.current().events).toEqual([]);
-    await prepared.close();
-  });
-
-  it("preserves native startup for an eligible legacy layout without initializing account management", async () => {
-    const f = await fixture({
-      layout: {
-        kind: "migration-required",
-        reason: "multiple-homes",
-        homes: [],
-        nativeCompatibility: { accountId: "legacy-current", registryDigest: "original" },
-      },
-    });
-    const input = f.input({ sharedListener: true });
-    const prepared = await prepareLocalCodex(input);
-    try {
-      expect(prepared.accountControl.snapshot().capabilities).toMatchObject({
-        manage: false,
-        switch: false,
-        login: false,
-        delete: false,
-        reason: "migration-required",
-      });
-      expect(native.state.fileConstructions).toBe(0);
-      expect(native.state.keyConstructions).toBe(0);
-      expect(native.state.accountConstructions).toBe(0);
-      await prepared.officialRuntimeScope.start();
-      await prepared.officialRuntimeScope.start();
-      expect(native.current().events).toEqual(["backend-start"]);
-      expect(native.state.nativeLaunches).toHaveLength(1);
-      expect(native.state.nativeLaunches[0]).toMatchObject({
-        stockCodexPath: input.stockCodexPath,
-        environment: { CODEX_HOME: f.home },
-      });
-      expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
-    } finally {
-      await prepared.close();
-    }
-    expect(native.current().events).toEqual(["backend-start", "backend-stop"]);
-    expect(f.files.replace).not.toHaveBeenCalled();
-  });
-
-  it("retains legacy native startup and authentication without account management", async () => {
-    const f = await fixture({
-      layout: {
-        kind: "migration-required",
-        reason: "multiple-homes",
-        homes: [],
-        nativeCompatibility: { accountId: "legacy-current", registryDigest: "original" },
-      },
-    });
-    const prepared = await prepareLocalCodex(f.input({ sharedListener: true }));
-    try {
-      expect(prepared.accountControl.snapshot().capabilities).toMatchObject({
-        manage: false,
-        switch: false,
-        login: false,
-        logout: false,
-        reason: "migration-required",
-      });
-      await prepared.officialRuntimeScope.start();
-      expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
-      expect(native.state.keyConstructions).toBe(0);
-      expect(native.state.fileConstructions).toBe(0);
-      await expect(prepared.accountControl.switch("other")).rejects.toThrow();
-      await expect(prepared.accountControl.startLogin()).rejects.toThrow();
-      await expect(prepared.accountControl.logout()).rejects.toThrow();
-    } finally {
-      await prepared.close();
-    }
-  });
-
-  it("refuses legacy compatibility without a native helper, without creating keys or starting a backend", async () => {
-    const f = await fixture({
-      layout: {
-        kind: "migration-required",
-        reason: "multiple-homes",
-        homes: [],
-        nativeCompatibility: { accountId: "legacy-current", registryDigest: "original" },
-      },
-    });
-    const prepared = await prepareLocalCodex(
-      f.input({
-        sharedListener: true,
-        launcher: "",
-      }),
-    );
-    await expect(prepared.officialRuntimeScope.start()).rejects.toMatchObject({
-      code: "unavailable",
-    });
-    expect(native.state.keyConstructions).toBe(0);
-    expect(native.current().events).toEqual([]);
-    await prepared.close();
-  });
-
-  it.each(["layout-changed", "managed-state-appeared"])(
-    "rechecks legacy admission at backend start: %s",
-    async (failure) => {
-      const f = await fixture({
-        layout: {
-          kind: "migration-required",
-          reason: "multiple-homes",
-          homes: [],
-          nativeCompatibility: { accountId: "legacy-current", registryDigest: "original" },
-        },
-      });
-      const prepared = await prepareLocalCodex(f.input({ sharedListener: true }));
-      native.current().layout = {
-        kind: "migration-required",
-        reason: "multiple-homes",
-        homes: [],
-        ...(failure === "layout-changed"
-          ? {
-              nativeCompatibility: { accountId: "other", registryDigest: "changed" },
-            }
-          : {}),
-      };
-      await expect(prepared.officialRuntimeScope.start()).rejects.toThrow();
-      expect(native.current().events).not.toContain("backend-start");
-      await prepared.close();
+  fixtureState.files = files;
+  const environment = {
+    CODEX_HOME: home,
+    CODEXHOST_DATA_DIR: path.join(root, "legacy"),
+    CODEXHOST_LAUNCHER_EXECUTABLE: path.join(root, "launcher"),
+  };
+  return {
+    home,
+    directory,
+    files,
+    environment,
+    async seed(name: string, value: unknown) {
+      await mkdir(directory, { recursive: true });
+      const content = JSON.stringify(value);
+      await writeFile(path.join(directory, name), content);
+      files.seed(directory, name, content);
     },
-  );
-
-  it("initializes normal account management without an available keyring", async () => {
-    const f = await fixture({ keyAvailable: false });
-    const prepared = await prepareLocalCodex(f.input());
-    expect(prepared.accountControl.snapshot().capabilities.manage).toBe(true);
-    expect(f.files.activeLeases).toBe(1);
-
-    await prepared.officialRuntimeScope.start();
-    await prepared.close();
-    expect(native.current().events).toContain("backend-stop");
-    expect(native.current().events.at(-1)).toBe("lease-release");
-    expect(f.files.activeLeases).toBe(0);
-  });
-
-  it.each(["transaction.json", "login.json"])(
-    "does not start a competing backend when a locked store has pending %s state",
-    async (name) => {
-      const f = await fixture({ keyAvailable: false });
-      f.files.contents.set(
-        fileKey(path.join(f.home, ".codexhost-native-accounts"), name),
-        Buffer.from("pending"),
-      );
-      const prepared = await prepareLocalCodex(f.input());
-      expect(prepared.accountControl.snapshot().capabilities.reason).toBe("recovery-required");
-      expect(native.current().events).toEqual(["lease-release"]);
-      expect(f.files.activeLeases).toBe(0);
-      await prepared.close();
-    },
-  );
-
-  it("allows ordinary startup after a retired supervisor lost its exit receipt", async () => {
-    const f = await fixture({ staleProcessRecord: true });
-    const prepared = await prepareLocalCodex(f.input());
-    try {
-      expect(native.current().staleProcessRecord).toBe(false);
-      expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
-      expect(native.current().events).toContain("backend-start");
-      expect(stopNativeProcesses).not.toHaveBeenCalled();
-    } finally {
-      await prepared.close();
-    }
-  });
-
-  it.each(["transaction.json", "login.json"])(
-    "preserves stale process evidence when startup encounters unreadable pending %s",
-    async (name) => {
-      const f = await fixture({ staleProcessRecord: true });
-      f.files.contents.set(
-        fileKey(path.join(f.home, ".codexhost-native-accounts"), name),
-        Buffer.from("pending"),
-      );
-      const prepared = await prepareLocalCodex(f.input());
-      try {
-        expect(native.current().staleProcessRecord).toBe(true);
-        expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
-        expect(native.current().events).not.toContain("backend-start");
-      } finally {
-        await prepared.close();
-      }
-    },
-  );
-
-  it.each(["transaction.json", "login.json"])(
-    "does not waive missing exit evidence for a valid pending %s",
-    async (name) => {
-      const f = await fixture({ staleProcessRecord: true });
-      const homeId = nativeDigest(process.platform === "win32" ? f.home.toLowerCase() : f.home);
+    async pending(name: string) {
+      const homeId = nativeDigest(process.platform === "win32" ? home.toLowerCase() : home);
+      const operationId = randomUUID();
       const before = {
-        version: 1,
+        version: 2,
         homeId,
         revision: 0,
         currentAccountId: null,
         lastOperationId: null,
         accounts: [],
       };
-      const operationId = randomUUID();
-      const pending = Buffer.from(
-        JSON.stringify(
-          name === "transaction.json"
-            ? {
-                version: 1,
-                operationId,
-                phase: "prepared",
-                before,
-                after: { ...before, revision: 1, lastOperationId: operationId },
-                source: null,
-                target: null,
-              }
-            : {
-                version: 1,
-                operationId,
-                sourceAccountId: null,
-                expiresAt: Date.now() + 60_000,
-              },
-        ),
-      );
-      if (name === "transaction.json") expect(() => parseJournal(pending, homeId)).not.toThrow();
-      const key = fileKey(path.join(f.home, ".codexhost-native-accounts"), name);
-      f.files.contents.set(key, pending);
-      const prepared = await prepareLocalCodex(f.input());
-      try {
-        expect(native.current().staleProcessRecord).toBe(true);
-        expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
-        expect(native.current().events).not.toContain("backend-start");
-        expect(f.files.contents.get(key)).toEqual(pending);
-      } finally {
-        await prepared.close();
-      }
-    },
-  );
-
-  it("does not start a competing backend when previous-writer reconciliation is unconfirmed", async () => {
-    const f = await fixture({ keyAvailable: false, reconcileError: new Error("writer active") });
-    const prepared = await prepareLocalCodex(f.input());
-    expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
-    expect(native.current().events).not.toContain("backend-start");
-    await prepared.close();
-  });
-
-  it.each(["unsupported-version", "unsupported-storage"])(
-    "falls back for clean %s initialization without abandoning the lease",
-    async (code) => {
-      const error = Object.assign(new Error(code), { code });
-      const f = await fixture({ initializationError: error });
-      const prepared = await prepareLocalCodex(f.input());
-      expect(prepared.accountControl.snapshot().capabilities.reason).toBe(code);
-      expect(f.files.activeLeases).toBe(1);
-      expect(native.current().events).toEqual(["runtime-stop", "accounts-close"]);
-      await prepared.close();
-      expect(native.current().events.at(-1)).toBe("lease-release");
-    },
-  );
-
-  it("keeps failed recovery managed and prevents Scope from implicitly starting it", async () => {
-    const f = await fixture({
-      initializationError: new Error("recovery failed"),
-      startBeforeInitializationError: true,
-    });
-    const prepared = await prepareLocalCodex(f.input());
-    expect(prepared.accountControl.snapshot()).toMatchObject({
-      phase: "unavailable",
-      capabilities: { reason: "recovery-required", recover: true },
-    });
-    expect(prepared.officialRuntimeScope.owner.running).toBe(true);
-    await expect(prepared.officialRuntimeScope.start()).rejects.toMatchObject({
-      code: "unavailable",
-    });
-    const appServerClient = new OfficialRuntimeClient({
-      scope: prepared.officialRuntimeScope,
-      output: async () => {},
-    });
-    await expect(appServerClient.initialize()).rejects.toMatchObject({ code: "unavailable" });
-    await appServerClient.close();
-    expect(native.current().events.filter((event) => event === "backend-start")).toHaveLength(1);
-    await prepared.close();
-    expect(native.current().events.indexOf("backend-stop")).toBeLessThan(
-      native.current().events.indexOf("lease-release"),
-    );
-  });
-
-  it.each(["fresh", "managed", "legacy"] as const)(
-    "starts and closes %s mode without terminating external backends",
-    async (mode) => {
-      const f = await fixture(
-        mode === "legacy"
-          ? {
-              layout: {
-                kind: "migration-required",
-                reason: "multiple-homes",
-                homes: [],
-                nativeCompatibility: { accountId: "legacy-current", registryDigest: "original" },
-              },
-            }
-          : {},
-      );
-      if (mode === "managed")
-        await mkdir(path.join(f.home, ".codexhost-native-accounts"), { recursive: true });
-      const prepared = await prepareLocalCodex(f.input({ sharedListener: true }));
-      try {
-        await prepared.officialRuntimeScope.start();
-        expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
-        expect(stopNativeProcesses).not.toHaveBeenCalled();
-      } finally {
-        await prepared.close();
-      }
-      expect(stopNativeProcesses).not.toHaveBeenCalled();
-    },
-  );
-
-  it("allows external backends at startup and always wires a switch-only stop", async () => {
-    const f = await fixture();
-    const input = f.input();
-    const prepared = await prepareLocalCodex(input);
-    try {
-      expect(prepared.officialRuntimeScope.owner.running).toBe(true);
-      expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
-      expect(stopNativeProcesses).not.toHaveBeenCalled();
-      expect(native.state.externalStop).toBeTypeOf("function");
-      await native.state.externalStop?.();
-      expect(stopNativeProcesses).toHaveBeenCalledWith({
-        launcher: f.launcher,
-        executableNames: ["codex", "codex", "codex.exe"],
-        environment: input.environment,
+      await this.seed("vault.json", {
+        version: 2,
+        homeId,
+        revision: 0,
+        lastOperationId: null,
+        accounts: [],
       });
+      await this.seed(
+        name,
+        name === "login.json"
+          ? { version: 1, operationId, sourceAccountId: null, expiresAt: Date.now() + 60_000 }
+          : {
+              version: 2,
+              operationId,
+              phase: "prepared",
+              before,
+              after: { ...before, revision: 1, lastOperationId: operationId },
+              source: null,
+              target: null,
+            },
+      );
+    },
+    async prepare() {
+      const prepared = await prepareLocalCodex({
+        stockCodexPath: path.join(root, "codex"),
+        arguments: ["app-server"],
+        environment,
+        sharedListener: false,
+        diagnosticOutput: new Writable({
+          write(_chunk, _encoding, done) {
+            done();
+          },
+        }),
+      });
+      cleanups.push(() => prepared.close());
+      return prepared;
+    },
+  };
+}
+
+describe("ordinary native startup versus mutation recovery", () => {
+  it("starts exactly once before collection opens, without probes, quota, legacy layout or version checks", async () => {
+    const f = await fixture();
+    const lock = vi.spyOn(f.files, "lock");
+    const pendingOpen = Promise.withResolvers<undefined>();
+    const original = f.files.ensureDirectory.bind(f.files);
+    vi.spyOn(f.files, "ensureDirectory").mockImplementation(async (directory) => {
+      if (directory === f.directory) await pendingOpen.promise;
+      await original(directory);
+    });
+    const prepared = await f.prepare();
+    try {
+      expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
+      expect(prepared.officialRuntimeScope.owner.running).toBe(true);
+      expect(lock).not.toHaveBeenCalled();
+      expect(inspectNativeAccountLayout).not.toHaveBeenCalled();
+      expect(fixtureState.events).toEqual(["start"]);
+      await prepared.officialRuntimeScope.start();
+      expect(fixtureState.events).toEqual(["start"]);
     } finally {
-      await prepared.close();
+      pendingOpen.resolve(undefined);
     }
-    expect(stopNativeProcesses).toHaveBeenCalledOnce();
+    await prepared.accountControl.refresh?.();
+    expect(prepared.accountControl.snapshot().capabilities.manage).toBe(true);
+    expect(fixtureState.events).toEqual(["start"]);
+    expect(readOfficialCliVersion).not.toHaveBeenCalled();
+    expect(stopNativeProcesses).not.toHaveBeenCalled();
   });
 
-  it("returns exactly one shared Scope and one Account control", async () => {
+  it.each(["pending-appeared", "native-failed"])(
+    "does not hide %s during background collection",
+    async (failure) => {
+      const f = await fixture();
+      const opened = Promise.withResolvers<undefined>();
+      const ensure = f.files.ensureDirectory.bind(f.files);
+      vi.spyOn(f.files, "ensureDirectory").mockImplementation(async (directory) => {
+        if (directory === f.directory) await opened.promise;
+        await ensure(directory);
+      });
+      const prepared = await f.prepare();
+      try {
+        if (failure === "pending-appeared")
+          await f.seed("transaction.json", "interrupted mutation");
+        else {
+          await prepared.officialRuntimeScope.owner.stop();
+          prepared.officialRuntimeScope.gate.unavailable();
+        }
+      } finally {
+        opened.resolve(undefined);
+      }
+      await prepared.accountControl.refresh?.();
+      expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
+      expect(prepared.officialRuntimeScope.owner.running).toBe(false);
+      expect(fixtureState.events).toEqual(["start", "stop"]);
+      if (failure === "pending-appeared")
+        expect(f.files.peek(f.directory, "transaction.json")).not.toBeNull();
+    },
+  );
+
+  it("allows old directories, broken backups and unknown account capabilities without restarting", async () => {
     const f = await fixture();
-    const prepared = await prepareLocalCodex(f.input());
-    expect(native.state.runtimeConstructions).toBe(1);
-    expect(native.state.accountConstructions).toBe(1);
-    expect(native.state.accountInstances).toEqual([prepared.accountControl]);
-    expect(prepared.officialRuntimeScope.owner.running).toBe(true);
-    await prepared.officialRuntimeScope.start();
-    expect(native.current().events.filter((event) => event === "backend-start")).toHaveLength(1);
-    await prepared.close();
+    fixtureState.failCapability = true;
+    await f.seed("vault.json", "invalid collection");
+    const prepared = await f.prepare();
+    await prepared.accountControl.refresh?.();
+    expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
+    expect(prepared.accountControl.snapshot().capabilities.manage).toBe(false);
+    expect(fixtureState.events).toEqual(["start"]);
+  });
+
+  it("does not stop native Codex when credential collection itself fails", async () => {
+    const f = await fixture();
+    f.files.seed(f.home, "auth.json", "not a credential");
+    const prepared = await f.prepare();
+    await expect(prepared.accountControl.refresh?.()).rejects.toThrow();
+    expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
+    expect(fixtureState.events).toEqual(["start"]);
+  });
+
+  it("treats an unreadable pending-record check as unknown, never clean", async () => {
+    const f = await fixture();
+    fixtureState.unreadableJournal = true;
+    const prepared = await f.prepare();
+    expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
+    expect(fixtureState.events).toEqual([]);
+  });
+
+  it("keeps native use when a collection path is a file rather than a directory", async () => {
+    const f = await fixture();
+    await writeFile(f.directory, "broken collection directory");
+    const prepared = await f.prepare();
+    await prepared.accountControl.refresh?.();
+    expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
+    expect(prepared.accountControl.snapshot().capabilities.manage).toBe(false);
+  });
+
+  it("disables collection, not the official backend, when its idle writer lease is lost", async () => {
+    const f = await fixture();
+    const lock = vi.spyOn(f.files, "lock");
+    const prepared = await f.prepare();
+    await prepared.accountControl.refresh?.();
+    const lease = await lock.mock.results[0]?.value;
+    expect(lease).toBeDefined();
+    await lease?.release();
+    expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
+    expect(prepared.accountControl.snapshot().capabilities.manage).toBe(false);
+    expect(fixtureState.events).toEqual(["start"]);
+  });
+
+  it("does not require a helper merely because an old managed directory exists", async () => {
+    const f = await fixture();
+    f.environment.CODEXHOST_LAUNCHER_EXECUTABLE = "";
+    await mkdir(f.directory);
+    const prepared = await f.prepare();
+    expect(prepared.accountControl.snapshot().capabilities.reason).toBe("unsupported-storage");
+    // No launch here: the helper-less transport uses the stock executable directly.
+    expect(fixtureState.events).toEqual([]);
+  });
+
+  it.each(["transaction.json", "login.json"])(
+    "blocks pending %s without a helper",
+    async (name) => {
+      const f = await fixture();
+      f.environment.CODEXHOST_LAUNCHER_EXECUTABLE = "";
+      await f.pending(name);
+      const prepared = await f.prepare();
+      await expect(prepared.officialRuntimeScope.start()).rejects.toMatchObject({
+        code: "unavailable",
+      });
+      expect(fixtureState.events).toEqual([]);
+    },
+  );
+
+  it.each(["transaction.json", "login.json"])(
+    "does not start over malformed pending %s",
+    async (name) => {
+      const f = await fixture();
+      await f.seed(name, "malformed");
+      const prepared = await f.prepare();
+      expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
+      expect(fixtureState.events).toEqual([]);
+      expect(f.files.peek(f.directory, name)).not.toBeNull();
+    },
+  );
+
+  it.each(["transaction.json", "login.json"])(
+    "recovers valid %s before admitting native work",
+    async (name) => {
+      const f = await fixture();
+      await f.pending(name);
+      const prepared = await f.prepare();
+      expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
+      expect(f.files.peek(f.directory, name)).toBeNull();
+      expect(fixtureState.events).toContain("verify");
+      expect(stopNativeProcesses).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["transaction.json", "login.json"])(
+    "retains missing-exit evidence for pending %s",
+    async (name) => {
+      const f = await fixture();
+      await f.pending(name);
+      await f.seed(".codexhost-process.json", {
+        version: 1,
+        nonce: randomUUID(),
+        phase: "running",
+        pid: 43,
+        identity: "old",
+      });
+      const prepared = await f.prepare();
+      expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
+      expect(fixtureState.events).toEqual([]);
+      expect(f.files.peek(f.directory, name)).not.toBeNull();
+      expect(f.files.peek(f.directory, ".codexhost-process.json")).not.toBeNull();
+    },
+  );
+
+  it.each(["logout", "login"])(
+    "checks historical exit before Settings %s can alter credentials",
+    async (operation) => {
+      const f = await fixture();
+      const source = credential("a").serializeForNativeStore();
+      f.files.seed(f.home, "auth.json", source);
+      await f.seed(".codexhost-process.json", {
+        version: 1,
+        nonce: randomUUID(),
+        phase: "running",
+        pid: 43,
+        identity: "old",
+      });
+      const prepared = await f.prepare();
+      await prepared.accountControl.refresh?.();
+      expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
+      await expect(
+        operation === "logout"
+          ? prepared.accountControl.logout()
+          : prepared.accountControl.startLogin(),
+      ).rejects.toThrow();
+      expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
+      expect(f.files.peek(f.home, "auth.json")?.toString()).toBe(source);
+      expect(f.files.peek(f.directory, "transaction.json")).toBeNull();
+      expect(f.files.peek(f.directory, "login.json")).toBeNull();
+      expect(stopNativeProcesses).not.toHaveBeenCalled();
+      expect(fixtureState.events.filter((event) => event === "start")).toHaveLength(1);
+    },
+  );
+
+  it("does not interpret a missing historical receipt as proof of exit on clean startup", async () => {
+    const f = await fixture();
+    await f.seed(".codexhost-process.json", {
+      version: 1,
+      nonce: randomUUID(),
+      phase: "running",
+      pid: 43,
+      identity: "old",
+    });
+    const prepared = await f.prepare();
+    await prepared.accountControl.refresh?.();
+    expect(prepared.officialRuntimeScope.gate.phase).toBe("ready");
+    expect(f.files.peek(f.directory, ".codexhost-process.json")).not.toBeNull();
+    expect(stopNativeProcesses).not.toHaveBeenCalled();
+    await prepared.officialRuntimeScope.owner.stop();
+    vi.mocked(stopNativeProcesses).mockRejectedValueOnce(new Error("exit unconfirmed"));
+    await expect(fixtureState.externalStop?.()).rejects.toThrow("exit unconfirmed");
+    expect(f.files.peek(f.directory, ".codexhost-process.json")).not.toBeNull();
+    await fixtureState.externalStop?.();
+    expect(f.files.peek(f.directory, ".codexhost-process.json")).toBeNull();
   });
 });

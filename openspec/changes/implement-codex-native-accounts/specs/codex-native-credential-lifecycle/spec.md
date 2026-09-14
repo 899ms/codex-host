@@ -99,7 +99,7 @@ Inactive quota reads SHALL use bounded requests without starting another backend
 
 ### Requirement: Unsupported old layouts SHALL preserve authentication without claiming migration
 
-Only verified layouts SHALL be adopted. Single permanent-home adoption SHALL not copy or delete native history. A valid legacy registry whose selected Account already uses the effective permanent home MAY adopt missing credentials after normal native recovery, identity and file-store verification, exclusive admission and owned backend exit. Other homes SHALL contain no managed state or ownership records. Source credentials SHALL remain read-only and be revalidated together with the registry and writer admission before one Vault CAS commits the plaintext Account payloads and source registry digest. Existing saved grants SHALL NOT be overwritten by legacy copies. Current-home managed state SHALL go through normal recovery. Foreign or mismatched selected homes, invalid metadata, orphan Thread bindings and unconfirmed owned processes SHALL remain blocked. This is credential adoption, not history migration: all source databases, attachments, memories, queues, projects and native relationships SHALL remain in place. The current scope SHALL preserve the primary Account's existing permanent-home history; merging or displaying histories from other legacy homes is not required. Legacy source directories SHALL NOT be automatically deleted. A future irreversible migration MUST require approved human confirmation and retain source data.
+Only verified layouts SHALL be adopted. Single permanent-home adoption SHALL not copy or delete native history. A valid legacy registry whose selected Account already uses the effective permanent home MAY adopt missing credentials after native startup, native credential collection and file-store checks, under serialized collection ownership without stopping the backend. Other homes SHALL contain no managed state or ownership records. Source credentials SHALL remain read-only and be revalidated together with the registry and writer admission before one Vault CAS commits the plaintext Account payloads and source registry digest. Existing saved grants SHALL NOT be overwritten by legacy copies. Current-home pending Journal or login-stage state SHALL go through recovery before native startup. Foreign or mismatched selected homes, invalid metadata and orphan Thread bindings SHALL prevent legacy adoption, not ordinary native startup. This is credential adoption, not history migration: all source databases, attachments, memories, queues, projects and native relationships SHALL remain in place. The current scope SHALL preserve the primary Account's existing permanent-home history; merging or displaying histories from other legacy homes is not required. Legacy source directories SHALL NOT be automatically deleted. A future irreversible migration MUST require approved human confirmation and retain source data.
 
 #### Scenario: Multiple old homes contain history
 
@@ -117,12 +117,13 @@ Only verified layouts SHALL be adopted. Single permanent-home adoption SHALL not
 
 - **WHEN** VS Code or CLI backends are running
 - **THEN** startup SHALL NOT inventory, stop or reject those external backends
-- **AND** managed and legacy-compatible startup SHALL retain their layout, provenance and owned-process recovery checks without an external-process capability blocker
+- **AND** layout and provenance checks SHALL constrain optional legacy adoption, while pending mutations SHALL retain strict owned-process recovery checks
 
-#### Scenario: Native-only compatibility becomes unsafe before backend start
+#### Scenario: Legacy adoption becomes unsafe
 
-- **WHEN** the registry changes or managed state appears in an incompatible legacy layout
-- **THEN** the Host SHALL refuse that compatibility path without deleting data or bypassing managed recovery
+- **WHEN** the registry changes or managed state appears in an incompatible legacy source home
+- **THEN** the Host SHALL skip adoption without deleting source data or disabling ordinary use of the permanent home
+- **AND** pending mutations in the permanent home SHALL still require recovery before native startup
 
 #### Scenario: Switching stops detected external Codex backends
 

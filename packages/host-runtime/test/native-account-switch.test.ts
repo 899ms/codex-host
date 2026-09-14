@@ -24,10 +24,58 @@ async function setup() {
     store: state.store,
     runtime: state.runtime,
   });
+  await state.runtime.start();
+  state.runtime.gate.initialized();
   await manager.initialize();
 }
 
 describe("Account switch stops native backends", () => {
+  it("does not stop or disable native Codex when the initial backup fails", async () => {
+    await setup();
+    const stop = vi.spyOn(state.runtime, "stop");
+    const before = state.files.peek(state.store.home, "auth.json");
+    vi.spyOn(state.store, "captureCurrent").mockRejectedValue(new Error("Backup unavailable"));
+    await expect(manager.switch(ids.b)).rejects.toThrow("Backup unavailable");
+    expect(stop).not.toHaveBeenCalled();
+    expect(manager.snapshot().phase).toBe("ready");
+    expect(state.files.peek(state.store.home, "auth.json")).toEqual(before);
+  });
+
+  it("does not mistake an unfinished login stage for a harmless backup failure", async () => {
+    await setup();
+    const stage = await state.store.createStage();
+    await expect(manager.switch(ids.b)).rejects.toMatchObject({ code: "recovery-required" });
+    expect(manager.snapshot().phase).toBe("unavailable");
+    expect(await state.store.readStage()).not.toBeNull();
+    expect((await state.store.readCredentials())?.identity).toEqual(credential("a").identity);
+    await state.store.clearStage(stage);
+  });
+
+  it("rejects a target or capability failure before stopping the working backend", async () => {
+    await setup();
+    const stop = vi.spyOn(state.runtime, "stop");
+    await expect(manager.switch("unknown")).rejects.toMatchObject({ code: "unknown-account" });
+    vi.spyOn(state.runtime, "preflight").mockRejectedValue(
+      Object.assign(new Error("Unsupported storage"), { code: "unsupported-storage" }),
+    );
+    await expect(manager.switch(ids.b)).rejects.toMatchObject({ code: "unsupported-storage" });
+    expect(stop).not.toHaveBeenCalled();
+    expect(manager.snapshot().phase).toBe("ready");
+    expect(await state.store.readJournal()).toBeNull();
+  });
+
+  it("keeps a verified committed switch ready if the extra collection refresh fails", async () => {
+    await setup();
+    const capture = state.store.captureCurrent.bind(state.store);
+    vi.spyOn(state.store, "captureCurrent")
+      .mockImplementationOnce(capture)
+      .mockRejectedValue(new Error("Backup unavailable"));
+    await manager.switch(ids.b);
+    expect(manager.snapshot().phase).toBe("ready");
+    expect(manager.currentAccountId()).toBe(ids.b);
+    expect(await state.store.readJournal()).toBeNull();
+  });
+
   it("fences new work and stops the backend before replacing credentials, skipping idle probes", async () => {
     await setup();
     const originalStop = state.runtime.stop.bind(state.runtime);
@@ -114,7 +162,8 @@ describe("Account switch stops native backends", () => {
     const before = state.files.peek(state.store.home, "auth.json");
     const release = state.runtime.gate.admit();
     try {
-      await expect(manager.switch(ids.b)).rejects.toMatchObject({ code: "switch-failed" });
+      await expect(manager.switch(ids.b)).rejects.toMatchObject({ code: "recovery-required" });
+      expect(manager.snapshot().phase).toBe("unavailable");
       expect(state.files.peek(state.store.home, "auth.json")).toEqual(before);
       expect(state.runtime.gate.busy).toBe(true);
       expect(await state.store.readJournal()).toBeNull();

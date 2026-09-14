@@ -51,7 +51,7 @@ function completion(manager: NativeCodexAccounts): Promise<CodexAccountLoginComp
 }
 
 describe("native Account boundary regressions", () => {
-  it("collects an externally selected identity before a cold bootstrap", async () => {
+  it("collects an externally selected identity without a cold capability probe", async () => {
     const state = await createNativeAccountTestState();
     resources.push({ state });
     await state.seedAccounts({
@@ -62,10 +62,12 @@ describe("native Account boundary regressions", () => {
       "auth.json",
       credential("outsider").serializeForNativeStore(),
     );
+    await state.runtime.start();
+    state.runtime.gate.initialized();
     const preflight = vi.spyOn(state.runtime, "preflight");
     const manager = new NativeCodexAccounts({ store: state.store, runtime: state.runtime });
     await manager.initialize();
-    expect(preflight).toHaveBeenCalled();
+    expect(preflight).not.toHaveBeenCalled();
     expect(manager.snapshot().phase).toBe("ready");
     expect(state.store.vault.accounts).toHaveLength(2);
     await manager.close();

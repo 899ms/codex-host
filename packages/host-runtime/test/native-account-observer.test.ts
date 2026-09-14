@@ -28,6 +28,21 @@ function fixture() {
 }
 
 describe("native Account observation", () => {
+  it("publishes startup collection after native initialization without an account probe", async () => {
+    const f = fixture();
+    const collected = Promise.withResolvers<typeof f.snapshot>();
+    f.refresh.mockReturnValueOnce(collected.promise);
+    f.observer.initialized(1);
+    expect(f.controlRequest).not.toHaveBeenCalled();
+    expect(f.scope.gate.phase).toBe("ready");
+    expect(f.notify).not.toHaveBeenCalled();
+    collected.resolve(f.snapshot);
+    await vi.waitFor(() =>
+      expect(f.notify).toHaveBeenCalledWith("codexhost/account/changed", f.snapshot),
+    );
+    expect(f.controlRequest).not.toHaveBeenCalled();
+  });
+
   it("announces only a ready replacement backend, never Settings staging", async () => {
     const f = fixture();
     f.observer.initialized(1);

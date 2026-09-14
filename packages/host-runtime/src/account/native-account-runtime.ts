@@ -6,7 +6,10 @@ import type { CodexCredentialIdentity } from "./native-codex-credentials.js";
 export interface NativeAccountRuntime {
   readonly gate: OfficialWorkGate;
   preflight(): Promise<void>;
+  /** Stop and confirm this Host's owned process tree. */
   stop(): Promise<void>;
+  /** Confirm historical writer exit before reading recovery credentials or mutating auth. */
+  reconcilePreviousWriter(): Promise<void>;
   /** Account switch only, after owned backend exit; never used by shutdown or recovery. */
   stopExternalProcesses(): Promise<void>;
   /** No argument starts the permanent home; a staging home is management-only. */

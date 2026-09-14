@@ -56,9 +56,9 @@ Switching SHALL enter changing synchronously, reject new work before connection 
 - **THEN** Host SHALL NOT repeatedly hunt replacement processes
 - **AND** success SHALL depend on target native credentials and the verified Host-owned backend, not synchronized identity across all clients
 
-### Requirement: Managed startup SHALL be owned by Account recovery
+### Requirement: Ordinary startup SHALL be independent of Account collection
 
-The dedicated management connection SHALL initialize before Desktop clients. A managed Runtime Scope MUST NOT bypass failed Account initialization by starting a backend or publishing ready itself. Known protocol incompatibility without pending state SHALL be distinguished from recovery or ownership conflicts.
+Startup SHALL determine the permanent home and inspect whether credential Journal or login-stage records exist before launching native work. Existing or unreadable pending state SHALL require recovery or remain unavailable. With no pending state, startup SHALL launch one ordinary native backend without Account preflight, probe/restart, quota or exact-version allowlist checks. Collection and optional legacy credential import SHALL run after native startup; their failure SHALL NOT restart or disable native use. Management connections MAY initialize after Desktop clients. A Scope with pending recovery MUST NOT bypass failed recovery by starting an ordinary backend or publishing ready.
 
 #### Scenario: Quota service is unavailable
 
@@ -73,18 +73,30 @@ The dedicated management connection SHALL initialize before Desktop clients. A m
 - **THEN** it SHALL use a unique management-only backend without depending on Desktop initialization
 - **AND** recovery records SHALL be interpreted before importing native credentials
 
-#### Scenario: Ordinary startup follows a retired supervisor without an exit receipt
+#### Scenario: Ordinary startup encounters a historical process record
 
-- **WHEN** no credential transaction or login stage is pending, the home lease is held, and a historical running supervisor is confirmed absent or its PID has been reused
-- **THEN** startup MAY retire that historical running record without an exit receipt and continue normal credential identity verification
-- **AND** this SHALL NOT be treated as proof that the historical process tree exited or as exit evidence for a credential change
-- **AND** live supervisors, failed identity inspection, unidentified spawn gaps and invalid or mismatched receipts SHALL remain blocked
-- **AND** pending-operation recovery, current backend stop and subsequent backend replacement SHALL retain strict exit checks
+- **WHEN** no credential transaction or login stage is pending
+- **THEN** the historical record or missing exit receipt SHALL NOT block ordinary startup and SHALL remain untouched
+- **AND** the current backend SHALL retain independently owned process supervision and exit confirmation
+- **AND** supervisor death alone SHALL NOT be treated as proof of child exit
+- **AND** pending-operation recovery and current backend stops SHALL retain strict exit checks
+
+#### Scenario: Explicit switching retires a missing historical receipt
+
+- **WHEN** the current backend has stopped, native termination has confirmed the detected external writers exited, no Journal or login stage is pending, and the historical running supervisor is confirmed retired
+- **THEN** the historical running record MAY be retired despite a missing receipt before writing the new transaction
+- **AND** a live supervisor, failed identity inspection, unidentified spawn gap, invalid record or mismatched receipt SHALL still prevent credential mutation
+
+#### Scenario: Collection is slow or fails
+
+- **WHEN** collection initialization, legacy import or backup is delayed or fails after a clean native startup
+- **THEN** native requests SHALL remain available without waiting for collection readiness or replacing the backend
+- **AND** idle collection lease loss SHALL disable management, not native work; lease loss during credential mutation SHALL retain fail-closed protection
 
 #### Scenario: Management unsupported but native use is safe
 
-- **WHEN** no transaction or ownership conflict exists and management is unavailable because of storage, key or version capability
-- **THEN** the native single-account path SHALL retain ordinary native authentication semantics without creating plaintext credential backups
+- **WHEN** no pending mutation exists and management is unavailable because of collection, storage or key capability
+- **THEN** native use SHALL retain ordinary native authentication semantics without requiring successful credential backups
 - **AND** SSH SHALL retain remote authentication without transferring local credentials
 
 #### Scenario: Recovery is blocked

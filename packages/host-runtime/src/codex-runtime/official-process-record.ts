@@ -53,11 +53,11 @@ export class OfficialProcessRecord {
     this.#supervisorExitClosesProcessTree = input.supervisorExitClosesProcessTree ?? false;
   }
 
-  /** Clean startup may retire a historical supervisor record without a receipt.
-   * The caller must hold the home lease and rule out pending credential/login
-   * transactions. This is not process-tree exit proof for a credential change.
-   * Current-process stop and backend replacement retain the strict default. */
-  async reconcile(options: { allowMissingExitReceipt?: boolean } = {}): Promise<void> {
+  /** A missing historical receipt can only be retired after native termination
+   * confirms the detected external writers exited. Caller holds the home lease
+   * and rules out pending Journal/stage records. Supervisor death alone is not
+   * process-tree exit proof. Current-process stops retain the strict default. */
+  async reconcile(options: { externalWritersStopped?: boolean } = {}): Promise<void> {
     this.#assertOwnership();
     const previous = await this.#read();
     if (!previous) {
@@ -76,11 +76,11 @@ export class OfficialProcessRecord {
       closedWindowsJob = this.#supervisorExitClosesProcessTree;
     }
     const receipt = await this.#receipt();
-    const retiredStartup =
-      options.allowMissingExitReceipt === true && previous.record.phase === "running";
+    const retiredWriter =
+      options.externalWritersStopped === true && previous.record.phase === "running";
     if (
       (receipt && receipt.tag !== previous.record.nonce) ||
-      (!receipt && !closedWindowsJob && !retiredStartup)
+      (!receipt && !closedWindowsJob && !retiredWriter)
     )
       throw new Error("Official process tree exit is unconfirmed");
     this.#assertOwnership();

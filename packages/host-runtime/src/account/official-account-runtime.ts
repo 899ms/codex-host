@@ -42,7 +42,6 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
   readonly #sharedCodexHome: string;
   readonly #readCredentials: (home: string) => Promise<NativeCodexCredentials | null>;
   readonly #environment: NodeJS.ProcessEnv;
-  readonly #version: () => Promise<string>;
   readonly #reconcile: () => Promise<void>;
   readonly #stopExternalProcesses: () => Promise<void>;
   readonly #control: OfficialClientSession;
@@ -54,9 +53,7 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
     sharedCodexHome: string;
     readCredentials(home: string): Promise<NativeCodexCredentials | null>;
     environment?: NodeJS.ProcessEnv;
-    /** Read the immutable stock executable's version without starting an app-server. */
-    nativeVersion(): Promise<string>;
-    /** Reject any previous writer whose real exit cannot be established, including orphans. */
+    /** Reject recorded historical writers whose exit cannot be established, including orphans. */
     reconcilePreviousWriter(): Promise<void>;
     stopExternalProcesses(): Promise<void>;
   }) {
@@ -64,7 +61,6 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
     this.#sharedCodexHome = input.sharedCodexHome;
     this.#readCredentials = input.readCredentials;
     this.#environment = input.environment ?? {};
-    this.#version = input.nativeVersion;
     this.#reconcile = input.reconcilePreviousWriter;
     this.#stopExternalProcesses = input.stopExternalProcesses;
     if (input.owner.running) this.#activeHome = input.sharedCodexHome;
@@ -85,8 +81,7 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
   }
 
   async preflight(): Promise<void> {
-    if (!this.#owner.running) await this.#reconcile();
-    await this.#validateVersion();
+    if (!this.#owner.running) await this.reconcilePreviousWriter();
     if (this.#owner.running) {
       await this.#configuration();
       await this.#authenticationMode();
@@ -116,6 +111,11 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
       throw new OfficialAccountVerificationError("unsupported-storage");
   }
 
+  /** Collection is optional; failure here must not stop an already running backend. */
+  async checkCredentialStorage(): Promise<void> {
+    await this.#configuration();
+  }
+
   async #configuration(): Promise<void> {
     const response = await this.#read("config/read", { includeLayers: true });
     if (!object(response.config))
@@ -143,11 +143,13 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
 
   async stop(): Promise<void> {
     await this.#owner.stop();
-    await this.#reconcile();
     this.#activeHome = undefined;
   }
+  async reconcilePreviousWriter(): Promise<void> {
+    if (this.#owner.running) throw new OfficialAdmissionError("busy");
+    await this.#reconcile();
+  }
   async start(stagingHome?: string): Promise<void> {
-    await this.#validateVersion();
     const wasRunning = this.#owner.running;
     try {
       await this.#owner.start(
@@ -165,12 +167,12 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
     }
   }
 
-  controlRequest(method: string, params: JsonObject): Promise<JsonObject> {
+  async controlRequest(method: string, params: JsonObject): Promise<JsonObject> {
+    await this.#control.initialize(managementInitialization);
     return this.#owner.controlRequest(method, params);
   }
 
   async verify(identity: CodexCredentialIdentity | null): Promise<void> {
-    await this.#validateVersion();
     await this.#configuration();
     const home = this.#activeHome;
     if (!home) throw new OfficialAccountVerificationError("invalid-native-response");
@@ -196,19 +198,6 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
       throw new OfficialAccountVerificationError("authentication-failed");
   }
 
-  async #validateVersion(): Promise<void> {
-    let version: string;
-    try {
-      version = await this.#version();
-    } catch {
-      throw new OfficialAccountVerificationError("unsupported-version");
-    }
-    // Exact versions exercised by the isolated real-CLI lifecycle probe. Renderer
-    // compatibility alone is not evidence of native authentication semantics.
-    if (!["0.153.4", "0.154.0-alpha.6.2"].includes(version))
-      throw new OfficialAccountVerificationError("unsupported-version");
-  }
-
   subscribe(listener: (value: JsonValue) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
@@ -217,7 +206,7 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
   async #read(method: string, params: JsonObject): Promise<JsonObject> {
     let result: JsonObject;
     try {
-      result = await this.#owner.controlRequest(method, params);
+      result = await this.controlRequest(method, params);
     } catch {
       throw new OfficialAccountVerificationError("invalid-native-response");
     }

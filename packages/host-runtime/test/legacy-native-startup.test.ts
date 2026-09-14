@@ -223,6 +223,7 @@ describe("legacy layout to native Account switching composition", () => {
         await client.initializeProtocol({
           clientInfo: { name: "synthetic-desktop", version: "test" },
         });
+        await prepared.accountControl.refresh?.();
         const initial = prepared.accountControl.snapshot();
         expect(initial).toMatchObject({
           phase: "ready",
@@ -262,6 +263,7 @@ describe("legacy layout to native Account switching composition", () => {
       // Existing managed state in the selected home is recovered, not mistaken for a foreign layout.
       const restarted = await prepareLocalCodex(f.input);
       try {
+        await restarted.accountControl.refresh?.();
         expect(restarted.accountControl.snapshot().accounts).toHaveLength(2);
         expect(restarted.accountControl.snapshot().phase).toBe("ready");
         expect(native.quotaRequests).toBe(0);
@@ -275,6 +277,7 @@ describe("legacy layout to native Account switching composition", () => {
     const f = await fixture();
     const prepared = await prepareLocalCodex(f.input);
     try {
+      await prepared.accountControl.refresh?.();
       const initial = prepared.accountControl.snapshot();
       const other = initial.accounts.find(
         (account) => account.accountId !== initial.currentAccountId,
@@ -304,8 +307,11 @@ describe("legacy layout to native Account switching composition", () => {
       f.files.seed(directory, "transaction.json", "unresolved");
       const prepared = await prepareLocalCodex(f.input);
       try {
-        expect(prepared.accountControl.snapshot().capabilities.switch).toBe(false);
-        expect(native.launches).toHaveLength(0);
+        await prepared.accountControl.refresh?.();
+        expect(prepared.officialRuntimeScope.gate.phase).toBe(
+          location === "current" ? "unavailable" : "ready",
+        );
+        expect(native.launches).toHaveLength(location === "current" ? 0 : 1);
         expect(await readFile(path.join(directory, "transaction.json"), "utf8")).toBe("unresolved");
       } finally {
         await prepared.close();
@@ -319,6 +325,7 @@ describe("legacy layout to native Account switching composition", () => {
       const f = await fixture(storage);
       const prepared = await prepareLocalCodex(f.input);
       try {
+        await prepared.accountControl.refresh?.();
         expect(prepared.accountControl.snapshot().capabilities).toMatchObject({
           switch: false,
           reason: "unsupported-storage",
@@ -332,16 +339,17 @@ describe("legacy layout to native Account switching composition", () => {
     },
   );
 
-  it("does not start or import when the selected Account uses another home", async () => {
+  it("uses the official home without importing a different legacy selection", async () => {
     const f = await fixture("file", "other");
     const prepared = await prepareLocalCodex(f.input);
     try {
-      expect(prepared.accountControl.snapshot().capabilities.switch).toBe(false);
-      await expect(prepared.officialRuntimeScope.start()).rejects.toThrow();
-      expect(native.launches).toHaveLength(0);
-      expect(
-        f.files.peek(path.join(f.home, ".codexhost-native-accounts"), "vault.json"),
-      ).toBeNull();
+      await prepared.accountControl.refresh?.();
+      await prepared.officialRuntimeScope.start();
+      expect(native.launches).toHaveLength(1);
+      expect(prepared.accountControl.snapshot().accounts).toHaveLength(1);
+      expect(f.files.peek(f.home, "auth.json")?.toString()).toBe(
+        credential("a").serializeForNativeStore(),
+      );
     } finally {
       await prepared.close();
     }

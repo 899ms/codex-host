@@ -624,7 +624,7 @@ export class AppServerHost {
           accountId: (await this.#currentCodexAccountId()) ?? "signed-out",
         }),
     });
-    this.#nativeAccountObserver = this.#accountControl.snapshot().capabilities.manage
+    this.#nativeAccountObserver = this.#accountControl.refresh
       ? new NativeAccountObserver({
           control: this.#accountControl,
           scope: this.#officialRuntimeScope,

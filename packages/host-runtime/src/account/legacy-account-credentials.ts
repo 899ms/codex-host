@@ -11,15 +11,15 @@ import {
   validateVault,
 } from "./native-profile-vault.js";
 
-/** Adopt credentials, not native histories. Caller holds exclusive Account admission,
- * has verified the permanent native identity/storage, and has stopped its backend.
- * Every source is read-only; one Vault CAS records both Accounts and provenance. */
+/** Adopt credentials, not native histories. Caller serializes collection operations
+ * and has verified permanent native storage. Native writers may remain running:
+ * sources are read-only and rechecked; one Vault CAS records Accounts and provenance. */
 export async function importLegacyAccountCredentials(input: {
   store: NativeAccountStore;
   registryDigest: string;
   homes: readonly string[];
   readCredentials(home: string): Promise<NativeCodexCredentials | null>;
-  /** Revalidate source layout and owned-process exit while stopped. */
+  /** Revalidate source layout and collection ownership without changing native auth. */
   assertAdmission(): Promise<void>;
 }): Promise<void> {
   const { store } = input;

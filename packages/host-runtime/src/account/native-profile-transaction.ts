@@ -57,12 +57,12 @@ export class NativeProfileTransaction {
   ): Promise<void> {
     let stopping = false,
       stopped = false;
-    const observed = await this.store.readCredentials();
     const before: NativeProfileSelection = {
       ...this.store.vault,
       currentAccountId: this.store.currentAccountId,
     };
     try {
+      const observed = await this.store.readCredentials();
       matchProfile(observed, profileCurrent(before));
       if (await this.store.readJournal()) throw new NativeAccountError("recovery-required");
       const target =
@@ -76,6 +76,9 @@ export class NativeProfileTransaction {
       await this.runtime.stop();
       stopped = true;
       if (stopExternalProcesses) await this.runtime.stopExternalProcesses();
+      await this.runtime.reconcilePreviousWriter().catch(() => {
+        throw new NativeTransitionError("stop-unconfirmed", false);
+      });
       // Exit retires native work, but does not prove unrelated Host credential
       // refresh requests have finished. Never clear their leases to force success.
       if (this.runtime.gate.busy) throw new OfficialAdmissionError("busy");
@@ -112,6 +115,7 @@ export class NativeProfileTransaction {
       await this.store.writeJournal(journal);
       await this.#finishTarget(journal);
     } catch (error) {
+      if (error instanceof NativeTransitionError && !error.ready) throw error;
       if (!stopping)
         throw new NativeTransitionError(safeCode(error), this.runtime.gate.phase !== "unavailable");
       if (!stopped) throw new NativeTransitionError("stop-unconfirmed", false);
@@ -137,11 +141,12 @@ export class NativeProfileTransaction {
     }
   }
 
-  /** All previous native writers must be reconciled before any credential inspection. */
+  /** Inspect the Journal first; stop writers before inspecting or replacing credentials. */
   async recover(rollback = false): Promise<"source" | "target" | "none"> {
-    await this.runtime.stop();
     const journal = await this.store.readJournal();
     if (!journal) return "none";
+    await this.runtime.stop();
+    await this.runtime.reconcilePreviousWriter();
     const actual = await this.store.readCredentials();
     const decision = decideProfileRecovery(journal, await this.store.reload(), actual);
     if (decision === "manual") throw new NativeAccountError("recovery-required");

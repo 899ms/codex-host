@@ -87,9 +87,11 @@ export class NativeCodexAccounts implements CodexAccountControl {
     this.#unsubscribe = input.runtime.subscribe((value) => this.observe(value));
   }
   snapshot(): CodexAccountListResult {
+    let available = true;
     try {
       this.#lastVault = this.#store.vault;
     } catch {
+      available = false;
       /* Keep nonsecret committed metadata visible on lease loss. */
     }
     const phase = this.#runtime.gate.phase;
@@ -106,12 +108,13 @@ export class NativeCodexAccounts implements CodexAccountControl {
         ? { pendingOperation: { operationId: this.#pending.operationId, kind: this.#pending.kind } }
         : {}),
       capabilities: {
-        manage: true,
-        switch: phase === "ready",
-        login: phase === "ready",
-        delete: phase === "ready",
-        recover: phase === "unavailable",
-        logout: phase === "ready",
+        manage: available,
+        switch: available && phase === "ready",
+        login: available && phase === "ready",
+        delete: available && phase === "ready",
+        recover: available && phase === "unavailable",
+        logout: available && phase === "ready",
+        ...(!available ? { reason: "unsupported-storage" as const } : {}),
         ...(phase === "unavailable" ? { reason: "recovery-required" as const } : {}),
       },
       accounts: this.#lastVault.accounts.map(({ accountId, label, email, planType, payload }) => ({
@@ -139,7 +142,8 @@ export class NativeCodexAccounts implements CodexAccountControl {
   }
 
   async initialize(): Promise<void> {
-    await this.recover();
+    if ((await this.#store.readJournal()) || (await this.#store.readStage())) await this.recover();
+    else await this.refresh();
     await this.#quotas
       .initialize(new Set(this.#store.vault.accounts.map((a) => a.accountId)))
       .catch(() => undefined);
@@ -152,6 +156,8 @@ export class NativeCodexAccounts implements CodexAccountControl {
       await this.#transaction.recover();
       const stage = await this.#store.readStage();
       if (stage) {
+        await this.#runtime.stop();
+        await this.#runtime.reconcilePreviousWriter();
         if (stage.candidate) await this.#applyVerifiedStage(stage);
         else await this.#store.clearStage(stage);
       }
@@ -182,25 +188,33 @@ export class NativeCodexAccounts implements CodexAccountControl {
   async #changeCredential(accountId: string | null, kind: "switch" | "logout"): Promise<void> {
     const operationId = randomUUID();
     const change = this.#begin(kind, false, operationId, { stopWork: true });
+    let attempted = false;
     try {
       await this.#store.captureCurrent();
       if (this.#store.currentAccountId !== accountId) {
+        attempted = true;
         await this.#transaction.execute(accountId, undefined, operationId, kind === "switch");
-        await this.#store.captureCurrent();
+        // The committed transition is authoritative even if its extra backup fails.
+        await this.#store.captureCurrent().catch(() => undefined);
       }
       if (!this.#finish(change, true)) throw new NativeTransitionError("recovery-required", false);
     } catch (error) {
-      const restored = error instanceof NativeTransitionError && error.ready;
-      // Compensation can refresh either grant. Collect the resumed source too,
-      // but never synchronize over an unresolved Journal.
-      const ready =
-        restored &&
-        (await this.#store.captureCurrent().then(
-          () => true,
-          () => false,
-        ));
+      let restored =
+        error instanceof NativeTransitionError
+          ? error.ready
+          : !attempted && this.#runtime.gate.phase !== "unavailable";
+      // A failed backup is harmless only when no unfinished mutation is hidden
+      // behind it. Compensation may also refresh the resumed source grant.
+      if (restored) {
+        try {
+          restored = !(await this.#store.readJournal()) && !(await this.#store.readStage());
+        } catch {
+          restored = false;
+        }
+        if (restored) await this.#store.captureCurrent().catch(() => undefined);
+      }
+      const ready = this.#finish(change, restored);
       this.#cleanupRequired = !ready;
-      this.#finish(change, ready);
       if (restored && !ready) throw new NativeTransitionError("recovery-required", false);
       throw error;
     }
@@ -270,6 +284,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
       assertNotCancelled();
       stopping = true;
       await this.#runtime.stop();
+      await this.#runtime.reconcilePreviousWriter();
       change.assertIdle();
       await this.#store.captureCurrent();
       assertNotCancelled();
