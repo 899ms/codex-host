@@ -721,7 +721,7 @@ describe("Codex UI projector", () => {
         turnId,
         item: { type: "agentMessage", itemId: agentId, text: "" },
       }).messages,
-    ).toMatchObject([{ path: "empty.txt", kind: "delete" }]);
+    ).toEqual([]);
     expect(
       value.project({
         type: "item.started",
@@ -1892,6 +1892,6 @@ describe("Codex UI projector", () => {
     ).toMatchObject({ oldText: "  old\\n", newText: "" });
     expect(
       coalesceFileChanges([write, { path: "empty.txt", kind: "delete", unifiedDiff: "" }]),
-    ).toEqual([]);
+    ).toMatchObject([{ path: "empty.txt", kind: "delete" }]);
   });
 });
