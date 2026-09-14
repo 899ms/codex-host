@@ -78,6 +78,6 @@ describe("production Controller / Renderer Agent contract", () => {
     );
     expect(
       client.command.mock.calls.filter(([method]) => method === "Runtime.evaluate"),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 });
