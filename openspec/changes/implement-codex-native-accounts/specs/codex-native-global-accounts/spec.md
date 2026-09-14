@@ -15,7 +15,7 @@ Managed Codex SHALL use one canonical permanent home and at most one live Host-o
 - **AND** a closed transport alone SHALL NOT count as proof of process-tree exit
 
 ### Requirement: Account switching SHALL stop native backends without an idle scan
-Switching SHALL enter changing synchronously, reject new work before connection or automatic startup, stop the owned backend and then the detected external Codex backends before replacing credentials. Login and logout SHALL also enter changing and stop the owned backend without scanning Threads, but SHALL NOT invoke external backend termination. Account admission SHALL track outstanding request leases, not native task activity, and SHALL NOT probe queues in response to native activity. Recovery SHALL stop the owned backend before credential mutation; saved-Account deletion SHALL NOT stop it. Both SHALL retain request-lease and ownership checks without waiting for acknowledged native tasks to complete.
+Switching SHALL enter changing synchronously, reject new work before connection or automatic startup, stop the owned backend and then the detected external Codex backends before replacing credentials. Login and logout SHALL also enter changing and stop the owned backend without scanning Threads, but SHALL NOT invoke external backend termination. Account admission SHALL track outstanding request leases, not native task activity, and SHALL NOT probe queues in response to native activity. Recovery SHALL stop the owned backend before credential mutation; saved-Account deletion SHALL NOT stop it. Recovery SHALL retain all request-lease and ownership checks without waiting for acknowledged native tasks to complete. Saved-Account deletion SHALL retain ownership and independent Host credential-writer checks, but ordinary native requests SHALL NOT block it.
 
 #### Scenario: Native requests and work are pending
 - **WHEN** the user switches, starts login or logs out while native requests, including quota reads, or native work are pending
@@ -29,6 +29,12 @@ Switching SHALL enter changing synchronously, reject new work before connection 
 - **THEN** that activity SHALL NOT block saved-Account deletion or recovery admission
 - **AND** native requests and notifications SHALL continue through their normal routing without additional queue probes
 - **AND** recovery SHALL still require owned-process exit proof before changing credentials
+
+#### Scenario: Delete an inactive Account while native requests are pending
+- **WHEN** the user confirms deletion of saved B while ordinary native requests for current A or Account-list refreshes are pending
+- **THEN** Host SHALL delete B without stopping the backend, changing native authentication, or clearing existing request leases
+- **AND** concurrent Account changes and new credential writers SHALL remain excluded during collection mutation
+- **AND** an in-flight independent Host OAuth credential write SHALL still reject deletion as busy until it finishes; the user may then retry explicitly
 
 #### Scenario: A quota request times out or its client detaches
 - **WHEN** a local quota request times out or its client detaches while the owned backend remains available

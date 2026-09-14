@@ -85,7 +85,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
       credentials: input.store,
       ...(input.fetch ? { fetch: input.fetch } : {}),
       admitCredentialRefresh: (accountId) => {
-        const release = this.#runtime.gate.admit();
+        const release = this.#runtime.gate.admit("credential-write");
         if (accountId === this.currentAccountId()) {
           release();
           throw new NativeAccountError("credential-conflict");
@@ -217,7 +217,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
   async remove(accountId: string): Promise<void> {
     await this.refresh();
     const before = this.#store.vault;
-    const change = this.#begin("switch");
+    const change = this.#begin("switch", false, randomUUID(), { collectionOnly: true });
     try {
       await this.#store.mutate((next) => {
         if (this.#store.currentAccountId === accountId)
@@ -547,6 +547,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
     options: {
       cancelStarting?: () => Promise<boolean>;
       stopWork?: boolean;
+      collectionOnly?: boolean;
     } = {},
   ): OfficialChangeLease {
     if (this.#pending) throw new OfficialAdmissionError("changing");
@@ -555,7 +556,9 @@ export class NativeCodexAccounts implements CodexAccountControl {
     try {
       const lease = options.stopWork
         ? this.#runtime.gate.beginStoppingChange()
-        : this.#runtime.gate.beginChange(recovery);
+        : options.collectionOnly
+          ? this.#runtime.gate.beginCollectionChange()
+          : this.#runtime.gate.beginChange(recovery);
       this.#pending.lease = lease;
       return lease;
     } catch (error) {

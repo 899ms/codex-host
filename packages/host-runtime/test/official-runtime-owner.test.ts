@@ -332,7 +332,35 @@ describe("single official runtime owner", () => {
     }
   });
 
-  it("keeps non-stopping changes blocked by pending credential reads", async () => {
+  it("settles existing native RPCs normally during a saved-Account collection change", async () => {
+    const f = fixture();
+    const { client } = f.attach();
+    try {
+      await f.owner.start();
+      await client.initialize(initialization);
+      f.gate.initialized();
+      f.connection().setResponse(() => null);
+      const result = client.request("model/list", {});
+      await vi.waitFor(() =>
+        expect(f.connection().requests.some((request) => request.method === "model/list")).toBe(
+          true,
+        ),
+      );
+      const request = f.connection().requests.find((request) => request.method === "model/list");
+      if (!request) throw new Error("Missing synthetic native request");
+      const change = f.gate.beginCollectionChange();
+      f.connection().stdout.write(`${JSON.stringify({ id: request.id, result: { data: [] } })}\n`);
+      await expect(result).resolves.toMatchObject({ result: { data: [] } });
+      expect(f.gate.busy).toBe(false);
+      change.finish("ready");
+      expect(f.gate.phase).toBe("ready");
+    } finally {
+      await f.owner.stop();
+      client.close();
+    }
+  });
+
+  it("keeps credential replacement and recovery blocked by pending credential reads", async () => {
     const f = fixture();
     const { client } = f.attach();
     try {
