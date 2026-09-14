@@ -319,7 +319,6 @@ describe("legacy layout to native Account switching composition", () => {
       const f = await fixture(storage);
       const prepared = await prepareLocalCodex(f.input);
       try {
-        expect(prepared.allowNativeAuthPassthrough).toBe(true);
         expect(prepared.accountControl.snapshot().capabilities).toMatchObject({
           switch: false,
           reason: "unsupported-storage",

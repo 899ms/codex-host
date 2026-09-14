@@ -449,7 +449,6 @@ describe("local native Account composition", () => {
   it("allows native authentication pass-through with no launcher and no managed state", async () => {
     const f = await fixture();
     const prepared = await prepareLocalCodex(f.input({ launcher: "" }));
-    expect(prepared.allowNativeAuthPassthrough).toBe(true);
     expect(prepared.accountControl.snapshot().capabilities.reason).toBe("unsupported-storage");
     expect(native.state.fileConstructions).toBe(0);
     await prepared.close();
@@ -459,7 +458,6 @@ describe("local native Account composition", () => {
     const f = await fixture();
     await mkdir(path.join(f.home, ".codexhost-native-accounts"));
     const prepared = await prepareLocalCodex(f.input({ launcher: "" }));
-    expect(prepared.allowNativeAuthPassthrough).toBe(false);
     expect(prepared.accountControl.snapshot().capabilities.reason).toBe("recovery-required");
     expect(native.state.fileConstructions).toBe(0);
     await expect(prepared.officialRuntimeScope.start()).rejects.toMatchObject({
@@ -498,7 +496,6 @@ describe("local native Account composition", () => {
     const input = f.input({ sharedListener: true });
     const prepared = await prepareLocalCodex(input);
     try {
-      expect(prepared.allowNativeAuthPassthrough).toBe(true);
       expect(prepared.accountControl.snapshot().capabilities).toMatchObject({
         manage: false,
         switch: false,
@@ -536,7 +533,6 @@ describe("local native Account composition", () => {
     });
     const prepared = await prepareLocalCodex(f.input({ sharedListener: true }));
     try {
-      expect(prepared.allowNativeAuthPassthrough).toBe(true);
       expect(prepared.accountControl.snapshot().capabilities).toMatchObject({
         manage: false,
         switch: false,
@@ -571,7 +567,6 @@ describe("local native Account composition", () => {
         launcher: "",
       }),
     );
-    expect(prepared.allowNativeAuthPassthrough).toBe(false);
     await expect(prepared.officialRuntimeScope.start()).rejects.toMatchObject({
       code: "unavailable",
     });
@@ -592,7 +587,6 @@ describe("local native Account composition", () => {
         },
       });
       const prepared = await prepareLocalCodex(f.input({ sharedListener: true }));
-      expect(prepared.allowNativeAuthPassthrough).toBe(true);
       native.current().layout = {
         kind: "migration-required",
         reason: "multiple-homes",
@@ -612,7 +606,6 @@ describe("local native Account composition", () => {
   it("initializes normal account management without an available keyring", async () => {
     const f = await fixture({ keyAvailable: false });
     const prepared = await prepareLocalCodex(f.input());
-    expect(prepared.allowNativeAuthPassthrough).toBe(false);
     expect(prepared.accountControl.snapshot().capabilities.manage).toBe(true);
     expect(f.files.activeLeases).toBe(1);
 
@@ -632,7 +625,6 @@ describe("local native Account composition", () => {
         Buffer.from("pending"),
       );
       const prepared = await prepareLocalCodex(f.input());
-      expect(prepared.allowNativeAuthPassthrough).toBe(false);
       expect(prepared.accountControl.snapshot().capabilities.reason).toBe("recovery-required");
       expect(native.current().events).toEqual(["lease-release"]);
       expect(f.files.activeLeases).toBe(0);
@@ -724,7 +716,6 @@ describe("local native Account composition", () => {
   it("does not start a competing backend when previous-writer reconciliation is unconfirmed", async () => {
     const f = await fixture({ keyAvailable: false, reconcileError: new Error("writer active") });
     const prepared = await prepareLocalCodex(f.input());
-    expect(prepared.allowNativeAuthPassthrough).toBe(false);
     expect(prepared.officialRuntimeScope.gate.phase).toBe("unavailable");
     expect(native.current().events).not.toContain("backend-start");
     await prepared.close();
@@ -736,7 +727,6 @@ describe("local native Account composition", () => {
       const error = Object.assign(new Error(code), { code });
       const f = await fixture({ initializationError: error });
       const prepared = await prepareLocalCodex(f.input());
-      expect(prepared.allowNativeAuthPassthrough).toBe(true);
       expect(prepared.accountControl.snapshot().capabilities.reason).toBe(code);
       expect(f.files.activeLeases).toBe(1);
       expect(native.current().events).toEqual(["runtime-stop", "accounts-close"]);
@@ -751,7 +741,6 @@ describe("local native Account composition", () => {
       startBeforeInitializationError: true,
     });
     const prepared = await prepareLocalCodex(f.input());
-    expect(prepared.allowNativeAuthPassthrough).toBe(false);
     expect(prepared.accountControl.snapshot()).toMatchObject({
       phase: "unavailable",
       capabilities: { reason: "recovery-required", recover: true },

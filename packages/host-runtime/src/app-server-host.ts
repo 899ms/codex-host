@@ -1,5 +1,5 @@
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
-import { ManagedNativeAuth } from "./managed-native-auth.js";
+import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
 import type { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -233,8 +233,6 @@ export interface AppServerHostOptions {
   createOfficialConnection?: () =>
     OfficialAppServerConnection | Promise<OfficialAppServerConnection>;
   accountControl?: CodexAccountControl;
-  /** Explicitly permit stock native login/logout in unmanaged or fallback mode. */
-  allowNativeAuthPassthrough?: boolean;
   /** Shared by all Desktop/Remote Control sessions belonging to one Host. */
   officialRuntimeScope?: OfficialRuntimeScope;
   onCreateRequestRoute?: (observation: CreateRequestRouteObservation) => void;
@@ -525,8 +523,7 @@ export class AppServerHost {
   #officialRuntimeScope: OfficialRuntimeScope;
   #ownsOfficialRuntimeScope: boolean;
   #accountControl: CodexAccountControl;
-  #managedAccountControl: boolean;
-  #managedNativeAuth: ManagedNativeAuth | undefined;
+  #nativeAccountObserver: NativeAccountObserver | undefined;
   #externalAdapters: Map<ExternalHarnessId, HarnessAdapter>;
   #pluginDescriptors: HarnessPluginDescriptor[] = [];
   readonly #accountInspections = new HarnessAccountInspectionCache();
@@ -570,15 +567,12 @@ export class AppServerHost {
     this.#writer = new OrderedWriter(this.#options.desktopOutput);
     const environment = this.#options.environment ?? process.env;
     const permanentHome = path.resolve(environment.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
-    const allowNativeAuthPassthrough =
-      options.allowNativeAuthPassthrough ?? options.accountControl === undefined;
     this.#ownsOfficialRuntimeScope = options.officialRuntimeScope === undefined;
     this.#officialRuntimeScope =
       options.officialRuntimeScope ??
       new OfficialRuntimeScope({
         diagnosticOutput: this.#options.diagnosticOutput,
         permanentHome,
-        allowNativeAuthPassthrough,
         createBackend: (role) =>
           createOwnedConnectionBackend(() =>
             options.createOfficialConnection
@@ -596,9 +590,6 @@ export class AppServerHost {
                 }),
           ),
       });
-    this.#managedAccountControl = !(
-      options.allowNativeAuthPassthrough ?? options.accountControl === undefined
-    );
     this.#accountControl =
       options.accountControl ??
       new SingleNativeCodexAccount(() => ({
@@ -633,12 +624,13 @@ export class AppServerHost {
           accountId: (await this.#currentCodexAccountId()) ?? "signed-out",
         }),
     });
-    this.#managedNativeAuth = this.#managedAccountControl
-      ? new ManagedNativeAuth({
+    this.#nativeAccountObserver = this.#accountControl.snapshot().capabilities.manage
+      ? new NativeAccountObserver({
           control: this.#accountControl,
           scope: this.#officialRuntimeScope,
           notify: (method, params) => this.#writer.json({ method, params }),
-          diagnose: () => this.#diagnose("Codex Account notification could not be delivered"),
+          diagnose: () =>
+            this.#diagnose("Codex Account backup or notification could not be updated"),
         })
       : undefined;
     this.#unsubscribeAccountState = this.#officialRuntimeScope.gate.subscribe(() => {
@@ -718,7 +710,7 @@ export class AppServerHost {
   }
 
   async #closeOfficialRuntime(): Promise<void> {
-    this.#managedNativeAuth?.close();
+    this.#nativeAccountObserver?.close();
     if (this.#ownsOfficialRuntimeScope) await this.#officialRuntimeScope.close();
     await this.#officialRuntime.close();
   }
@@ -904,7 +896,7 @@ export class AppServerHost {
               : undefined;
           const response = await this.#officialRuntime.initializeProtocol(requestObject(request));
           await this.#writer.json({ ...response, id: request.id });
-          this.#managedNativeAuth?.initialized(nativeGeneration);
+          this.#nativeAccountObserver?.initialized(nativeGeneration);
         } catch (error) {
           await this.#writer.json(rpcError(request, -32087, errorMessage(error)));
         }
@@ -1447,13 +1439,6 @@ export class AppServerHost {
         );
         return;
       }
-      if (
-        this.#managedAccountControl &&
-        ["account/login/start", "account/login/cancel", "account/logout"].includes(request.method)
-      ) {
-        await this.#handleManagedNativeAuthRequest(request);
-        return;
-      }
       await this.#officialRuntime.sendFrame(frame);
     } catch {
       if (request.method === "turn/start") {
@@ -1463,21 +1448,6 @@ export class AppServerHost {
       await this.#writer.json(
         rpcError(request, -32001, "Official request failed; retry explicitly"),
       );
-    }
-  }
-
-  async #handleManagedNativeAuthRequest(request: JsonRpcRequest): Promise<void> {
-    try {
-      if (!this.#managedNativeAuth) throw new Error("Native Account control is unavailable");
-      // Native Desktop omits params for logout; no-argument RPCs may also use null.
-      const params =
-        request.method === "account/logout" && request.params == null ? {} : requestObject(request);
-      await this.#managedNativeAuth.request(request.method, params, (result) =>
-        this.#writer.json(rpcEnvelope(request, { result })),
-      );
-    } catch (error) {
-      const failure = codexAccountRpcError(error);
-      await this.#writer.json(rpcError(request, failure.code, failure.message));
     }
   }
 
@@ -1527,8 +1497,8 @@ export class AppServerHost {
           .catch(() => undefined);
       }
     }
-    if (accountScopedNotification && input.accountId !== (await this.#currentCodexAccountId()))
-      return;
+    // Owner already rejects retired generations. Native account notifications
+    // must not be filtered against a credential collection that may lag behind.
     try {
       await this.#observeOfficialTurnLifecycle(parsed);
     } catch (error) {
@@ -1537,6 +1507,7 @@ export class AppServerHost {
     this.#routeObservationTracker.bindOfficialResponse(parsed);
     if (forwarded === parsed) await this.#writer.frame(input.frame);
     else await this.#writer.json(forwarded);
+    this.#nativeAccountObserver?.observe(parsed);
   }
 
   async #requestOfficial(method: string, params: JsonObject): Promise<JsonObject> {

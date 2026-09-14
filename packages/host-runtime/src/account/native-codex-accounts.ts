@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { JsonObject, JsonValue } from "@codexhost/protocol-core";
 import {
   codexAccountLoginStartResultSchema,
-  jsonObjectSchema,
   type AccountCreditsSnapshot,
   type CodexAccountListResult,
   type CodexAccountLoginCompleted,
@@ -25,13 +24,7 @@ import { NativeAccountQuotas } from "./native-account-quotas.js";
 import { NativeProfileTransaction, NativeTransitionError } from "./native-profile-transaction.js";
 import { NativeAccountError, type NativeProfileVault } from "./native-profile-vault.js";
 import { sameCodexCredentialIdentity } from "./native-codex-credentials.js";
-import {
-  nativeChatgptLoginParamsSchema,
-  nativeChatgptLoginResponseSchema,
-  type NativeChatgptLogin,
-  type NativeChatgptLoginCompleted,
-  type NativeChatgptLoginParams,
-} from "./native-chatgpt-login.js";
+import { nativeDeviceCodeLoginResponseSchema } from "./native-device-code-login.js";
 
 interface PendingLogin {
   stage: NativeLoginStage;
@@ -45,8 +38,6 @@ interface PendingLogin {
   starting: Promise<void>;
   finishStart(): void;
   acceptingEvents: boolean;
-  completion: PromiseWithResolvers<NativeChatgptLoginCompleted>;
-  onboardingEntrypoint: NativeChatgptLoginCompleted["onboardingEntrypoint"];
 }
 const object = (value: JsonValue | undefined): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -248,27 +239,8 @@ export class NativeCodexAccounts implements CodexAccountControl {
     }
   }
 
+  /** Settings-only addition/re-login; Desktop authentication goes directly to Codex. */
   async startLogin(accountId?: string): Promise<CodexAccountLoginStartResult> {
-    const started = await this.#startLogin({ type: "chatgptDeviceCode" }, accountId, false);
-    if (started.response.type !== "chatgptDeviceCode")
-      throw new NativeAccountError("authentication-failed");
-    return codexAccountLoginStartResultSchema.parse({
-      accountId: started.accountId,
-      loginId: started.response.loginId,
-      verificationUrl: started.response.verificationUrl,
-      userCode: started.response.userCode,
-    });
-  }
-
-  async startNativeLogin(params: NativeChatgptLoginParams): Promise<NativeChatgptLogin> {
-    return this.#startLogin(nativeChatgptLoginParamsSchema.parse(params), undefined, true);
-  }
-
-  async #startLogin(
-    params: NativeChatgptLoginParams,
-    accountId: string | undefined,
-    activateOnSuccess: boolean,
-  ): Promise<NativeChatgptLogin & { accountId: string }> {
     const operationId = randomUUID();
     const starting = Promise.withResolvers<undefined>();
     let cancelledBeforeStage = false;
@@ -301,7 +273,7 @@ export class NativeCodexAccounts implements CodexAccountControl {
       change.assertIdle();
       await this.#store.captureCurrent();
       assertNotCancelled();
-      const stage = await this.#store.createStage(accountId, operationId, { activateOnSuccess });
+      const stage = await this.#store.createStage(accountId, operationId);
       pending = {
         stage,
         accountId: accountId ?? randomUUID(),
@@ -312,21 +284,17 @@ export class NativeCodexAccounts implements CodexAccountControl {
         starting: starting.promise,
         finishStart: () => starting.resolve(undefined),
         acceptingEvents: false,
-        completion: Promise.withResolvers<NativeChatgptLoginCompleted>(),
-        onboardingEntrypoint: null,
       };
       this.#login = pending;
       this.#pending = { operationId: stage.operationId, kind: "login", lease: change };
       assertNotCancelled();
       await this.#runtime.start(this.#store.stageHome(stage));
       assertNotCancelled();
-      const requestParams = jsonObjectSchema.parse(
-        Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined)),
-      );
-      const response = await this.#runtime.controlRequest("account/login/start", requestParams);
-      const native = nativeChatgptLoginResponseSchema.parse(response.result);
-      if (response.error || native.type !== params.type)
-        throw new NativeAccountError("authentication-failed");
+      const response = await this.#runtime.controlRequest("account/login/start", {
+        type: "chatgptDeviceCode",
+      });
+      if (response.error) throw new NativeAccountError("authentication-failed");
+      const native = nativeDeviceCodeLoginResponseSchema.parse(response.result);
       stage.nativeLoginId = native.loginId;
       await this.#store.writeStage(stage);
       pending.finishStart();
@@ -341,11 +309,12 @@ export class NativeCodexAccounts implements CodexAccountControl {
       pending.timeout.unref();
       // Native completion can precede its start response. Buffer by this operation, not globally.
       for (const value of pending.early.splice(0)) this.observe(value);
-      return {
+      return codexAccountLoginStartResultSchema.parse({
         accountId: pending.accountId,
-        response: { ...native, loginId: stage.operationId },
-        completed: pending.completion.promise,
-      };
+        loginId: stage.operationId,
+        verificationUrl: native.verificationUrl,
+        userCode: native.userCode,
+      });
     } catch (error) {
       pending?.finishStart();
       if (pending && this.#login !== pending) throw new NativeAccountError("authentication-failed");
@@ -397,8 +366,6 @@ export class NativeCodexAccounts implements CodexAccountControl {
       return;
     }
     if (value.params.loginId !== pending.stage.nativeLoginId) return;
-    pending.onboardingEntrypoint =
-      value.params.onboardingEntrypoint === "life_sciences" ? "life_sciences" : null;
     void this.#settle(pending, value.params.success);
   }
   #settle(pending: PendingLogin, success: boolean): Promise<void> {
@@ -484,13 +451,6 @@ export class NativeCodexAccounts implements CodexAccountControl {
             ? "Codex Account saved; recovery is required"
             : "Codex Account sign-in did not complete",
       };
-      const nativeSuccess = completed && ready && this.currentAccountId() === pending.accountId;
-      pending.completion.resolve({
-        loginId: pending.stage.operationId,
-        success: nativeSuccess,
-        error: nativeSuccess ? null : (result.error ?? "Codex Account recovery is required"),
-        onboardingEntrypoint: pending.onboardingEntrypoint,
-      });
       for (const listener of this.#listeners) {
         try {
           listener(result);

@@ -20,7 +20,7 @@ export interface OfficialChangeLease {
 export class OfficialWorkGate {
   #phase: OfficialAccountPhase = "unavailable";
   #revision = 0;
-  readonly #requests = new Map<symbol, "request" | "credential-write">();
+  readonly #requests = new Map<symbol, "request" | "credential-write" | "native-auth">();
   readonly #listeners = new Set<() => void>();
   #change: symbol | undefined;
 
@@ -44,7 +44,7 @@ export class OfficialWorkGate {
     if (this.#change || this.busy) throw new OfficialAdmissionError("busy");
     this.#publish("ready");
   }
-  admit(kind: "request" | "credential-write" = "request"): () => void {
+  admit(kind: "request" | "credential-write" | "native-auth" = "request"): () => void {
     if (this.#phase !== "ready") throw new OfficialAdmissionError(this.#phase);
     const request = Symbol();
     this.#requests.set(request, kind);
@@ -76,7 +76,13 @@ export class OfficialWorkGate {
     // finish normally. Independent Host OAuth writers must still finish first.
     const blocked = () =>
       mode === "collection" ? [...this.#requests.values()].includes("credential-write") : this.busy;
-    if (mode !== "stop" && blocked()) throw new OfficialAdmissionError("busy");
+    // Explicit switching may stop native work, but must not interrupt an ongoing
+    // official login/logout. Its lifetime is observed without taking over auth.
+    if (
+      (mode !== "stop" && blocked()) ||
+      (mode === "stop" && [...this.#requests.values()].includes("native-auth"))
+    )
+      throw new OfficialAdmissionError("busy");
     const token = Symbol();
     this.#change = token;
     this.#publish("changing");

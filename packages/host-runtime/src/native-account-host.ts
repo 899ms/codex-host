@@ -42,7 +42,6 @@ import { createRemoteOfficialAppServerConnection } from "./remote-official-conne
 export interface PreparedLocalCodex {
   officialRuntimeScope: OfficialRuntimeScope;
   accountControl: CodexAccountControl;
-  allowNativeAuthPassthrough: boolean;
   close(): Promise<void>;
 }
 interface LocalCodexOptions {
@@ -113,7 +112,6 @@ function blocked(
       phase: scope.gate.phase,
       revision: scope.gate.revision,
     })),
-    allowNativeAuthPassthrough: false,
     close: () => scope.close(),
   };
 }
@@ -172,7 +170,6 @@ function nativeFallback(
   const scope = new OfficialRuntimeScope({
     permanentHome: home,
     diagnosticOutput: input.diagnosticOutput,
-    allowNativeAuthPassthrough: true,
     createBackend: () => {
       if (ownership)
         return guarded(
@@ -225,7 +222,6 @@ function nativeFallback(
   return {
     officialRuntimeScope: scope,
     accountControl: control,
-    allowNativeAuthPassthrough: true,
     close: async () => {
       await scope.close();
       await ownership?.store.close();
@@ -361,7 +357,6 @@ export async function prepareLocalCodex(input: LocalCodexOptions): Promise<Prepa
       permanentHome: home,
       managedAccounts: true,
       diagnosticOutput: input.diagnosticOutput,
-      allowNativeAuthPassthrough: false,
       createBackend: (role) =>
         processRecord.wrap((receipt) =>
           createOwnedLoopbackBackend({
@@ -457,7 +452,6 @@ export async function prepareLocalCodex(input: LocalCodexOptions): Promise<Prepa
     return {
       officialRuntimeScope,
       accountControl: accounts,
-      allowNativeAuthPassthrough: false,
       close: async () => {
         await accounts.close();
         await officialRuntimeScope.close();
