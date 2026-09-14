@@ -2229,6 +2229,7 @@ export class AppServerHost {
         return;
       }
       const accountId = await this.#currentCodexAccountId();
+      if (accountId) await this.#refreshOfficialRateLimits(accountId);
       const accountCredits = this.#officialAccountCredits(accountId ?? undefined);
       const result = threadUsageInspectionSchema.parse({
         threadId: params.data.threadId,

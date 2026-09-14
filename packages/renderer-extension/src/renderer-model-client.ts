@@ -181,22 +181,35 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
 }
 
 export function createThreadUsageSubscriptionRelay(): {
-  connect(client: Pick<RendererModelClient, "subscribeThreadUsage">): void;
+  connect(client: Pick<RendererModelClient, "subscribeThreadUsage"> | null): void;
   subscribe(listener: (update: ThreadUsageInspection) => void): () => void;
   dispose(): void;
 } {
   const listeners = new Set<(update: ThreadUsageInspection) => void>();
   let removeNotificationCallback: (() => void) | null = null;
+  let connectedClient: Pick<RendererModelClient, "subscribeThreadUsage"> | null = null;
+  let generation = 0;
+  const disconnect = (): void => {
+    generation += 1;
+    removeNotificationCallback?.();
+    removeNotificationCallback = null;
+    connectedClient = null;
+  };
   return {
     connect(client) {
-      if (removeNotificationCallback || listeners.size === 0) return;
+      if (client === connectedClient && removeNotificationCallback) return;
+      disconnect();
+      if (!client || listeners.size === 0) return;
+      connectedClient = client;
+      const subscriptionGeneration = generation;
       try {
         removeNotificationCallback =
           client.subscribeThreadUsage?.((update) => {
+            if (subscriptionGeneration !== generation) return;
             for (const listener of listeners) listener(update);
           }) ?? null;
       } catch {
-        removeNotificationCallback = null;
+        disconnect();
       }
     },
     subscribe(listener) {
@@ -204,13 +217,11 @@ export function createThreadUsageSubscriptionRelay(): {
       return () => {
         listeners.delete(listener);
         if (listeners.size > 0) return;
-        removeNotificationCallback?.();
-        removeNotificationCallback = null;
+        disconnect();
       };
     },
     dispose() {
-      removeNotificationCallback?.();
-      removeNotificationCallback = null;
+      disconnect();
       listeners.clear();
     },
   };

@@ -3151,7 +3151,18 @@ describe("AppServerHost HarnessAdapter projection", () => {
   });
 
   it("inspects authoritative external and Codex Thread ownership locally", async () => {
-    const fixture = createFixture();
+    const fixture = createFixture({
+      accountControl: {
+        currentAccountId: () => null,
+        snapshot: () => ({
+          version: 2,
+          currentAccountId: null,
+          phase: "unavailable",
+          revision: 0,
+          accounts: [],
+        }),
+      },
+    });
     const officialWrite = vi.fn();
     fixture.official.stdin.on("data", officialWrite);
     const threadId = await startPiThread(fixture);
@@ -3202,7 +3213,7 @@ describe("AppServerHost HarnessAdapter projection", () => {
       fixture.collector.waitFor((message) => requestId(message, 43)),
     ).resolves.toMatchObject({ error: { code: -32602 } });
 
-    // An unavailable bound Account must never query the default runtime quota.
+    // An unavailable current Account must never query native quota.
     expect(officialWrite).not.toHaveBeenCalled();
     await stopFixture(fixture);
   });
@@ -3303,6 +3314,18 @@ describe("AppServerHost HarnessAdapter projection", () => {
       id: 44,
       result: {
         threadId: "official-thread",
+        accountCredits: {
+          usedPercent: 3,
+          periodType: "five_hour",
+          resetsAt: new Date(1_800 * 1_000).toISOString(),
+          productUsage: [
+            {
+              product: "7-day window",
+              usagePercent: 9,
+              resetsAt: new Date(2_400 * 1_000).toISOString(),
+            },
+          ],
+        },
         usage: {
           totalTokens: 1_000,
           inputTokens: 800,
@@ -3384,7 +3407,18 @@ describe("AppServerHost HarnessAdapter projection", () => {
   });
 
   it("keeps cumulative Thread Usage independent from native Account changes", async () => {
-    const fixture = createFixture();
+    const fixture = createFixture({
+      accountControl: {
+        currentAccountId: () => null,
+        snapshot: () => ({
+          version: 2,
+          currentAccountId: null,
+          phase: "unavailable",
+          revision: 0,
+          accounts: [],
+        }),
+      },
+    });
     fixture.official.stdout.write(
       `${JSON.stringify({
         method: "thread/tokenUsage/updated",

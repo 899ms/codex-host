@@ -1051,6 +1051,7 @@ export function installCurrentRendererAdapter(): {
   const syncActiveRoute = (route: RendererRequestRoute | null): RendererModelClient | null => {
     const policy = route?.policy ?? null;
     const client = route ? modelClientForTargets(route.targets, route.policy) : null;
+    usageSubscription.connect(client);
     if (activeRoutePolicy === policy && activeRouteClient === client) return client;
     activeRoutePolicy = policy;
     activeRouteClient = client;
@@ -1064,7 +1065,6 @@ export function installCurrentRendererAdapter(): {
   const currentModelClient = (): RendererModelClient => {
     const client = currentRequestRoute() ? activeRouteClient : null;
     if (!client) throw new Error("Renderer Model request manager is unavailable");
-    usageSubscription.connect(client);
     return client;
   };
   const modelControl: RendererModelClient = Object.freeze({

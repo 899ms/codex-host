@@ -646,6 +646,60 @@ describe("Renderer fixed Model request client", () => {
     relay.dispose();
   });
 
+  it("rebinds Usage to the current connection and ignores retired callbacks", () => {
+    const relay = createThreadUsageSubscriptionRelay();
+    const listener = vi.fn();
+    const unsubscribe = relay.subscribe(listener);
+    const connection = () => {
+      let notify: ((update: ThreadUsageInspection) => void) | undefined;
+      const remove = vi.fn();
+      return {
+        remove,
+        subscribeThreadUsage: vi.fn((callback: (update: ThreadUsageInspection) => void) => {
+          notify = callback;
+          return remove;
+        }),
+        push(usedPercent: number) {
+          notify?.({
+            threadId: hostThreadIdSchema.parse("thread-1"),
+            usage: null,
+            accountCredits: { usedPercent, periodType: "five_hour" },
+          });
+        },
+      };
+    };
+    const previous = connection();
+    const current = connection();
+    relay.connect(previous);
+    previous.push(16);
+    relay.connect(current);
+    relay.connect(current);
+    current.push(20);
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountCredits: { usedPercent: 20, periodType: "five_hour" },
+      }),
+    );
+    expect(previous.remove).toHaveBeenCalledOnce();
+    expect(current.subscribeThreadUsage).toHaveBeenCalledOnce();
+    previous.push(17);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    relay.connect(null);
+    current.push(21);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(current.remove).toHaveBeenCalledOnce();
+    relay.connect(current);
+    current.push(22);
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(current.subscribeThreadUsage).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    current.push(23);
+    expect(listener).toHaveBeenCalledTimes(3);
+    relay.dispose();
+    expect(current.remove).toHaveBeenCalledTimes(2);
+  });
+
   it("fails closed when request manager ownership is absent or ambiguous", () => {
     expect(createRendererModelClient([])).toBeNull();
     expect(
