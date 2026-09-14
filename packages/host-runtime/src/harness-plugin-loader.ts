@@ -45,6 +45,7 @@ export interface LoadHarnessPluginsOptions {
   context: HarnessPluginContext;
   /** Prevent conflicts with explicitly injected Adapters, e.g. test fixtures. */
   reservedIds?: ReadonlySet<string>;
+  /** Bound for one plugin's asynchronous import and factory. Defaults to 10s. */
   loadTimeoutMs?: number;
   /** Defaults to true. Disable only when the caller intentionally needs cold instances. */
   warmup?: boolean;
@@ -247,10 +248,9 @@ export async function loadHarnessPlugins(
     }
     pending.push(candidate);
   }
-  // Imports/factories share a deadline rather than N serial timeout windows.
-  // Four workers let healthy plugins finish beside a slow asynchronous import.
+  // Each plugin gets a full import/factory budget. Four workers overlap a slow
+  // neighbor without shrinking later plugins to whatever time remains.
   // Filesystem discovery and synchronous plugin execution are not preemptible.
-  const deadline = Date.now() + timeoutMs;
   let next = 0;
   const loaded = new Map<
     Candidate,
@@ -275,12 +275,10 @@ export async function loadHarnessPlugins(
       } else {
         try {
           if (manifest.icon) descriptor.icon = await readPluginIcon(candidate.root, manifest.icon);
-          const remaining = deadline - Date.now();
-          if (remaining <= 0) throw new PluginLoadTimeout();
           adapter = await loadAdapter(
             candidate,
             options.context,
-            remaining,
+            timeoutMs,
             diagnose,
             options.warmup !== false,
           );

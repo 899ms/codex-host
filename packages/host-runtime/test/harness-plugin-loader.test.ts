@@ -412,6 +412,39 @@ describe("Harness plugin discovery and loading", () => {
     );
     await registry.close();
   });
+
+  it("gives later plugins a full timeout after earlier plugins finish", async () => {
+    const ids = ["alpha-agent", "beta-agent", "gamma-agent", "delta-agent", "epsilon-agent"];
+    const directory = await root(ids);
+    for (const id of ids) {
+      await plugin(directory, id, {
+        code: `
+      import { FakeHarnessAdapter } from ${JSON.stringify(fakeModule)};
+      export async function createHarnessAdapter() {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return new FakeHarnessAdapter(${JSON.stringify(id)});
+      }
+    `,
+      });
+    }
+    const diagnose = vi.fn();
+    const registry = await loadHarnessPlugins({
+      roots: [directory],
+      context,
+      loadTimeoutMs: 130,
+      diagnose,
+    });
+    try {
+      expect(diagnose).not.toHaveBeenCalled();
+      const inspections = await Promise.all(
+        [...registry.adapters.values()].map((adapter) => adapter.inspect()),
+      );
+      expect(inspections).toHaveLength(ids.length);
+      expect(inspections.every((inspection) => inspection.status === "ready")).toBe(true);
+    } finally {
+      await registry.close();
+    }
+  });
 });
 
 describe("Harness plugin registry lifetime", () => {

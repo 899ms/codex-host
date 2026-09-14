@@ -732,22 +732,28 @@ export class AppServerHost {
     else desktopInput.destroy();
   }
 
+  async #loadInstalledPlugins(): Promise<void> {
+    if (!this.#options.pluginRoots || this.#closeRequested) return;
+    const plugins = await loadHarnessPlugins({
+      roots: this.#options.pluginRoots,
+      context: this.#options.pluginContext ?? {
+        environment: this.#options.environment ?? process.env,
+        platform: process.platform,
+        managedRemoteHost: false,
+      },
+      reservedIds: new Set(this.#externalAdapters.keys()),
+      diagnose: (diagnostic) => this.#diagnose(`Harness plugin: ${JSON.stringify(diagnostic)}`),
+    });
+    if (this.#closeRequested) {
+      await plugins.close().catch((error: unknown) => this.#diagnose(error));
+      return;
+    }
+    this.#pluginDescriptors = plugins.list();
+    for (const [id, adapter] of plugins.adapters) this.#externalAdapters.set(id, adapter);
+  }
+
   async run(): Promise<number> {
     try {
-      if (this.#options.pluginRoots) {
-        const plugins = await loadHarnessPlugins({
-          roots: this.#options.pluginRoots,
-          context: this.#options.pluginContext ?? {
-            environment: this.#options.environment ?? process.env,
-            platform: process.platform,
-            managedRemoteHost: false,
-          },
-          reservedIds: new Set(this.#externalAdapters.keys()),
-          diagnose: (diagnostic) => this.#diagnose(`Harness plugin: ${JSON.stringify(diagnostic)}`),
-        });
-        this.#pluginDescriptors = plugins.list();
-        for (const [id, adapter] of plugins.adapters) this.#externalAdapters.set(id, adapter);
-      }
       await this.#repository.initialize();
     } catch (error) {
       this.#diagnose(`Host initialization failed: ${errorMessage(error)}`);
@@ -781,6 +787,9 @@ export class AppServerHost {
           .catch((closeError: unknown) => this.#diagnose(closeError));
       }
     }
+    await this.#loadInstalledPlugins().catch((error: unknown) => {
+      this.#diagnose(`Harness plugin load failed: ${errorMessage(error)}`);
+    });
     if (this.#closeRequested) await this.#closeOfficialRuntime();
     try {
       void this.#officialRuntime
