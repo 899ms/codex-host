@@ -1,5 +1,6 @@
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
@@ -34,11 +35,13 @@ function validMetafile(extraInputs = {}) {
 }
 
 async function runPackagedHost(host, directory, requests) {
-  const official = path.join(directory, "official.mjs");
+  const official = path.join(directory, ".codex", "app-server");
+  await mkdir(path.dirname(official), { recursive: true });
+  const require = createRequire(import.meta.url);
   await writeFile(
     official,
-    `#!/usr/bin/env node
-    import { WebSocketServer } from ${JSON.stringify(import.meta.resolve("ws"))};
+    `
+    const { WebSocketServer } = require(${JSON.stringify(require.resolve("ws"))});
 
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0, perMessageDeflate: false });
     server.on("connection", (socket) => {
@@ -57,12 +60,6 @@ async function runPackagedHost(host, directory, requests) {
     });
   `,
   );
-  await chmod(official, 0o755);
-  const officialCommand =
-    process.platform === "win32" ? path.join(directory, "official.cmd") : official;
-  if (process.platform === "win32") {
-    await writeFile(officialCommand, `@"${process.execPath}" "${official}" %*\r\n`);
-  }
   const environment = { ...process.env };
   for (const key of Object.keys(environment))
     if (key.startsWith("CODEXHOST_") || key === "NODE_PATH") delete environment[key];
@@ -71,7 +68,7 @@ async function runPackagedHost(host, directory, requests) {
     USERPROFILE: directory,
     CODEXHOST_DATA_DIR: path.join(directory, "data"),
     CODEXHOST_PLUGIN_DIRECTORY: path.join(directory, "user-plugins"),
-    CODEXHOST_STOCK_CODEX_PATH: officialCommand,
+    CODEXHOST_STOCK_CODEX_PATH: process.execPath,
     CODEXHOST_DEFAULT_AGENT: "codex",
     CODEXHOST_CLAUDE_COMMAND: path.join(directory, "missing-claude"),
     CODEXHOST_ANTIGRAVITY_COMMAND: path.join(directory, "missing-antigravity"),
