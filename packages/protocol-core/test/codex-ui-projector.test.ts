@@ -190,7 +190,7 @@ describe("Codex UI projector", () => {
         turnId,
         item: { type: "agentMessage", itemId: agentId, text: "" },
       }).messages,
-    ).toMatchObject([{ path: "empty.txt", kind: "delete" }]);
+    ).toEqual([]);
     expect(
       value.project({
         type: "item.updated",
@@ -721,7 +721,7 @@ describe("Codex UI projector", () => {
         turnId,
         item: { type: "agentMessage", itemId: agentId, text: "" },
       }).messages,
-    ).toEqual([]);
+    ).toMatchObject([{ path: "empty.txt", kind: "delete" }]);
     expect(
       value.project({
         type: "item.started",
