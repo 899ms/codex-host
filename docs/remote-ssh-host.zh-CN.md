@@ -81,7 +81,7 @@ JavaScript；正在执行的 Claude Harness 请求会在重启期间失败关闭
 
 在客户端通过 codexhost 启动 Codex Desktop，打开 SSH 工作区，然后在该远程输入框的 Agent/Model 选择器中选择目标 Harness。模型发现、Thread、Turn、工具、审批和历史都会由 SSH 开发机上的 codexhost 处理。本地 Harness 可用性会始终独立初始化和缓存，因此 SSH 连接不可用时，切回本地输入框不会被远程检查阻塞。
 
-输入框中的 Codex 账号列表、临时账号选择和额度按 Host 隔离；本地账号不会出现在远程输入框中。切换 Host 或更换连接客户端后，旧请求的结果不能覆盖当前输入框。远程没有提供账号管理接口时，保留普通 Codex 入口，不把本地默认账号绑定到远程 Thread；已有会话保持原来的账号归属。
+当前 Codex 身份和额度按 Host 隔离；本地账号不会出现在远程输入框中。切换 Host 或更换连接客户端后，旧请求的结果不能覆盖当前输入框。SSH 使用远端原生单账号认证，不转发本地凭据。Composer 只有一个 Codex 入口，没有 per-draft 账号选择。
 
 原生 Codex 端点明确返回“不支持 `codexhost/thread/inspect`”时，会通过同一 Host 连接的原生 `thread/read` 核对 Thread ID、CLI 版本和 Provider 元数据，排除 codexhost 的外部 Thread 标记；验证成功后保留普通 Codex 和远程原生认证，不创建账号绑定。超时、断线、无效响应或无法确认归属时，Agent 控件显示 `!` 和错误说明，而不是持续显示加载动画；重新聚焦窗口会重试。归属尚未确认时仍阻止提交，不把外部 Harness 或连接故障静默改判为 Codex。
 

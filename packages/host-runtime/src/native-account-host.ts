@@ -2,20 +2,21 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Writable } from "node:stream";
-import type { CodexAccountControl } from "./account/codex-account-control.js";
-import { NativeAccountStore } from "./account/native-account-store.js";
-import { NativeCodexAccounts } from "./account/native-codex-accounts.js";
-import { OfficialAccountRuntime } from "./account/official-account-runtime.js";
-import { createDeviceCodeLogin } from "./account/native-device-code-login.js";
+import {
+  currentCodexAccountFromOfficialRead,
+  SingleNativeCodexAccount,
+  type CodexAccountControl,
+} from "./account/codex-account-control.js";
 import { officialEnvironment } from "./app-server-host.js";
 import { OfficialRuntimeScope } from "./codex-runtime/official-runtime-scope.js";
 import { createOwnedLoopbackBackend } from "./codex-runtime/owned-official-backends.js";
-import { stopNativeProcesses } from "./native-process-stop.js";
+
 export interface PreparedLocalCodex {
   officialRuntimeScope: OfficialRuntimeScope;
   accountControl: CodexAccountControl;
   close(): Promise<void>;
 }
+
 async function canonicalCodexHome(home: string): Promise<string> {
   const absolute = path.resolve(home);
   try {
@@ -27,6 +28,7 @@ async function canonicalCodexHome(home: string): Promise<string> {
     return path.join(await canonicalCodexHome(parent), path.basename(absolute));
   }
 }
+
 export async function prepareLocalCodex(input: {
   stockCodexPath: string;
   arguments: string[];
@@ -47,49 +49,43 @@ export async function prepareLocalCodex(input: {
         environment: { ...officialEnvironment(input.environment), CODEX_HOME: home },
       }),
   });
+  // controlRequest requires an initialized client on this same owned backend.
+  // This connection only reads native identity; it does not own authentication.
+  const identityReader = scope.owner.attachManagement(async () => {});
+  identityReader.configure({
+    clientInfo: { name: "codexhost_identity_reader", version: "1" },
+    capabilities: { experimentalApi: true },
+  });
   try {
     await scope.start();
   } catch (error) {
     await scope.close();
+    identityReader.close();
     throw error;
   }
-  const store = new NativeAccountStore({ home });
-  const runtime = new OfficialAccountRuntime({
-    owner: scope.owner,
-    environment: input.environment,
-    readCredentials: () => store.readCredentials(),
-    stopExternalProcesses: async () => {
-      const launcher = input.environment.CODEXHOST_LAUNCHER_EXECUTABLE;
-      if (launcher && path.isAbsolute(launcher))
-        await stopNativeProcesses({
-          launcher,
-          executableNames: [path.basename(input.stockCodexPath), "codex", "codex.exe"],
-          environment: input.environment,
-        });
-      else
-        input.diagnosticOutput.write(
-          "codexhost: external Codex process stop skipped (launcher unavailable)\n",
-        );
-    },
+  let current: ReturnType<typeof currentCodexAccountFromOfficialRead> = null;
+  const snapshot = () => ({
+    version: 2 as const,
+    currentAccountId: current?.accountId ?? null,
+    phase: scope.gate.phase,
+    revision: scope.gate.revision,
+    accounts: current ? [current] : [],
   });
-  const accounts = new NativeCodexAccounts({
-    store,
-    runtime,
-    diagnosticOutput: input.diagnosticOutput,
-    startDeviceCodeLogin: createDeviceCodeLogin(input),
+  const accounts = new SingleNativeCodexAccount(snapshot, async () => {
+    const response = await scope.owner.controlRequest("account/read", { refreshToken: false });
+    if (response.error) throw new Error("Official Account read failed");
+    current = currentCodexAccountFromOfficialRead(response.result);
+    return snapshot();
   });
-  void accounts.initialize().catch(() => {
-    input.diagnosticOutput.write("codexhost: Codex Account initialization failed\n");
+  void accounts.refresh?.()?.catch(() => {
+    input.diagnosticOutput.write("codexhost: Codex Account identity could not be read\n");
   });
   return {
     officialRuntimeScope: scope,
     accountControl: accounts,
     close: async () => {
-      try {
-        await accounts.close();
-      } finally {
-        await scope.close();
-      }
+      await scope.close();
+      identityReader.close();
     },
   };
 }

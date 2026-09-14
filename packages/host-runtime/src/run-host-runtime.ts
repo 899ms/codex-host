@@ -255,15 +255,6 @@ export async function runHostRuntime(input: {
         currentAccountId: "remote-native",
         phase: officialRuntimeScope.gate.phase,
         revision: officialRuntimeScope.gate.revision,
-        capabilities: {
-          manage: false,
-          switch: false,
-          login: false,
-          delete: false,
-          recover: false,
-          logout: false,
-          reason: "ssh-single-account",
-        },
         accounts: [{ accountId: "remote-native", label: "Remote native Codex Account" }],
       }));
       const mappingStore = createProductionExternalThreadStore(delegationEnvironment);

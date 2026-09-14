@@ -1,72 +1,59 @@
-import type {
-  AccountCreditsSnapshot,
-  CodexAccountListResult,
-  CodexAccountLoginCompleted,
-  CodexAccountLoginStartResult,
-  CodexAccountUsageResult,
+import { z } from "zod";
+import {
+  codexAccountPlanTypeSchema,
+  type CodexAccountListResult,
+  type CodexAccountSummary,
 } from "@codexhost/shared-contracts";
 
-/** Global Codex Account control plane. Credentials never cross this boundary. */
+/** Current-only Codex identity. Credentials never cross this boundary. */
 export interface CodexAccountControl {
   snapshot(): CodexAccountListResult;
-  /** Refresh native-derived selection and collect credentials without changing native auth. */
+  /** Re-read the official current identity without changing native auth. */
   refresh?(): Promise<CodexAccountListResult>;
   currentAccountId(): string | null;
-  switch(accountId: string): Promise<void>;
-  remove(accountId: string): Promise<void>;
-  startLogin(accountId?: string): Promise<CodexAccountLoginStartResult>;
-  cancelLogin(loginId: string): Promise<boolean>;
-  logout(): Promise<void>;
-  recover(): Promise<void>;
-  subscribeLogin(listener: (value: CodexAccountLoginCompleted) => void): () => void;
-  inspectInactiveUsage?(
-    accountId: string,
-    forceRefresh?: boolean,
-  ): Promise<CodexAccountUsageResult>;
-  recordUsage?(
-    accountId: string,
-    accountCredits: AccountCreditsSnapshot,
-  ): Promise<CodexAccountUsageResult>;
-  cachedUsage?(accountId: string): CodexAccountUsageResult | null;
 }
 
-function unavailable(): Promise<never> {
-  return Promise.reject(
-    Object.assign(new Error("Codex Account management is unavailable"), {
-      code: "unavailable",
-    }),
-  );
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Read-only projection used when native Codex owns authentication itself. */
+/** Map official `account/read` to a display snapshot. Never stores credential copies. */
+export function currentCodexAccountFromOfficialRead(result: unknown): CodexAccountSummary | null {
+  if (!isRecord(result) || !isRecord(result.account) || result.account.type !== "chatgpt") {
+    return null;
+  }
+  const email = z.string().email().max(320).safeParse(result.account.email);
+  const plan = codexAccountPlanTypeSchema.safeParse(result.account.planType);
+  const candidate =
+    typeof result.account.accountId === "string"
+      ? result.account.accountId
+      : typeof result.account.id === "string"
+        ? result.account.id
+        : "current";
+  const accountId = /^[A-Za-z0-9._~-]{1,256}$/u.test(candidate) ? candidate : "current";
+  return {
+    accountId,
+    label: email.success ? email.data : "Codex",
+    ...(email.success ? { email: email.data } : {}),
+    ...(plan.success ? { planType: plan.data } : {}),
+  };
+}
+
+/** Read-only projection of the official current Codex identity. */
 export class SingleNativeCodexAccount implements CodexAccountControl {
-  constructor(private readonly summary: () => CodexAccountListResult) {}
+  readonly refresh?: () => Promise<CodexAccountListResult>;
+
+  constructor(
+    private readonly summary: () => CodexAccountListResult,
+    refreshCurrent?: () => Promise<CodexAccountListResult>,
+  ) {
+    if (refreshCurrent) this.refresh = refreshCurrent;
+  }
 
   snapshot(): CodexAccountListResult {
     return this.summary();
   }
   currentAccountId(): string | null {
     return this.summary().currentAccountId;
-  }
-  switch(): Promise<void> {
-    return unavailable();
-  }
-  remove(): Promise<void> {
-    return unavailable();
-  }
-  startLogin(): Promise<CodexAccountLoginStartResult> {
-    return unavailable();
-  }
-  cancelLogin(): Promise<boolean> {
-    return unavailable();
-  }
-  logout(): Promise<void> {
-    return unavailable();
-  }
-  recover(): Promise<void> {
-    return unavailable();
-  }
-  subscribeLogin(): () => void {
-    return () => undefined;
   }
 }

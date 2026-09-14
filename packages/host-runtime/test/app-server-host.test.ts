@@ -822,15 +822,11 @@ describe("AppServerHost HarnessAdapter projection", () => {
         currentAccountId: null,
         phase: "ready",
         revision: 7,
-        capabilities: { manage: true, switch: true, login: true, delete: true },
         accounts: [],
       })),
       {
-        startLogin: vi.fn(),
-        cancelLogin: vi.fn(),
-        logout: vi.fn(),
         refresh: vi.fn(async () => {
-          throw new Error("synthetic backup failure");
+          throw new Error("synthetic identity refresh failure");
         }),
       },
     );
@@ -892,9 +888,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
           await fixture.collector.waitFor((message) => message.method === notification.method),
         ).toEqual(notification);
       }
-      expect(accountControl.startLogin).not.toHaveBeenCalled();
-      expect(accountControl.cancelLogin).not.toHaveBeenCalled();
-      expect(accountControl.logout).not.toHaveBeenCalled();
       if (managed) await vi.waitFor(() => expect(accountControl.refresh).toHaveBeenCalled());
       writeRequest(fixture.desktopInput, { id: 912, method: "account/read", params: {} });
       expect(await readJsonLine(fixture.official.stdin)).toEqual({
@@ -917,7 +910,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
       currentAccountId: null,
       phase: "ready",
       revision: 1,
-      capabilities: { manage: false, switch: false, login: false, delete: false },
       accounts: [],
     };
     const fresh: CodexAccountListResult = {
@@ -942,195 +934,28 @@ describe("AppServerHost HarnessAdapter projection", () => {
     }
   });
 
-  it("returns a strict managed logout result when the Account snapshot has recovery metadata", async () => {
-    const accountId = "00000000-0000-4000-8000-000000000011";
-    let state: CodexAccountListResult = {
-      version: 2,
-      currentAccountId: accountId,
-      phase: "ready",
-      revision: 4,
-      instanceId: "synthetic-instance",
-      capabilities: {
-        manage: true,
-        switch: true,
-        login: true,
-        delete: true,
-        logout: true,
-        recover: true,
-      },
-      accounts: [{ accountId, label: "Managed" }],
-    };
-    const accountControl: CodexAccountControl = {
-      snapshot: () => state,
-      currentAccountId: () => state.currentAccountId,
-      async switch() {},
-      async remove() {},
-      async startLogin() {
-        throw new Error("unused");
-      },
-      async cancelLogin() {
-        return false;
-      },
-      async logout() {
-        state = { ...state, currentAccountId: null, phase: "ready", revision: 5 };
-      },
-      async recover() {},
-      subscribeLogin: () => () => undefined,
-    };
-    const fixture = createFixture({ accountControl });
-    try {
-      await fixture.ready;
-      writeRequest(fixture.desktopInput, {
-        id: 909,
-        method: "codexhost/account/logout",
-        params: {},
-      });
-      await expect(fixture.collector.waitFor((message) => message.id === 909)).resolves.toEqual({
-        id: 909,
-        result: { currentAccountId: null, phase: "ready", revision: 5 },
-      });
-      expect(state).toMatchObject({ instanceId: "synthetic-instance" });
-    } finally {
-      await stopFixture(fixture);
-    }
-  });
-
   it.each([
-    ["busy", -32084, "Codex is busy"],
-    ["changing", -32085, "Codex Account is changing"],
-    ["unavailable", -32086, "Codex Account is unavailable"],
-    ["recovery-required", -32086, "Codex Account is unavailable"],
-    ["unsupported", -32087, "Codex Account management is unsupported"],
-    ["unsupported-storage", -32087, "Codex Account management is unsupported"],
-    ["authentication-failed", -32089, "Codex Account authentication failed"],
-    ["requires-login", -32089, "Codex Account requires sign-in"],
-    ["unknown-account", -32086, "Unknown Codex Account"],
-    ["credential-conflict", -32086, "Codex Account credentials changed; refresh and retry"],
-    ["switch-failed", -32086, "Codex Account switch failed"],
-    ["stop-unconfirmed", -32086, "Codex Account operation failed"],
-    ["rollback-failed", -32086, "Codex Account operation failed"],
-    ["unsupported-version", -32086, "Codex Account operation failed"],
-    ["untrusted", -32086, "Codex Account operation failed"],
-  ] as const)(
-    "returns a fixed %s error without exposing private details",
-    async (code, rpcCode, message) => {
-      const { OfficialAdmissionError } = await import("../src/codex-runtime/official-work-gate.js");
-      const { NativeAccountError } = await import("../src/account/native-account-store.js");
-      const accountId = "00000000-0000-4000-8000-000000000022";
-      let error: Error;
-      switch (code) {
-        case "busy":
-        case "changing":
-        case "unavailable":
-          error = new OfficialAdmissionError(code, new Error("private native details"));
-          break;
-        case "recovery-required":
-        case "unsupported-storage":
-        case "authentication-failed":
-        case "requires-login":
-        case "unknown-account":
-        case "credential-conflict":
-        case "switch-failed":
-          error = new NativeAccountError(code);
-          error.message = "secret native diagnostic";
-          break;
-        default:
-          error = Object.assign(new Error("secret native diagnostic"), { code });
-      }
-      const state: CodexAccountListResult = {
-        version: 2,
-        currentAccountId: null,
-        phase: "ready",
-        revision: 1,
-        capabilities: { manage: true, switch: true, login: true, delete: true },
-        accounts: [{ accountId, label: "Target" }],
-      };
-      const accountControl: CodexAccountControl = {
-        snapshot: () => state,
-        currentAccountId: () => null,
-        async switch() {
-          throw error;
-        },
-        async remove() {},
-        async startLogin() {
-          throw new Error("unused");
-        },
-        async cancelLogin() {
-          return false;
-        },
-        async logout() {},
-        async recover() {},
-        subscribeLogin: () => () => undefined,
-      };
-      const fixture = createFixture({ accountControl });
-      try {
-        await fixture.ready;
-        writeRequest(fixture.desktopInput, {
-          id: 911,
-          method: "codexhost/account/switch",
-          params: { accountId },
-        });
-        await expect(
-          fixture.collector.waitFor((message) => message.id === 911),
-        ).resolves.toMatchObject({
-          error: {
-            code: rpcCode,
-            message,
-          },
-        });
-      } finally {
-        await stopFixture(fixture);
-      }
-    },
-  );
-
-  it("does not report a ready switch when control returns before its snapshot is ready", async () => {
-    const firstId = "00000000-0000-4000-8000-000000000021";
-    const secondId = "00000000-0000-4000-8000-000000000022";
-    let state: CodexAccountListResult = {
-      version: 2,
-      currentAccountId: firstId,
-      phase: "ready",
-      revision: 1,
-      capabilities: { manage: true, switch: true, login: true, delete: true },
-      accounts: [
-        { accountId: firstId, label: "First" },
-        { accountId: secondId, label: "Second" },
-      ],
-    };
-    const switchAccount = vi.fn(async (accountId: string) => {
-      state = { ...state, currentAccountId: accountId, phase: "changing", revision: 2 };
-    });
-    const accountControl: CodexAccountControl = {
-      snapshot: () => state,
-      currentAccountId: () => state.currentAccountId,
-      switch: switchAccount,
-      async remove() {},
-      async startLogin() {
-        throw new Error("unused");
-      },
-      async cancelLogin() {
-        return false;
-      },
-      async logout() {},
-      async recover() {},
-      subscribeLogin: () => () => undefined,
-    };
-    const fixture = createFixture({ accountControl });
+    "codexhost/account/switch",
+    "codexhost/account/logout",
+    "codexhost/account/login/start",
+    "codexhost/account/login/cancel",
+    "codexhost/account/delete",
+    "codexhost/account/recover",
+    "codexhost/account/rate-limit-reset/consume",
+  ])("forwards leftover Host account method %s as an unknown method", async (methodName) => {
+    const fixture = createFixture();
     try {
       await fixture.ready;
-      writeRequest(fixture.desktopInput, {
+      const request = { id: 910, method: methodName, params: { accountId: "account-b" } };
+      writeRequest(fixture.desktopInput, request);
+      expect(await readJsonLine(fixture.official.stdin)).toEqual(request);
+      fixture.official.stdout.write(
+        `${JSON.stringify({ id: 910, error: { code: -32601, message: "Method not found" } })}\n`,
+      );
+      await expect(fixture.collector.waitFor((message) => message.id === 910)).resolves.toEqual({
         id: 910,
-        method: "codexhost/account/switch",
-        params: { accountId: secondId },
+        error: { code: -32601, message: "Method not found" },
       });
-      await expect(
-        fixture.collector.waitFor((message) => message.id === 910),
-      ).resolves.toMatchObject({
-        id: 910,
-        error: { code: -32086, message: "Codex Account operation failed" },
-      });
-      expect(switchAccount).toHaveBeenCalledWith(secondId);
     } finally {
       await stopFixture(fixture);
     }
@@ -1944,18 +1769,11 @@ describe("AppServerHost HarnessAdapter projection", () => {
       currentAccountId: null,
       phase: scope.gate.phase,
       revision: scope.gate.revision,
-      capabilities: { manage: true, switch: false, login: false, delete: false, recover: true },
       accounts: [],
     }));
-    vi.spyOn(accountControl, "recover").mockImplementation(async () => {
-      await scope.owner.stop();
-      await scope.owner.start();
-      scope.gate.initialized();
-    });
     const fixture = createFixture({ officialRuntimeScope: scope, accountControl });
     const params = {
       clientInfo: { name: "codex_desktop", version: "synthetic" },
-      capabilities: { experimentalApi: true },
     };
     try {
       writeRequest(fixture.desktopInput, { id: 901, method: "initialize", params });
@@ -1965,16 +1783,8 @@ describe("AppServerHost HarnessAdapter projection", () => {
       expect(scope.gate.phase).toBe("unavailable");
       expect(createBackend).toHaveBeenCalledOnce();
       writeRequest(fixture.desktopInput, { method: "initialized" });
-      writeRequest(fixture.desktopInput, {
-        id: 902,
-        method: "codexhost/account/recover",
-        params: {},
-      });
-      await expect(
-        fixture.collector.waitFor((message) => message.id === 902),
-      ).resolves.toMatchObject({
-        result: { phase: "ready" },
-      });
+      await scope.owner.start();
+      scope.gate.initialized();
       expect(nativeRequests).toContainEqual(
         expect.objectContaining({ method: "initialize", params }),
       );
@@ -2215,15 +2025,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
       currentAccountId: null,
       phase: officialRuntimeScope.gate.phase,
       revision: officialRuntimeScope.gate.revision,
-      capabilities: {
-        manage: false,
-        switch: false,
-        login: false,
-        delete: false,
-        logout: false,
-        recover: false,
-        reason: "unsupported-storage",
-      },
       accounts: [],
     }));
     // This checks shared Mapping Store lifetime with explicit shared Host composition.
@@ -3518,45 +3319,18 @@ describe("AppServerHost HarnessAdapter projection", () => {
     await stopFixture(fixture);
   });
 
-  it("reads inactive Account quota without the official backend and records current native quota", async () => {
-    const inactiveUsage = vi.fn(async (accountId: string) => ({
-      accountId,
-      usage: null,
-      accountCredits: { usedPercent: 61, periodType: "weekly" as const },
-      freshness: "cached" as const,
-      observedAt: "2026-09-10T03:00:00.000Z",
-    }));
-    const recordUsage = vi.fn(async (accountId: string, accountCredits: JsonObject) => ({
-      accountId,
-      usage: null,
-      accountCredits,
-      freshness: "live" as const,
-      observedAt: "2026-09-10T03:01:00.000Z",
-    }));
+  it("inspects current Account quota and treats other Account ids as unknown", async () => {
     const snapshot = () => ({
       version: 2 as const,
       currentAccountId: "account-a",
       phase: "ready" as const,
       revision: 1,
-      capabilities: { manage: true, switch: true, login: true, delete: true },
-      accounts: [
-        { accountId: "account-a", label: "A", email: "a@example.com" },
-        { accountId: "account-b", label: "B", email: "b@example.com" },
-      ],
+      accounts: [{ accountId: "account-a", label: "A", email: "a@example.com" }],
     });
-    const accountControl = {
+    const accountControl: CodexAccountControl = {
       snapshot,
       currentAccountId: () => "account-a",
-      switch: vi.fn(),
-      remove: vi.fn(),
-      startLogin: vi.fn(),
-      cancelLogin: vi.fn(),
-      observe: vi.fn(),
-      subscribeLogin: () => () => undefined,
-      inspectInactiveUsage: inactiveUsage,
-      recordUsage,
-      cachedUsage: vi.fn(() => null),
-    } as unknown as CodexAccountControl;
+    };
     const fixture = createFixture({ accountControl });
     fixture.official.stdin.on("data", (chunk: Buffer) => {
       for (const line of chunk.toString("utf8").split("\n")) {
@@ -3586,14 +3360,8 @@ describe("AppServerHost HarnessAdapter projection", () => {
         fixture.collector.waitFor((message) => requestId(message, 46)),
       ).resolves.toMatchObject({
         id: 46,
-        result: {
-          accountId: "account-b",
-          freshness: "cached",
-          accountCredits: { usedPercent: 61 },
-        },
+        error: { code: -32086, message: "Unknown Codex Account" },
       });
-      expect(inactiveUsage).toHaveBeenCalledWith("account-b", true);
-      expect(recordUsage).not.toHaveBeenCalled();
 
       writeRequest(fixture.desktopInput, {
         id: 47,
@@ -3610,7 +3378,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
           accountCredits: { usedPercent: 12, periodType: "five_hour" },
         },
       });
-      expect(recordUsage).toHaveBeenCalledOnce();
     } finally {
       await stopFixture(fixture);
     }

@@ -6,7 +6,6 @@ mod desktop_attachment;
 mod desktop_path_overrides;
 mod installation_layout;
 mod native_harness_broker;
-mod process_stop_command;
 mod runtime_instance;
 #[cfg(target_os = "linux")]
 mod secure_storage;
@@ -1218,7 +1217,6 @@ fn run(arguments: &[String]) -> Result<(), Box<dyn Error>> {
             codexhost_platform::open_external_url(&url).map_err(Into::into)
         }
         Some("open-loopback-url") => Err("open-loopback-url accepts no arguments".into()),
-        Some("process-stop") => process_stop_command::run(&arguments[1..]),
         Some("broker") => run_native_harness_broker_cli(&arguments[1..]),
         Some("harness") | Some("delegate") | Some("thread") => run_delegation_cli(arguments),
         _ => {

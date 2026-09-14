@@ -153,20 +153,8 @@ export function renderAccountRows(
     current: boolean;
     usage: AccountUsageViewState | undefined;
     display: AccountUsageDisplay;
-    actionsDisabled: boolean;
-    switchDisabled: boolean;
-    loginDisabled: boolean;
-    deleteDisabled: boolean;
-    logoutDisabled: boolean;
-    usingReset: boolean;
-    resetDisabled: boolean;
     resetExpanded: boolean;
-    onActivate: () => void;
-    onSignIn: () => void;
-    onDelete: () => void;
-    onLogout: () => void;
     onRetry: () => void;
-    onUseReset?: () => void;
     onResetExpanded: (open: boolean) => void;
   },
 ): HTMLTableRowElement[] {
@@ -194,7 +182,7 @@ export function renderAccountRows(
     }),
   );
   // Codex Pro 20x exposes extra model-scoped limits; this page intentionally shows only its
-  // generic weekly allowance so the Account row has one actionable quota.
+  // generic weekly allowance so the Account row has one comparable quota.
   const usage = renderAccountUsage(
     document,
     input.usage,
@@ -208,73 +196,16 @@ export function renderAccountRows(
   actionsCell.className = "settings-account-management-cell";
   const management = document.createElement("div");
   management.className = "settings-account-management";
-  const actions = document.createElement("div");
-  actions.className = "settings-account-actions";
-  const more: HTMLButtonElement[] = [];
-  if (!input.current) {
-    const activate = document.createElement("button");
-    activate.type = "button";
-    activate.className = "settings-account-action";
-    activate.textContent = messages.accountUse;
-    activate.title = account.requiresLogin ? messages.accountSignIn : messages.accountDefaultHint;
-    activate.dataset.accountFocus = `${account.accountId}:activate`;
-    activate.disabled =
-      input.actionsDisabled || input.switchDisabled || account.requiresLogin === true;
-    activate.addEventListener("click", input.onActivate);
-    actions.append(activate);
-  }
-  const signIn = document.createElement("button");
-  signIn.type = "button";
-  signIn.className = "settings-account-action";
-  signIn.textContent = messages.accountSignIn;
-  signIn.dataset.accountFocus = `${account.accountId}:login`;
-  signIn.disabled = input.actionsDisabled || input.loginDisabled;
-  signIn.addEventListener("click", input.onSignIn);
-  if (account.email && !account.requiresLogin) more.push(signIn);
-  else actions.append(signIn);
   if (input.usage) {
     const refresh = document.createElement("button");
     refresh.type = "button";
     refresh.className = "settings-account-action";
     refresh.textContent = messages.accountCreditsRefresh;
     refresh.dataset.accountFocus = `${account.accountId}:refresh`;
-    refresh.disabled = input.actionsDisabled || input.usage.status === "loading";
+    refresh.disabled = input.usage.status === "loading";
     refresh.addEventListener("click", input.onRetry);
-    more.push(refresh);
+    management.append(refresh);
   }
-  if (input.current) {
-    const logout = document.createElement("button");
-    logout.type = "button";
-    logout.className = "settings-account-action";
-    logout.textContent = messages.accountLogout;
-    logout.dataset.accountFocus = `${account.accountId}:logout`;
-    logout.disabled = input.actionsDisabled || input.logoutDisabled;
-    logout.addEventListener("click", input.onLogout);
-    more.push(logout);
-  } else {
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "settings-account-action settings-account-delete";
-    remove.textContent = messages.accountDelete;
-    remove.dataset.accountFocus = `${account.accountId}:delete`;
-    remove.setAttribute("aria-label", `${messages.accountDelete}: ${name.full}`);
-    remove.disabled = input.actionsDisabled || input.deleteDisabled;
-    remove.addEventListener("click", input.onDelete);
-    more.push(remove);
-  }
-  if (more.length)
-    actions.append(
-      createAccountDetails(document, messages, {
-        label: messages.accountMore,
-        triggerLabel: `${name.full} · ${messages.accountMore}`,
-        description: name.full,
-        focusKey: `${account.accountId}:more`,
-        icon: "ellipsis",
-        disabled: input.actionsDisabled,
-        actions: more,
-      }),
-    );
-  management.append(actions);
   actionsCell.append(management);
   const continuationRows = usage.continuationCells.map((cells) => {
     const continuation = document.createElement("tr");
@@ -292,7 +223,7 @@ export function renderAccountRows(
   row.append(personCell, ...usage.cells, actionsCell);
   const reset =
     input.usage?.status === "ready"
-      ? renderAccountResetCredits(document, input.usage.credits, messages, input)
+      ? renderAccountResetCredits(document, input.usage.credits, messages)
       : null;
   if (!reset) return [row, ...continuationRows];
   const detailsRow = document.createElement("tr");
@@ -362,7 +293,6 @@ export function renderHarnessAccountRows(
     description: messages.accountNativeManagementHint.replace("{harness}", account.harnessName),
     focusKey: `harness:${account.harnessId}:info`,
     icon: "info",
-    actions: [],
   });
   management.append(label, info);
   managementCell.append(management);

@@ -82,7 +82,6 @@ import {
 } from "./renderer-harness-command-claim.js";
 import { installRendererSettingsLifecycle } from "./renderer-settings-lifecycle.js";
 import { openRendererThread } from "./renderer-fork-control.js";
-import { createRendererAccountNavigation } from "./renderer-account-navigation.js";
 import type {
   RendererConnectionDiagnostics,
   RendererConnectionSnapshot,
@@ -688,30 +687,9 @@ export function installRendererBindingProbe(
     getLocalAgent: localAgentForSidebarThread,
   });
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
-  const accountNavigation = createRendererAccountNavigation(() => {
-    const views = [...mountedByComposer.values()].filter(
-      (mounted) =>
-        mounted.composer.isConnected &&
-        mounted.hostId === "local" &&
-        mounted.ownershipStatus === "ready" &&
-        controller.get(mounted.composer).agent === "codex",
-    );
-    const view = views.length === 1 ? views[0] : undefined;
-    const threadId = view && threadIdFromComposerModelTarget(view.modelTarget);
-    return view && threadId ? { composer: view.composer, threadId } : null;
-  });
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
     getUpdateClient: () => modelControl,
-    getAccountClient: () => {
-      const client = modelControl;
-      return (
-        client && {
-          ...client,
-          switchCodexAccount: (input) =>
-            accountNavigation.switchAccount(() => client.switchCodexAccount(input)),
-        }
-      );
-    },
+    getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
     getSessionImportClient: () => {
       const client = modelClientForHost("local");
@@ -855,9 +833,7 @@ export function installRendererBindingProbe(
       mounted.control,
       controller.get(mounted.composer),
       adapterStatus.state,
-      accounts?.switching === true ||
-        controller.isSwitching(mounted.composer) ||
-        mounted.ownershipStatus === "loading",
+      controller.isSwitching(mounted.composer) || mounted.ownershipStatus === "loading",
       activeHarnessAvailabilityState().availability,
       mounted.modelView,
       mounted.permissionModeView,
@@ -971,7 +947,7 @@ export function installRendererBindingProbe(
     mounted.usage = null;
     mounted.accountCredits = null;
     renderMounted(mounted);
-    if (accounts?.switching || !accountId || !client?.inspectCodexAccountUsage) return;
+    if (!accountId || !client?.inspectCodexAccountUsage) return;
     try {
       const result = await client.inspectCodexAccountUsage({ accountId });
       if (
@@ -2538,11 +2514,7 @@ export function installRendererBindingProbe(
     const mounted = mountedByComposer.get(composer);
     if (!mounted) return null;
     const current = controller.get(composer);
-    if (
-      composerCodexAccounts(composer)?.switching ||
-      controller.isSwitching(composer) ||
-      isOwnershipSubmissionBlocked(mounted.ownershipStatus)
-    ) {
+    if (controller.isSwitching(composer) || isOwnershipSubmissionBlocked(mounted.ownershipStatus)) {
       return false;
     }
     if (!isExternalConfigurationReady(mounted)) return false;
@@ -2582,10 +2554,7 @@ export function installRendererBindingProbe(
   const onKeyDown = (event: KeyboardEvent): void => {
     const composer = isComposerInputIntent(event) ? composerForTarget(event.target) : null;
     const mounted = composer ? mountedByComposer.get(composer) : undefined;
-    if (
-      composer &&
-      (composerCodexAccounts(composer)?.switching || controller.isSwitching(composer))
-    ) {
+    if (composer && controller.isSwitching(composer)) {
       blockEvent(event);
       return;
     }
@@ -2806,7 +2775,6 @@ export function installRendererBindingProbe(
       mutationObserver.disconnect();
       disposeReasoningSoftWrap();
       sidebarAgentIcons.dispose();
-      accountNavigation.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);
       document.removeEventListener("submit", onSubmit, true);

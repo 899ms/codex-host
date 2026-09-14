@@ -28,14 +28,6 @@ export class RendererCodexAccountState {
   phase: CodexAccountListResult["phase"] = "unavailable";
   revision = 0;
   instanceId: string | undefined;
-  pendingOperation: CodexAccountListResult["pendingOperation"];
-  capabilities: CodexAccountListResult["capabilities"] = {
-    manage: false,
-    switch: false,
-    login: false,
-    delete: false,
-  };
-  switching = false;
   #hasSnapshot = false;
   #request: Promise<void> | null = null;
   readonly #unsubscribe: (() => void) | undefined;
@@ -98,9 +90,6 @@ export class RendererCodexAccountState {
     this.phase = result.phase;
     this.revision = result.revision;
     this.instanceId = result.instanceId;
-    this.pendingOperation = result.pendingOperation;
-    this.capabilities = result.capabilities;
-    this.switching = result.phase === "changing";
     return true;
   }
 }
