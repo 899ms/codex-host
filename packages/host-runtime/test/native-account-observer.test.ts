@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonObject } from "@codexhost/protocol-core";
-import { UnavailableCodexAccounts } from "../src/account/codex-account-control.js";
+import type { CodexAccountListResult } from "@codexhost/shared-contracts";
 import { OfficialWorkGate } from "../src/codex-runtime/official-work-gate.js";
 import { NativeAccountObserver } from "../src/native-account-observer.js";
 
@@ -18,7 +18,14 @@ function fixture() {
     }),
   );
   const scope = { gate, closed: false, owner: { generation: 1, running: true, controlRequest } };
-  const snapshot = new UnavailableCodexAccounts().snapshot();
+  const snapshot: CodexAccountListResult = {
+    version: 2,
+    currentAccountId: null,
+    phase: "ready",
+    revision: 0,
+    capabilities: { manage: true, switch: true, login: true, delete: true },
+    accounts: [],
+  };
   const refresh = vi.fn(async () => snapshot);
   const notify = vi.fn<(method: string, params: JsonObject) => Promise<void>>(async () => {});
   const diagnose = vi.fn();
@@ -43,7 +50,7 @@ describe("native Account observation", () => {
     expect(f.controlRequest).not.toHaveBeenCalled();
   });
 
-  it("announces only a ready replacement backend, never Settings staging", async () => {
+  it("announces only a ready replacement backend, never an intermediate generation", async () => {
     const f = fixture();
     f.observer.initialized(1);
     expect(f.controlRequest).not.toHaveBeenCalled();

@@ -770,7 +770,7 @@ describe("Renderer Codex Accounts page", () => {
   });
 
   it.each(["ready", "unavailable"] as const)(
-    "explains legacy migration limits without offering account changes (%s)",
+    "offers recovery only when the backend is unavailable (%s)",
     async (phase) => {
       const client = {
         listCodexAccounts: vi.fn(async (): Promise<CodexAccountListResult> => ({
@@ -784,8 +784,8 @@ describe("Renderer Codex Accounts page", () => {
             login: false,
             delete: false,
             logout: false,
-            recover: false,
-            reason: "migration-required",
+            recover: true,
+            reason: "recovery-required",
           },
         })),
         deleteCodexAccount: vi.fn(),
@@ -813,19 +813,15 @@ describe("Renderer Codex Accounts page", () => {
       try {
         const statusText = () =>
           elementWithClass(content, "settings-account-status").children.join(" ");
-        await vi.waitFor(() =>
-          expect(statusText()).toContain(
-            phase === "ready"
-              ? "Native compatibility mode: Codex uses the existing official home."
-              : "Legacy Codex data requires migration before this layout can be used.",
-          ),
+        await vi.waitFor(() => expect(client.listCodexAccounts).toHaveBeenCalledOnce());
+        expect(statusText()).toContain(
+          phase === "unavailable"
+            ? "Codex Account recovery is required before work can continue."
+            : "",
         );
-        if (phase === "ready") {
-          expect(statusText()).toContain(
-            "Other account homes and their history have not been merged",
-          );
-          expect(statusText()).toContain("previous version");
-        }
+        expect(descendants(content).some(({ textContent }) => textContent === "Recover")).toBe(
+          phase === "unavailable",
+        );
         const add = descendants(content).find(
           ({ tagName, children }) => tagName === "button" && children.includes("Add Codex account"),
         );
@@ -1060,9 +1056,11 @@ describe("Renderer Codex Accounts page", () => {
         { accountId: "work", label: "Work", email: "work@example.com" },
       ];
       let revision = 1;
-      const listCodexAccounts = vi.fn(async () =>
-        accountSnapshot(savedAccounts, "personal", revision),
-      );
+      let pendingOperation: CodexAccountListResult["pendingOperation"];
+      const listCodexAccounts = vi.fn(async () => ({
+        ...accountSnapshot(savedAccounts, "personal", revision),
+        pendingOperation,
+      }));
       const loginStart = Promise.withResolvers<{
         accountId: string;
         loginId: string;
@@ -1149,6 +1147,8 @@ describe("Renderer Codex Accounts page", () => {
       if (typeof refreshAfterLogin !== "function") {
         throw new Error("Account login refresh was not scheduled");
       }
+      revision = 2;
+      pendingOperation = { kind: "login", operationId: "login-1" };
       refreshAfterLogin();
       await vi.waitFor(() => expect(listCodexAccounts).toHaveBeenCalledTimes(3));
       expect(visibleText(content)).toContain("ABCD-EFGH");
@@ -1161,7 +1161,8 @@ describe("Renderer Codex Accounts page", () => {
       if (typeof refreshAfterAdvancedSnapshot !== "function") {
         throw new Error("Account login refresh was not rescheduled");
       }
-      revision = 2;
+      revision = 3;
+      pendingOperation = undefined;
       if (readyEventFirst) accountsChanged?.(accountSnapshot(savedAccounts, "personal", revision));
       refreshAfterAdvancedSnapshot();
       await vi.waitFor(() => expect(visibleText(content)).not.toContain("ABCD-EFGH"));

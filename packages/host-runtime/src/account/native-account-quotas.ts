@@ -5,10 +5,15 @@ import {
   type AccountCreditsSnapshot,
   type CodexAccountUsageResult,
 } from "@codexhost/shared-contracts";
-import { privateFileDigest } from "../native-private-files.js";
-import type { PrivateCredentialFiles, NativeAccountStore } from "./native-account-store.js";
+import path from "node:path";
+import { mkdir } from "node:fs/promises";
+import {
+  readOptionalFile,
+  writePrivateFile,
+  type NativeAccountStore,
+  type NativeAccount,
+} from "./native-account-store.js";
 import type { NativeCodexCredentials } from "./native-codex-credentials.js";
-import { credentialDigest, type NativeProfileAccount } from "./native-profile-vault.js";
 
 const QUOTA_CACHE_FILE = "codex-quota-cache.json";
 const QUOTA_CACHE_TTL_MS = 5 * 60_000;
@@ -251,7 +256,6 @@ async function boundedJson(response: Response, limit: number): Promise<unknown> 
  * never starts an official backend. Only inactive credential slots may be refreshed here.
  */
 export class NativeAccountQuotas {
-  readonly #files: PrivateCredentialFiles;
   readonly #directory: string;
   readonly #credentials: NativeAccountStore;
   readonly #fetch: Fetch;
@@ -263,13 +267,11 @@ export class NativeAccountQuotas {
   #mutations: Promise<void> = Promise.resolve();
 
   constructor(input: {
-    files: PrivateCredentialFiles;
     directory: string;
     credentials: NativeAccountStore;
     fetch?: Fetch;
     admitCredentialRefresh?: (accountId: string) => () => void;
   }) {
-    this.#files = input.files;
     this.#directory = input.directory;
     this.#credentials = input.credentials;
     this.#fetch = input.fetch ?? fetch;
@@ -277,11 +279,11 @@ export class NativeAccountQuotas {
   }
 
   async initialize(liveAccountIds: ReadonlySet<string>): Promise<void> {
-    await this.#files.ensureDirectory(this.#directory);
-    const bytes = await this.#files.read(this.#directory, QUOTA_CACHE_FILE);
+    await mkdir(this.#directory, { recursive: true, mode: 0o700 });
+    const bytes = await readOptionalFile(path.join(this.#directory, QUOTA_CACHE_FILE));
     if (!bytes) return;
     try {
-      const parsed = quotaCacheSchema.parse(JSON.parse(bytes.toString("utf8")));
+      const parsed = quotaCacheSchema.parse(JSON.parse(bytes));
       const now = Date.now();
       for (const [accountId, snapshot] of Object.entries(parsed.snapshots)) {
         if (!liveAccountIds.has(accountId)) continue;
@@ -306,7 +308,7 @@ export class NativeAccountQuotas {
       : null;
   }
 
-  inspect(account: NativeProfileAccount, forceRefresh = false): Promise<CodexAccountUsageResult> {
+  inspect(account: NativeAccount, forceRefresh = false): Promise<CodexAccountUsageResult> {
     const cached = this.#snapshots.get(account.accountId);
     if (
       !forceRefresh &&
@@ -363,10 +365,10 @@ export class NativeAccountQuotas {
     await this.#persist(accountId, null).catch(() => undefined);
   }
 
-  async #readLive(account: NativeProfileAccount): Promise<CodexAccountUsageResult> {
+  async #readLive(account: NativeAccount): Promise<CodexAccountUsageResult> {
     const previous = this.get(account.accountId);
     try {
-      let credential = this.#credentials.restoreCredential(account);
+      let credential = this.#credentials.credential(account);
       let refreshed = false;
       const oauth = credential.managedOAuthCredential();
       if (oauth.expiresAtUnix !== undefined && oauth.expiresAtUnix <= Date.now() / 1000 + 60) {
@@ -412,7 +414,7 @@ export class NativeAccountQuotas {
   }
 
   #refreshCredential(
-    account: NativeProfileAccount,
+    account: NativeAccount,
     expected: NativeCodexCredentials,
   ): Promise<NativeCodexCredentials> {
     const active = this.#refreshFlights.get(account.accountId);
@@ -429,7 +431,7 @@ export class NativeAccountQuotas {
   }
 
   async #performRefresh(
-    account: NativeProfileAccount,
+    account: NativeAccount,
     expected: NativeCodexCredentials,
   ): Promise<NativeCodexCredentials> {
     // Admission pins account mutations. A late 401 must not refresh an obsolete grant.
@@ -438,8 +440,9 @@ export class NativeAccountQuotas {
     const latest = vault.accounts.find((entry) => entry.accountId === account.accountId);
     if (!latest || this.#credentials.currentAccountId === account.accountId)
       throw new CodexAccountQuotaError("unavailable");
-    const credential = this.#credentials.restoreCredential(latest);
-    if (credentialDigest(credential) !== credentialDigest(expected)) return credential;
+    const credential = this.#credentials.credential(latest);
+    if (credential.serializeForNativeStore() !== expected.serializeForNativeStore())
+      return credential;
     const oauth = expected.managedOAuthCredential();
     const response = await this.#fetch(CHATGPT_TOKEN_URL, {
       method: "POST",
@@ -470,36 +473,22 @@ export class NativeAccountQuotas {
 
   #persist(accountId: string, snapshot: QuotaSnapshot | null): Promise<void> {
     const pending = this.#mutations.then(async () => {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const bytes = await this.#files.read(this.#directory, QUOTA_CACHE_FILE);
-        let snapshots: Record<string, QuotaSnapshot> = {};
-        try {
-          if (bytes)
-            snapshots = quotaCacheSchema.parse(JSON.parse(bytes.toString("utf8"))).snapshots;
-        } catch {
-          /* Corrupt best-effort cache can be rebuilt, never the Vault. */
-        }
-        if (snapshot) snapshots[accountId] = structuredClone(snapshot);
-        else
-          snapshots = Object.fromEntries(
-            Object.entries(snapshots).filter(([id]) => id !== accountId),
-          );
-        const content = Buffer.from(JSON.stringify({ version: 1, snapshots }));
-        if (content.length > MAX_QUOTA_RESPONSE_BYTES)
-          throw new CodexAccountQuotaError("unavailable");
-        try {
-          await this.#files.replace(
-            this.#directory,
-            QUOTA_CACHE_FILE,
-            content,
-            bytes ? privateFileDigest(bytes) : null,
-          );
-          return;
-        } catch (error) {
-          if (attempt === 1) throw error;
-        }
-        // Retry re-applies only this Account's patch to newly observed data.
+      const bytes = await readOptionalFile(path.join(this.#directory, QUOTA_CACHE_FILE));
+      let snapshots: Record<string, QuotaSnapshot> = {};
+      try {
+        if (bytes) snapshots = quotaCacheSchema.parse(JSON.parse(bytes)).snapshots;
+      } catch {
+        /* Best effort cache. */
       }
+      if (snapshot) snapshots[accountId] = structuredClone(snapshot);
+      else
+        snapshots = Object.fromEntries(
+          Object.entries(snapshots).filter(([id]) => id !== accountId),
+        );
+      const content = JSON.stringify({ version: 1, snapshots });
+      if (Buffer.byteLength(content) > MAX_QUOTA_RESPONSE_BYTES)
+        throw new CodexAccountQuotaError("unavailable");
+      await writePrivateFile(path.join(this.#directory, QUOTA_CACHE_FILE), content);
     });
     this.#mutations = pending.catch(() => undefined);
     return pending;

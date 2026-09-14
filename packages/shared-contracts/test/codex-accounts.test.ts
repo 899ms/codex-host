@@ -26,40 +26,66 @@ describe("Codex Account browser contracts", () => {
     ).toThrow();
   });
 
-  it("accepts Host epoch, cleanup, recovery operation, and added capability reasons", () => {
+  it("accepts Host epoch and recovery operation", () => {
     const snapshot = {
       ...baseSnapshot,
       phase: "unavailable" as const,
       instanceId: "host-epoch-2",
-      cleanupRequired: true,
       pendingOperation: { operationId: "recover-1", kind: "recovery" as const },
       capabilities: {
         ...baseSnapshot.capabilities,
         recover: true,
         logout: false,
-        reason: "keyring-unavailable" as const,
+        reason: "recovery-required" as const,
       },
     };
     expect(codexAccountListResultSchema.parse(snapshot)).toEqual(snapshot);
-    expect(
-      codexAccountListResultSchema.parse({
-        ...snapshot,
-        capabilities: { ...snapshot.capabilities, reason: "migration-required" },
-      }).capabilities.reason,
-    ).toBe("migration-required");
+    for (const reason of ["keyring-unavailable", "migration-required"]) {
+      expect(
+        codexAccountListResultSchema.safeParse({
+          ...snapshot,
+          capabilities: { ...snapshot.capabilities, reason },
+        }).success,
+      ).toBe(false);
+    }
+    for (const field of ["cleanupRequired", "legacyHistoryPreserved"]) {
+      expect(codexAccountListResultSchema.safeParse({ ...snapshot, [field]: true }).success).toBe(
+        false,
+      );
+    }
   });
 
-  it("separates a saved login from cleanup completion", () => {
+  it("separates a saved login from activation success", () => {
     expect(
       codexAccountLoginCompletedSchema.parse({
         accountId: "account-b",
         loginId: "login-1",
         success: false,
-        error: "cleanup pending",
+        error: "Codex Account saved, but it could not be activated",
         saved: true,
-        cleanupRequired: true,
       }),
-    ).toMatchObject({ saved: true, cleanupRequired: true });
+    ).toMatchObject({ saved: true, success: false });
+  });
+
+  it("tracks a pending Settings login without changing phase", () => {
+    const snapshot = {
+      ...baseSnapshot,
+      pendingOperation: { kind: "login", operationId: "login-1" },
+    };
+    expect(codexAccountListResultSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it("rejects retired login cleanup state", () => {
+    expect(
+      codexAccountLoginCompletedSchema.safeParse({
+        accountId: "account-b",
+        loginId: "login-1",
+        success: false,
+        saved: true,
+        error: "Activation failed",
+        cleanupRequired: true,
+      }).success,
+    ).toBe(false);
   });
 
   it("requires quota freshness and observation time", () => {

@@ -1,266 +1,356 @@
-import { afterEach, describe, expect, it } from "vitest";
-import type { CodexAccountLoginCompleted } from "@codexhost/shared-contracts";
-
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { AccountReadFailure } from "../src/account/native-account-diagnostics.js";
+import path from "node:path";
 import { NativeCodexAccounts } from "../src/account/native-codex-accounts.js";
-import { newProfile } from "../src/account/native-account-store.js";
-import type { NativeLoginStage } from "../src/account/native-account-store.js";
-import type { NativeProfileJournal } from "../src/account/native-profile-vault.js";
-import {
-  credential,
-  createNativeAccountTestState,
-  nativeAccountIds,
-  type NativeAccountTestState,
-} from "./fixtures/native-account-state.js";
-
-const resources: Array<{
-  state: NativeAccountTestState;
-  manager?: NativeCodexAccounts;
-}> = [];
-
-function attachManager(state: NativeAccountTestState, manager: NativeCodexAccounts): void {
-  const resource = resources.find((candidate) => candidate.state === state);
-  if (!resource) throw new Error("missing synthetic resource");
-  resource.manager = manager;
-}
-
+import type { StartDeviceCodeLogin } from "../src/account/native-device-code-login.js";
+import { credential, createAccountState } from "./fixtures/codex-account-fixtures.js";
+const states: Awaited<ReturnType<typeof createAccountState>>[] = [];
 afterEach(async () => {
-  await Promise.all(
-    resources.splice(0).map(async ({ state, manager }) => {
-      await manager?.close();
-      await state.close();
-    }),
-  );
+  await Promise.all(states.splice(0).map((s) => s.close()));
 });
-
-async function managedA() {
-  const state = await createNativeAccountTestState();
-  const a = credential("a");
-  await state.seedAccounts({
-    current: { accountId: nativeAccountIds.a, credential: a },
+async function setup(startDeviceCodeLogin?: StartDeviceCodeLogin, current = true) {
+  const state = await createAccountState();
+  states.push(state);
+  if (current) {
+    await state.store.install(credential("a"));
+    await state.store.captureCurrent();
+  }
+  const a = state.store.currentAccountId,
+    b = await state.store.save(credential("b"));
+  const accounts = new NativeCodexAccounts({
+    ...state,
+    ...(startDeviceCodeLogin ? { startDeviceCodeLogin } : {}),
   });
-  const manager = await state.initializeManager();
-  resources.push({ state, manager });
-  return { state, manager, a };
+  await accounts.initialize();
+  state.runtime.events.length = 0;
+  return { ...state, accounts, a, b };
 }
+describe("credential replacement", () => {
+  it("refresh captures current credentials without holding a request lease", async () => {
+    const { accounts, store, runtime } = await setup();
+    const capture = Promise.withResolvers<undefined>();
+    const started = Promise.withResolvers<undefined>();
+    const captureCurrent = store.captureCurrent.bind(store);
+    vi.spyOn(store, "captureCurrent").mockImplementationOnce(async () => {
+      started.resolve(undefined);
+      await capture.promise;
+      return captureCurrent();
+    });
 
-function completedEvent(success = true) {
-  return {
-    method: "account/login/completed",
-    params: { loginId: "native-login", success },
-  } as const;
+    const refreshing = accounts.refresh();
+    await started.promise;
+    try {
+      expect(runtime.gate.busy).toBe(false);
+      const change = runtime.gate.beginStoppingChange();
+      try {
+        expect(() => change.assertIdle()).not.toThrow();
+      } finally {
+        change.finish("ready");
+      }
+    } finally {
+      capture.resolve(undefined);
+      await refreshing;
+    }
+    expect(runtime.gate.busy).toBe(false);
+  });
+  it("stops, drains external writers, captures final bytes, installs and verifies while admissions are closed", async () => {
+    const { store, runtime, accounts, b } = await setup();
+    vi.spyOn(store, "captureCurrent").mockImplementation(async () => {
+      runtime.events.push("capture");
+      return store.readCredentials();
+    });
+    const install = store.install.bind(store);
+    vi.spyOn(store, "install").mockImplementation(async (target) => {
+      runtime.events.push("write");
+      await install(target);
+    });
+    runtime.onStop = async () => {
+      expect(() => runtime.gate.admit()).toThrow("changing");
+    };
+    await accounts.switch(b);
+    expect(runtime.events).toEqual([
+      "capture",
+      "check",
+      "stop",
+      "external",
+      "capture",
+      "write",
+      "start",
+      "verify",
+      "capture",
+    ]);
+    expect(accounts.snapshot()).toMatchObject({ currentAccountId: b, phase: "ready" });
+  });
+  it("records switch and rollback verification failures without secret details", async () => {
+    const { accounts, runtime, store, b } = await setup();
+    runtime.onVerify = async () => {
+      throw new AccountReadFailure(-42, "verify-account-null");
+    };
+    await expect(accounts.switch(b)).rejects.toMatchObject({ code: "authentication-failed" });
+    const lines = (await readFile(path.join(store.directory, "diagnostics.log"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(lines).toEqual([
+      {
+        operation: "switch",
+        step: "verify-account-null",
+        code: -42,
+        elapsedMs: expect.any(Number),
+      },
+      {
+        operation: "switch",
+        step: "rollback-verify-account-null",
+        code: -42,
+        elapsedMs: expect.any(Number),
+      },
+    ]);
+    expect(accounts.snapshot().phase).toBe("unavailable");
+  });
+  it.each(["logout", "recover"] as const)("records %s verification failures", async (operation) => {
+    const { accounts, runtime, store } = await setup();
+    runtime.onVerify = async () => {
+      throw new AccountReadFailure(undefined, "verify-identity-mismatch");
+    };
+    if (operation === "recover") runtime.gate.unavailable();
+    await expect(accounts[operation]()).rejects.toThrow();
+    const lines = await readFile(path.join(store.directory, "diagnostics.log"), "utf8");
+    expect(JSON.parse(lines.split("\n")[0] ?? "null")).toMatchObject({
+      operation,
+      step: "verify-identity-mismatch",
+    });
+  });
+  it("same identity does not stop", async () => {
+    const { accounts, a, runtime } = await setup();
+    await accounts.switch(a ?? "missing");
+    expect(runtime.events).toEqual([]);
+  });
+  it("verification failure restores A and ready", async () => {
+    const { accounts, runtime, store, b, a } = await setup();
+    runtime.onVerify = async (identity) => {
+      if (identity?.subject === "b") throw new Error("bad");
+    };
+    await expect(accounts.switch(b)).rejects.toMatchObject({ code: "switch-failed" });
+    expect(accounts.snapshot()).toMatchObject({ phase: "ready", currentAccountId: a });
+    expect((await store.readCredentials())?.serializeForNativeStore()).toBe(
+      credential("a").serializeForNativeStore(),
+    );
+  });
+  it("preserves final rotated source bytes and refreshed target grants on rollback", async () => {
+    const { accounts, runtime, store, b, a } = await setup();
+    runtime.onExternalStop = async () => {
+      await store.install(credential("a", 2));
+    };
+    runtime.onVerify = async (identity) => {
+      if (identity?.subject === "b") {
+        await store.install(credential("b", 2));
+        throw new Error("verification failed");
+      }
+    };
+    await expect(accounts.switch(b)).rejects.toMatchObject({ code: "switch-failed" });
+    expect((await store.readCredentials())?.serializeForNativeStore()).toBe(
+      credential("a", 2).serializeForNativeStore(),
+    );
+    expect(store.vault.accounts.find((account) => account.accountId === b)?.auth).toBe(
+      credential("b", 2).serializeForNativeStore(),
+    );
+    expect(accounts.snapshot()).toMatchObject({ currentAccountId: a, phase: "ready" });
+  });
+  it("failed stop does not touch auth and ends unavailable", async () => {
+    const { accounts, runtime, store, b } = await setup();
+    runtime.onStop = async () => {
+      throw new Error();
+    };
+    const install = vi.spyOn(store, "install");
+    await expect(accounts.switch(b)).rejects.toMatchObject({ code: "switch-failed" });
+    expect(install).not.toHaveBeenCalled();
+    expect(accounts.snapshot().phase).toBe("unavailable");
+  });
+  it("external stop failure preserves credentials rotated during stop and ends ready", async () => {
+    const { accounts, runtime, store, b, a } = await setup();
+    const rotated = credential("a", 2).serializeForNativeStore();
+    runtime.onStop = async () => {
+      await writeFile(path.join(store.home, "auth.json"), rotated);
+    };
+    runtime.onExternalStop = async () => {
+      throw new Error();
+    };
+    const install = vi.spyOn(store, "install");
+    await expect(accounts.switch(b)).rejects.toMatchObject({ code: "switch-failed" });
+    expect((await store.readCredentials())?.serializeForNativeStore()).toBe(rotated);
+    expect(install).not.toHaveBeenCalled();
+    expect(accounts.snapshot()).toMatchObject({ phase: "ready", currentAccountId: a });
+  });
+  it.each([false, true])(
+    "busy credential lease preserves rotated bytes (drains during restart=%s)",
+    async (drains) => {
+      const { accounts, runtime, store, b, a } = await setup();
+      const rotated = credential("a", 2).serializeForNativeStore();
+      runtime.onStop = async () => {
+        await writeFile(path.join(store.home, "auth.json"), rotated);
+      };
+      const release = runtime.gate.admit("credential-write");
+      if (drains)
+        runtime.onVerify = async () => {
+          release();
+        };
+      const install = vi.spyOn(store, "install");
+      try {
+        await expect(accounts.switch(b)).rejects.toMatchObject({ code: "busy" });
+        expect((await store.readCredentials())?.serializeForNativeStore()).toBe(rotated);
+        expect(install).not.toHaveBeenCalled();
+        expect(accounts.snapshot()).toMatchObject({
+          phase: drains ? "ready" : "unavailable",
+          currentAccountId: a,
+        });
+      } finally {
+        release();
+      }
+    },
+  );
+  it("rejects concurrent switch and native authentication", async () => {
+    const { accounts, runtime, b } = await setup();
+    const stopped = Promise.withResolvers<undefined>();
+    runtime.onStop = () => stopped.promise;
+    const first = accounts.switch(b);
+    await vi.waitFor(() => expect(runtime.events).toContain("stop"));
+    await expect(accounts.switch(b)).rejects.toMatchObject({ code: "changing" });
+    stopped.resolve(undefined);
+    await first;
+    const release = runtime.gate.admit("native-auth");
+    await expect(accounts.logout()).rejects.toMatchObject({ code: "busy" });
+    release();
+  });
+  it("logout removes auth without stopping external processes; deletion is inactive-only", async () => {
+    const { accounts, runtime, store, a, b } = await setup();
+    await expect(accounts.remove(a ?? "missing")).rejects.toMatchObject({
+      code: "credential-conflict",
+    });
+    await accounts.remove(b);
+    expect(runtime.events).toEqual([]);
+    await accounts.logout();
+    expect(await store.readCredentials()).toBeNull();
+    expect(runtime.events).not.toContain("external");
+  });
+  it("recovers even after management initialization failed", async () => {
+    const { accounts, runtime } = await setup();
+    vi.spyOn(runtime, "checkCredentialStorage").mockRejectedValueOnce(new Error("unsupported"));
+    await expect(accounts.initialize()).rejects.toThrow("unsupported");
+    expect(accounts.snapshot().capabilities.manage).toBe(false);
+    runtime.gate.unavailable();
+    await accounts.recover();
+    expect(accounts.snapshot()).toMatchObject({ phase: "ready", capabilities: { manage: true } });
+  });
+});
+function login(subject: string, generation = 1) {
+  const completed = Promise.withResolvers<boolean>(),
+    starting = Promise.withResolvers<undefined>();
+  const close = vi.fn(async () => {});
+  const start: StartDeviceCodeLogin = async (home) => {
+    await starting.promise;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      path.join(home, "auth.json"),
+      credential(subject, generation).serializeForNativeStore(),
+    );
+    return {
+      verificationUrl: "https://auth.openai.com/device",
+      userCode: "CODE",
+      completed: completed.promise,
+      close,
+    };
+  };
+  return { start, starting, completed, close };
 }
-
-describe("native Codex Account manager combinations", () => {
-  it("recovers a first-login Journal before considering automatic import", async () => {
-    const state = await createNativeAccountTestState();
-    resources.push({ state });
-    const b = credential("b");
-    await state.seedAccounts({
-      current: null,
-      saved: [{ accountId: nativeAccountIds.b, credential: b }],
-    });
-    const before = { ...state.store.vault, currentAccountId: state.store.currentAccountId };
-    const after = structuredClone(before);
-    after.currentAccountId = nativeAccountIds.b;
-    after.revision++;
-    after.lastOperationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const afterB = after.accounts.find((account) => account.accountId === nativeAccountIds.b);
-    const beforeB = before.accounts.find((account) => account.accountId === nativeAccountIds.b);
-    if (!afterB || !beforeB?.payload) throw new Error("missing synthetic B");
-    afterB.payload = beforeB.payload;
-    const journal: NativeProfileJournal = {
-      version: 2,
-      operationId: after.lastOperationId,
-      phase: "prepared",
-      before,
-      after,
-      source: null,
-      target: beforeB.payload,
-    };
-    await state.store.writeJournal(journal);
-    await state.store.install(b, null);
-
-    const manager = new NativeCodexAccounts({
-      store: state.store,
-      runtime: state.runtime,
-    });
-    attachManager(state, manager);
-    await manager.initialize();
-
-    expect(manager.currentAccountId()).toBe(nativeAccountIds.b);
-    expect(state.store.vault.accounts).toHaveLength(1);
-    expect(state.store.vault.accounts[0]?.accountId).toBe(nativeAccountIds.b);
-    expect(await state.store.readJournal()).toBeNull();
-  });
-
-  it("cleans an unconfirmed staging crash without importing its early native file", async () => {
-    const state = await createNativeAccountTestState();
-    resources.push({ state });
-    const a = credential("a");
-    const b = credential("b");
-    await state.seedAccounts({
-      current: { accountId: nativeAccountIds.a, credential: a },
-    });
-    const stage = await state.store.createStage();
-    state.files.seed(state.store.stageHome(stage), "auth.json", b.serializeForNativeStore());
-
-    const manager = new NativeCodexAccounts({
-      store: state.store,
-      runtime: state.runtime,
-    });
-    attachManager(state, manager);
-    await manager.initialize();
-
-    expect(manager.currentAccountId()).toBe(nativeAccountIds.a);
-    expect(state.store.vault.accounts).toHaveLength(1);
-    expect(await state.store.readStage()).toBeNull();
-    expect((await state.store.readCredentials())?.serializeForNativeStore()).toBe(
-      a.serializeForNativeStore(),
-    );
-  });
-
-  it("buffers an early matching native event, saves B, and never alters permanent A", async () => {
-    const { state, manager, a } = await managedA();
-    const b = credential("b");
-    const permanentBefore = state.files.peek(state.store.home, "auth.json");
-    const completed = new Promise<CodexAccountLoginCompleted>((resolve) =>
-      manager.subscribeLogin(resolve),
-    );
-    state.runtime.startHook = async (home) => {
-      if (home === state.store.home) return;
-      state.files.seed(home, "auth.json", b.serializeForNativeStore());
-      state.runtime.emit(completedEvent());
-    };
-
-    await manager.startLogin();
-    const result = await completed;
-
-    expect(result).toMatchObject({ success: true, saved: true, cleanupRequired: false });
-    expect(manager.currentAccountId()).toBe(nativeAccountIds.a);
-    expect(state.store.vault.accounts.map((account) => account.accountId).sort()).toEqual(
-      [nativeAccountIds.a, result.accountId].sort(),
-    );
-    const savedB = state.store.vault.accounts.find(
-      (account) => account.accountId === result.accountId,
-    );
-    expect(savedB?.identity.subject).toBe("b");
-    expect(state.files.peek(state.store.home, "auth.json")).toEqual(permanentBefore);
-    expect((await state.store.readCredentials())?.serializeForNativeStore()).toBe(
-      a.serializeForNativeStore(),
-    );
-    expect(state.runtime.maximumActive).toBe(1);
-  });
-
-  it("cancels staging before cleanup and ignores a late completion event", async () => {
-    const { state, manager } = await managedA();
+describe("isolated Settings login", () => {
+  it("adds B while A stays current without stopping the backend", async () => {
+    const session = login("b");
+    const { accounts, runtime, a } = await setup(session.start);
     const events: unknown[] = [];
-    manager.subscribeLogin((value) => events.push(value));
-    const login = await manager.startLogin();
-
-    await expect(manager.cancelLogin(login.loginId)).resolves.toBe(true);
-    state.runtime.emit(completedEvent());
-    await Promise.resolve();
-
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ success: false, saved: false, cleanupRequired: false });
-    expect(state.store.vault.accounts).toHaveLength(1);
-    expect(await state.store.readStage()).toBeNull();
-    expect(state.runtime.activeHome).toBe(state.store.home);
+    accounts.subscribeLogin((event) => events.push(event));
+    session.starting.resolve(undefined);
+    await accounts.startLogin();
+    session.completed.resolve(true);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ success: true, saved: true });
+    expect(accounts.currentAccountId()).toBe(a);
+    expect(runtime.events).toEqual([]);
+    expect(session.close).toHaveBeenCalledOnce();
   });
-
-  it("uses new credentials for a same-current re-login", async () => {
-    const { state, manager } = await managedA();
-    const a2 = credential("a", 2);
-    const completed = new Promise<CodexAccountLoginCompleted>((resolve) =>
-      manager.subscribeLogin(resolve),
-    );
-    state.runtime.startHook = async (home) => {
-      if (home === state.store.home) return;
-      state.files.seed(home, "auth.json", a2.serializeForNativeStore());
-      state.runtime.emit(completedEvent());
+  it.each([false, true])(
+    "activates first/current login (current=%s), including early completion",
+    async (current) => {
+      const session = login("a", 2);
+      const { accounts, runtime, store } = await setup(session.start, current);
+      const events: unknown[] = [];
+      accounts.subscribeLogin((event) => events.push(event));
+      session.completed.resolve(true);
+      session.starting.resolve(undefined);
+      await accounts.startLogin();
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      expect(events[0]).toMatchObject({ success: true, saved: true });
+      expect(runtime.events).toContain("external");
+      expect((await store.readCredentials())?.serializeForNativeStore()).toBe(
+        credential("a", 2).serializeForNativeStore(),
+      );
+    },
+  );
+  it("keeps a saved first-login grant when activation fails and restores an absent auth file", async () => {
+    const session = login("a");
+    const { accounts, runtime, store } = await setup(session.start, false);
+    runtime.onVerify = async (identity) => {
+      if (identity) throw new Error("activation failed");
     };
-
-    await manager.startLogin(nativeAccountIds.a);
-    expect(await completed).toMatchObject({ success: true, saved: true });
-    expect(manager.currentAccountId()).toBe(nativeAccountIds.a);
-    expect((await state.store.readCredentials())?.serializeForNativeStore()).toBe(
-      a2.serializeForNativeStore(),
+    const received = vi.fn();
+    accounts.subscribeLogin(received);
+    session.starting.resolve(undefined);
+    await accounts.startLogin();
+    session.completed.resolve(true);
+    await vi.waitFor(() => expect(received).toHaveBeenCalledOnce());
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        saved: true,
+        error: "Codex Account saved, but it could not be activated",
+      }),
     );
-  });
-
-  it("logs out through the credential transaction and remains ready", async () => {
-    const { state, manager } = await managedA();
-
-    await manager.logout();
-
-    expect(manager.snapshot()).toMatchObject({
-      phase: "ready",
-      currentAccountId: null,
-      cleanupRequired: false,
-    });
-    expect(await state.store.readCredentials()).toBeNull();
-    const savedA = state.store.vault.accounts.find(
-      (account) => account.accountId === nativeAccountIds.a,
-    );
-    expect(savedA?.payload).not.toBeNull();
-  });
-
-  it("adopts an external native login instead of enforcing a stale selection", async () => {
-    const state = await createNativeAccountTestState();
-    resources.push({ state });
-    await state.seedAccounts({
-      current: { accountId: nativeAccountIds.a, credential: credential("a") },
-    });
-    state.files.seed(
-      state.store.home,
-      "auth.json",
-      credential("third-party").serializeForNativeStore(),
-    );
-    const manager = new NativeCodexAccounts({
-      store: state.store,
-      runtime: state.runtime,
-    });
-    attachManager(state, manager);
-
-    await state.runtime.start();
-    state.runtime.gate.initialized();
-    await manager.initialize();
-    expect(manager.snapshot()).toMatchObject({ phase: "ready", cleanupRequired: false });
-    expect(state.store.vault.accounts).toHaveLength(2);
+    expect(await store.readCredentials()).toBeNull();
+    expect(accounts.snapshot().phase).toBe("ready");
     expect(
-      state.store.vault.accounts.find((a) => a.accountId === manager.currentAccountId())?.identity
-        .subject,
-    ).toBe("third-party");
-  });
-
-  it("finishes a verified staged candidate left by a crash", async () => {
-    const state = await createNativeAccountTestState();
-    resources.push({ state });
-    const a = credential("a");
-    const b = credential("b");
-    await state.seedAccounts({
-      current: { accountId: nativeAccountIds.a, credential: a },
-    });
-    const stage: NativeLoginStage = await state.store.createStage();
-    const candidate = newProfile(b, nativeAccountIds.b);
-    candidate.payload = state.store.snapshotCredential(candidate, b);
-    stage.candidate = candidate;
-    await state.store.writeStage(stage);
-    const manager = new NativeCodexAccounts({
-      store: state.store,
-      runtime: state.runtime,
-    });
-    attachManager(state, manager);
-
-    await manager.initialize();
-
-    expect(manager.snapshot()).toMatchObject({
-      phase: "ready",
-      currentAccountId: nativeAccountIds.a,
-    });
-    expect(
-      state.store.vault.accounts.some((account) => account.accountId === nativeAccountIds.b),
+      store.vault.accounts.some(
+        (account) => account.identity.subject === "a" && account.auth !== null,
+      ),
     ).toBe(true);
-    expect(await state.store.readStage()).toBeNull();
+  });
+  it("honors cancellation before start resolves", async () => {
+    const session = login("b");
+    const { accounts, runtime } = await setup(session.start);
+    const starting = accounts.startLogin();
+    const rejected = expect(starting).rejects.toMatchObject({ code: "authentication-failed" });
+    await vi.waitFor(() => expect(accounts.snapshot().pendingOperation?.kind).toBe("login"));
+    const cancelling = accounts.cancelLogin(
+      accounts.snapshot().pendingOperation?.operationId ?? "missing",
+    );
+    session.starting.resolve(undefined);
+    await rejected;
+    expect(await cancelling).toBe(true);
+    expect(session.close).toHaveBeenCalledOnce();
+    expect(runtime.events).toEqual([]);
+  });
+  it("cancels a started session and isolates completion listeners", async () => {
+    const session = login("b");
+    const { accounts } = await setup(session.start);
+    accounts.subscribeLogin(() => {
+      throw new Error();
+    });
+    const received = vi.fn();
+    accounts.subscribeLogin(received);
+    session.starting.resolve(undefined);
+    const started = await accounts.startLogin();
+    expect(await accounts.cancelLogin(started.loginId)).toBe(true);
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, saved: false }),
+    );
   });
 });

@@ -153,7 +153,6 @@ export async function runHostRuntime(input: {
           stockCodexPath,
           arguments: remoteControlPlan?.officialArguments ?? input.arguments,
           environment: delegationEnvironment,
-          sharedListener: !!remoteControlPlan,
           diagnosticOutput: process.stderr,
         });
         const shared = {

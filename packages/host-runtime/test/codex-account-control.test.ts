@@ -1,21 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  SingleNativeCodexAccount,
-  UnavailableCodexAccounts,
-} from "../src/account/codex-account-control.js";
+import { SingleNativeCodexAccount } from "../src/account/codex-account-control.js";
 
 describe("Codex Account control fallbacks", () => {
-  it("distinguishes unavailable security and migration reasons", () => {
-    expect(new UnavailableCodexAccounts("keyring-unavailable").snapshot()).toMatchObject({
-      phase: "unavailable",
-      capabilities: { manage: false, reason: "keyring-unavailable" },
-    });
-    expect(new UnavailableCodexAccounts("migration-required").snapshot()).toMatchObject({
-      capabilities: { manage: false, reason: "migration-required" },
-    });
-  });
-
   it("projects native state without implementing a second managed login path", async () => {
     const summary = vi.fn(() => ({
       version: 2 as const,

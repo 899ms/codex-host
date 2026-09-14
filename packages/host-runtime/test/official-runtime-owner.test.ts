@@ -1,3 +1,5 @@
+import type { ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
@@ -7,15 +9,14 @@ import {
   OfficialRuntimeOwner,
   type OwnedOfficialBackend,
 } from "../src/codex-runtime/official-runtime-owner.js";
-import { OfficialRuntimeScope } from "../src/codex-runtime/official-runtime-scope.js";
 import { OfficialWorkGate } from "../src/codex-runtime/official-work-gate.js";
+import { createOwnedLoopbackBackend } from "../src/codex-runtime/owned-official-backends.js";
 import type { OfficialAppServerExit } from "../src/official-app-server-connection.js";
 
 function fixture() {
   let live = 0;
   let peak = 0;
   const events: string[] = [];
-  const roles: unknown[] = [];
   const backends: ReturnType<typeof backend>[] = [];
   function backend() {
     const exit = Promise.withResolvers<OfficialAppServerExit>();
@@ -119,8 +120,7 @@ function fixture() {
     };
   }
   const gate = new OfficialWorkGate();
-  const create = vi.fn((role: unknown) => {
-    roles.push(role);
+  const create = vi.fn(() => {
     const value = backend();
     backends.push(value);
     return value.native;
@@ -129,7 +129,6 @@ function fixture() {
     createBackend: create,
     diagnosticOutput: new PassThrough(),
     gate,
-    permanentHome: "/permanent",
   });
   const attach = () => {
     const output: JsonObject[] = [];
@@ -148,12 +147,61 @@ function fixture() {
     if (!value) throw new Error("Missing synthetic connection");
     return value;
   };
-  return { owner, gate, create, attach, native, connection, events, roles, peak: () => peak };
+  return { owner, gate, create, attach, native, connection, events, peak: () => peak };
 }
 const initialization = {
   clientInfo: { name: "synthetic", version: "1" },
   capabilities: { experimentalApi: true },
 };
+
+describe("owned loopback backend", () => {
+  it("requires readiness, hashes capability authentication, and discards managed stderr", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 123,
+      stderr: new PassThrough(),
+      kill: vi.fn(() => {
+        queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+        return true;
+      }),
+    });
+    const spawnOfficial = vi.fn(() => child as unknown as ChildProcess) as unknown as typeof spawn;
+    const backend = createOwnedLoopbackBackend({
+      stockCodexPath: "/synthetic/codex",
+      arguments: ["app-server"],
+      environment: { CODEX_HOME: "/synthetic/home" },
+      spawnOfficial,
+    });
+    const stderr = vi.spyOn(process.stderr, "write");
+    try {
+      await expect(backend.connect()).rejects.toThrow("not ready");
+      const starting = backend.start();
+      child.stderr.write("synthetic credential-bearing failure\n");
+      child.stderr.write("listening on: ws://127.0.0.1:43821\n");
+      await starting;
+      expect(stderr).not.toHaveBeenCalled();
+      expect(spawnOfficial).toHaveBeenCalledWith(
+        "/synthetic/codex",
+        [
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:0",
+          "--ws-auth",
+          "capability-token",
+          "--ws-token-sha256",
+          expect.stringMatching(/^[a-f0-9]{64}$/),
+        ],
+        expect.objectContaining({ env: { CODEX_HOME: "/synthetic/home" } }),
+      );
+      expect(backend.processId).toBe(123);
+      await backend.stop();
+      await expect(backend.closed).resolves.toEqual({ code: null, signal: "SIGTERM" });
+      await expect(backend.connect()).rejects.toThrow("not ready");
+    } finally {
+      stderr.mockRestore();
+      await backend.stop();
+    }
+  });
+});
 
 describe("single official runtime owner", () => {
   it.each([
@@ -415,54 +463,24 @@ describe("single official runtime owner", () => {
     }
   });
 
-  it("does not create or publish a backend from managed scope startup", async () => {
-    const closed = Promise.withResolvers<OfficialAppServerExit>();
-    const createBackend = vi.fn((): OwnedOfficialBackend => ({
-      closed: closed.promise,
-      start: vi.fn(async () => {}),
-      connect: vi.fn(async () => {
-        throw new Error("must not connect");
-      }),
-      stop: vi.fn(async () => closed.resolve({ code: 0, signal: null })),
-    }));
-    const scope = new OfficialRuntimeScope({
-      createBackend,
-      diagnosticOutput: new PassThrough(),
-      permanentHome: "/permanent",
-      managedAccounts: true,
-    });
-
-    await expect(scope.start()).rejects.toMatchObject({ code: "unavailable" });
-    expect(createBackend).not.toHaveBeenCalled();
-    expect(scope.owner.running).toBe(false);
-    expect(scope.gate.phase).toBe("unavailable");
-
-    await scope.owner.start({ mode: "management-only" });
-    scope.gate.initialized();
-    await expect(scope.start()).resolves.toBeUndefined();
-    expect(createBackend).toHaveBeenCalledOnce();
-    await scope.owner.stop();
-    await expect(scope.start()).rejects.toMatchObject({ code: "unavailable" });
-    expect(createBackend).toHaveBeenCalledOnce();
-    await scope.close();
-  });
-
-  it("starts staging with only the persistent management client and initializes it once", async () => {
+  it("connects management first and initializes every attached client once", async () => {
     const f = fixture();
     const task = f.attach();
     task.client.configure(initialization);
     const management = f.owner.attachManagement(async () => {});
-    management.configure(initialization);
-    await f.owner.start({ homeOverride: "/staging", mode: "management-only" });
-    expect(f.roles).toEqual([{ kind: "staging", home: "/staging" }]);
-    expect(f.native().connections).toHaveLength(1);
+    const managementParams = { clientInfo: { name: "management", version: "1" } };
+    management.configure(managementParams);
+    await f.owner.start();
+    expect(f.native().connections).toHaveLength(2);
+    expect(f.connection().requests[0]?.params).toEqual(managementParams);
+    expect(f.connection(0, 1).requests[0]?.params).toEqual(initialization);
     expect(f.connection().requests.map((request) => request.method)).toEqual([
       "initialize",
       "initialized",
     ]);
     await Promise.all([
-      management.initialize(initialization),
-      management.initialize(initialization),
+      management.initialize(managementParams),
+      management.initialize(managementParams),
     ]);
     expect(f.connection().requests.map((request) => request.method)).toEqual([
       "initialize",
@@ -470,10 +488,6 @@ describe("single official runtime owner", () => {
     ]);
     await f.owner.stop();
     await f.owner.start();
-    expect(f.roles).toEqual([
-      { kind: "staging", home: "/staging" },
-      { kind: "permanent", home: "/permanent" },
-    ]);
     expect(f.native(1).connections).toHaveLength(2);
     await f.owner.stop();
   });

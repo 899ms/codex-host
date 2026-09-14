@@ -478,6 +478,37 @@ async function answerOfficialParentCwd(
   );
 }
 
+describe("AppServerHost official forwarding", () => {
+  it.each([
+    { method: "codexhost/unknown", params: {} },
+    {
+      method: "thread/start",
+      params: { model: "gpt-5", cwd: "/synthetic", unknownParam: "opaque" },
+    },
+    {
+      method: "turn/start",
+      params: {
+        threadId: "official-thread",
+        input: [{ type: "text", text: "synthetic" }],
+        unknownParam: "opaque",
+      },
+    },
+  ])("forwards $method unchanged and relays backend errors", async ({ method, params }) => {
+    const fixture = createFixture();
+    try {
+      await fixture.ready;
+      const request = { id: 1, method, params };
+      writeRequest(fixture.desktopInput, request);
+      expect(await readJsonLine(fixture.official.stdin)).toEqual(request);
+      const response = { id: 1, error: { code: -32601, message: "Synthetic backend error" } };
+      writeRequest(fixture.official.stdout, response);
+      expect(await fixture.collector.waitFor((message) => requestId(message, 1))).toEqual(response);
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+});
+
 describe("AppServerHost installed Harness plugins", () => {
   // A cold plugin import has its own 10s loader budget; RPC checks remain 2s.
   it("discovers an unknown plugin, serves its descriptor, routes a Thread, and closes it", async () => {
@@ -919,7 +950,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
       phase: "ready",
       revision: 4,
       instanceId: "synthetic-instance",
-      cleanupRequired: true,
       capabilities: {
         manage: true,
         switch: true,
@@ -945,7 +975,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
         state = { ...state, currentAccountId: null, phase: "ready", revision: 5 };
       },
       async recover() {},
-      observe() {},
       subscribeLogin: () => () => undefined,
     };
     const fixture = createFixture({ accountControl });
@@ -960,25 +989,54 @@ describe("AppServerHost HarnessAdapter projection", () => {
         id: 909,
         result: { currentAccountId: null, phase: "ready", revision: 5 },
       });
-      expect(state).toMatchObject({ instanceId: "synthetic-instance", cleanupRequired: true });
+      expect(state).toMatchObject({ instanceId: "synthetic-instance" });
     } finally {
       await stopFixture(fixture);
     }
   });
 
-  it.each(["admission", "transaction", "untrusted"] as const)(
-    "returns a fixed busy error without exposing %s details",
-    async (kind) => {
+  it.each([
+    ["busy", -32084, "Codex is busy"],
+    ["changing", -32085, "Codex Account is changing"],
+    ["unavailable", -32086, "Codex Account is unavailable"],
+    ["recovery-required", -32086, "Codex Account is unavailable"],
+    ["unsupported", -32087, "Codex Account management is unsupported"],
+    ["unsupported-storage", -32087, "Codex Account management is unsupported"],
+    ["authentication-failed", -32089, "Codex Account authentication failed"],
+    ["requires-login", -32089, "Codex Account requires sign-in"],
+    ["unknown-account", -32086, "Unknown Codex Account"],
+    ["credential-conflict", -32086, "Codex Account credentials changed; refresh and retry"],
+    ["switch-failed", -32086, "Codex Account switch failed"],
+    ["stop-unconfirmed", -32086, "Codex Account operation failed"],
+    ["rollback-failed", -32086, "Codex Account operation failed"],
+    ["unsupported-version", -32086, "Codex Account operation failed"],
+    ["untrusted", -32086, "Codex Account operation failed"],
+  ] as const)(
+    "returns a fixed %s error without exposing private details",
+    async (code, rpcCode, message) => {
       const { OfficialAdmissionError } = await import("../src/codex-runtime/official-work-gate.js");
-      const { NativeTransitionError } =
-        await import("../src/account/native-profile-transaction.js");
+      const { NativeAccountError } = await import("../src/account/native-account-store.js");
       const accountId = "00000000-0000-4000-8000-000000000022";
-      const error =
-        kind === "admission"
-          ? new OfficialAdmissionError("busy", new Error("private native details"))
-          : kind === "transaction"
-            ? new NativeTransitionError("busy", true)
-            : Object.assign(new Error("secret native diagnostic"), { code: "busy" });
+      let error: Error;
+      switch (code) {
+        case "busy":
+        case "changing":
+        case "unavailable":
+          error = new OfficialAdmissionError(code, new Error("private native details"));
+          break;
+        case "recovery-required":
+        case "unsupported-storage":
+        case "authentication-failed":
+        case "requires-login":
+        case "unknown-account":
+        case "credential-conflict":
+        case "switch-failed":
+          error = new NativeAccountError(code);
+          error.message = "secret native diagnostic";
+          break;
+        default:
+          error = Object.assign(new Error("secret native diagnostic"), { code });
+      }
       const state: CodexAccountListResult = {
         version: 2,
         currentAccountId: null,
@@ -1002,7 +1060,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
         },
         async logout() {},
         async recover() {},
-        observe() {},
         subscribeLogin: () => () => undefined,
       };
       const fixture = createFixture({ accountControl });
@@ -1017,8 +1074,8 @@ describe("AppServerHost HarnessAdapter projection", () => {
           fixture.collector.waitFor((message) => message.id === 911),
         ).resolves.toMatchObject({
           error: {
-            code: -32084,
-            message: "Codex is busy",
+            code: rpcCode,
+            message,
           },
         });
       } finally {
@@ -1057,7 +1114,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
       },
       async logout() {},
       async recover() {},
-      observe() {},
       subscribeLogin: () => () => undefined,
     };
     const fixture = createFixture({ accountControl });
@@ -1844,47 +1900,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
     }
   });
 
-  it("initializes a new Desktop without stopping or attaching to an active login backend", async () => {
-    const exit = Promise.withResolvers<OfficialAppServerExit>();
-    const stop = vi.fn(async () => exit.resolve({ code: 0, signal: null }));
-    const connect = vi.fn(async (): Promise<OfficialAppServerConnection> => {
-      throw new Error("Desktop must not connect to authentication staging");
-    });
-    const scope = new OfficialRuntimeScope({
-      permanentHome: "/synthetic/permanent",
-      managedAccounts: true,
-      diagnosticOutput: new PassThrough(),
-      createBackend: () => ({ closed: exit.promise, start: async () => {}, connect, stop }),
-    });
-    scope.gate.initialized();
-    const change = scope.gate.beginChange();
-    await scope.owner.start({ mode: "management-only", homeOverride: "/synthetic/login" });
-    const fixture = createFixture({ officialRuntimeScope: scope });
-    try {
-      writeRequest(fixture.desktopInput, {
-        id: 901,
-        method: "initialize",
-        params: { clientInfo: { name: "codex_desktop", version: "synthetic" } },
-      });
-      await expect(
-        fixture.collector.waitFor((message) => message.id === 901),
-      ).resolves.toMatchObject({
-        result: { userAgent: "codexhost", codexHome: "/synthetic/permanent" },
-      });
-      expect(scope.gate.phase).toBe("changing");
-      expect(scope.owner.running).toBe(true);
-      expect(stop).not.toHaveBeenCalled();
-      expect(connect).not.toHaveBeenCalled();
-      await startPiThread(fixture);
-    } finally {
-      fixture.host.close();
-      await fixture.running;
-      await scope.close();
-      change.finish("unavailable");
-      rmSync(fixture.mappingStoreDirectory, { recursive: true, force: true });
-    }
-  });
-
   it("keeps the initialized Desktop client attached through managed Account recovery", async () => {
     const exit = Promise.withResolvers<OfficialAppServerExit>();
     const stdin = new PassThrough();
@@ -1919,8 +1934,9 @@ describe("AppServerHost HarnessAdapter projection", () => {
     }));
     const scope = new OfficialRuntimeScope({
       permanentHome: "/synthetic/permanent",
-      managedAccounts: true,
-      createBackend,
+      createBackend: createBackend.mockImplementationOnce(() => {
+        throw new Error("Synthetic initial startup failure");
+      }),
       diagnosticOutput: new PassThrough(),
     });
     const accountControl = new SingleNativeCodexAccount(() => ({
@@ -1947,7 +1963,7 @@ describe("AppServerHost HarnessAdapter projection", () => {
       expect(initial.error).toBeUndefined();
       expect(initial).toMatchObject({ result: { codexHome: "/synthetic/permanent" } });
       expect(scope.gate.phase).toBe("unavailable");
-      expect(createBackend).not.toHaveBeenCalled();
+      expect(createBackend).toHaveBeenCalledOnce();
       writeRequest(fixture.desktopInput, { method: "initialized" });
       writeRequest(fixture.desktopInput, {
         id: 902,
@@ -1970,7 +1986,7 @@ describe("AppServerHost HarnessAdapter projection", () => {
         result: { data: [] },
       });
       expect(fixture.collector.messages.filter((message) => message.id === 901)).toHaveLength(1);
-      expect(createBackend).toHaveBeenCalledOnce();
+      expect(createBackend).toHaveBeenCalledTimes(2);
     } finally {
       fixture.host.close();
       await fixture.running;
@@ -1998,14 +2014,17 @@ describe("AppServerHost HarnessAdapter projection", () => {
     });
     const scope = new OfficialRuntimeScope({
       permanentHome: "/synthetic/permanent",
-      managedAccounts: true,
       diagnosticOutput: new PassThrough(),
-      createBackend: () => ({
-        closed: exit.promise,
-        start: async () => {},
-        stop,
-        connect: async () => ({ stdin, stdout, stderr, closed: exit.promise, close: () => {} }),
-      }),
+      createBackend: vi
+        .fn(() => ({
+          closed: exit.promise,
+          start: async () => {},
+          stop,
+          connect: async () => ({ stdin, stdout, stderr, closed: exit.promise, close: () => {} }),
+        }))
+        .mockImplementationOnce(() => {
+          throw new Error("Synthetic initial startup failure");
+        }),
     });
     const fixture = createFixture({ officialRuntimeScope: scope });
     let finished = false;

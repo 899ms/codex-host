@@ -1,279 +1,115 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { JsonObject } from "@codexhost/protocol-core";
 import { OfficialAccountRuntime } from "../src/account/official-account-runtime.js";
-import { NativeCodexCredentials } from "../src/account/native-codex-credentials.js";
-import type { OfficialClientSession } from "../src/codex-runtime/official-runtime-owner.js";
-import type { CodexRuntimeOutput } from "../src/codex-runtime/codex-runtime.js";
 import { OfficialWorkGate } from "../src/codex-runtime/official-work-gate.js";
-import { syntheticNativeCredentials } from "./fixtures/codex-account-fixtures.js";
+import { credential } from "./fixtures/codex-account-fixtures.js";
+import type { NativeCodexCredentials } from "../src/account/native-codex-credentials.js";
 
-async function fixture(stopExternalProcesses?: () => Promise<void>) {
-  const native = NativeCodexCredentials.parse(syntheticNativeCredentials({ subject: "a" }));
-  const credentialsByHome = new Map([["/synthetic/home", native]]);
-  const readCredentials = vi.fn(async (home: string) => credentialsByHome.get(home) ?? null);
-  const responses: Record<string, JsonObject> = {
-    "config/read": { config: { cli_auth_credentials_store: "file" } },
-    "account/read": { account: { type: "chatgpt", email: native.email ?? "a@example.test" } },
-    "account/rateLimits/read": { rateLimits: {} },
-  };
-  const gate = new OfficialWorkGate();
-  const controlRequest = vi.fn<(method: string, params: JsonObject) => Promise<JsonObject>>(
-    async (method) => ({
-      result: responses[method] ?? {},
-    }),
-  );
-  const management: OfficialClientSession = {
-    configure: vi.fn<(params: JsonObject) => void>(),
-    initialize: vi.fn<(params: JsonObject) => Promise<JsonObject>>(async () => ({})),
-    request: controlRequest,
-    send: vi.fn<(value: JsonObject) => Promise<void>>(async () => {}),
-    close: vi.fn<() => void>(),
-  };
-  let managementOutput: CodexRuntimeOutput | undefined;
-  const owner = {
-    gate,
-    running: true,
-    controlRequest,
-    start: vi.fn(async (...args: unknown[]) => {
-      void args;
-      owner.running = true;
-      await management.initialize({
-        clientInfo: { name: "codexhost_account_management", version: "1" },
-        capabilities: { experimentalApi: true },
-      });
-    }),
-    stop: vi.fn(async () => {
-      owner.running = false;
-    }),
-    attachManagement: vi.fn((output: CodexRuntimeOutput): OfficialClientSession => {
-      managementOutput = output;
-      return management;
-    }),
-  };
-  const reconcile = vi.fn(async () => {});
-  const environment: NodeJS.ProcessEnv = {};
+afterEach(() => vi.useRealTimers());
+function setup(
+  read: () => Promise<JsonObject>,
+  current: NativeCodexCredentials | null = credential("b"),
+) {
+  const initialize = vi.fn(async () => ({}));
+  const controlRequest = vi.fn(read);
   const runtime = new OfficialAccountRuntime({
-    owner,
-    sharedCodexHome: "/synthetic/home",
-    readCredentials,
-    environment,
-    reconcilePreviousWriter: reconcile,
-    stopExternalProcesses: stopExternalProcesses ?? (async () => {}),
-  });
-  return {
-    native,
-    credentialsByHome,
-    readCredentials,
-    responses,
-    owner,
-    management,
-    reconcile,
-    environment,
-    runtime,
-    emitManagement: async (value: JsonObject) => {
-      if (!managementOutput) throw new Error("Management output is not attached");
-      await managementOutput({
-        generation: 1,
-        frame: Buffer.from(`${JSON.stringify(value)}\n`),
-        value,
-      });
+    owner: {
+      gate: new OfficialWorkGate(),
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      attachManagement: () => ({
+        configure: vi.fn(),
+        initialize,
+        request: vi.fn(),
+        send: vi.fn(),
+        close: vi.fn(),
+      }),
+      controlRequest,
     },
-  };
+    environment: {},
+    readCredentials: async () => current,
+    stopExternalProcesses: async () => {},
+  });
+  return { runtime, controlRequest };
 }
-
-describe("official native account checks", () => {
-  it("only invokes external termination explicitly after owned exit", async () => {
-    const stopExternal = vi.fn(async () => {});
-    const f = await fixture(stopExternal);
-    await expect(f.runtime.stopExternalProcesses()).rejects.toMatchObject({ code: "busy" });
-    await f.runtime.stop();
-    expect(stopExternal).not.toHaveBeenCalled();
-    await f.runtime.stopExternalProcesses();
-    expect(stopExternal).toHaveBeenCalledOnce();
-    await f.runtime.start();
-    expect(stopExternal).toHaveBeenCalledOnce();
-  });
-  it("initializes a persistent loopback management client before Desktop attaches", async () => {
-    const f = await fixture();
-    f.owner.running = false;
-    await f.runtime.start();
-    expect(f.owner.attachManagement).toHaveBeenCalledTimes(1);
-    expect(f.management.configure).toHaveBeenCalledTimes(1);
-    expect(f.management.initialize).toHaveBeenCalledWith({
-      clientInfo: { name: "codexhost_account_management", version: "1" },
-      capabilities: { experimentalApi: true },
-    });
-    expect(f.owner.start).toHaveBeenCalledWith({ mode: "task" });
-    expect(f.owner.controlRequest.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "account/read",
-    ]);
-  });
-  it("publishes management notifications to account subscribers", async () => {
-    const f = await fixture();
-    const listener = vi.fn();
-    const unsubscribe = f.runtime.subscribe(listener);
-    await f.emitManagement({ method: "account/login/completed", params: { loginId: "one" } });
-    expect(listener).toHaveBeenCalledWith({
-      method: "account/login/completed",
-      params: { loginId: "one" },
-    });
-    unsubscribe();
-    await f.emitManagement({ method: "account/login/completed", params: { loginId: "two" } });
-    expect(listener).toHaveBeenCalledTimes(1);
-  });
-  it("starts staging management-only and verifies credentials from the actual active home", async () => {
-    const f = await fixture();
-    const staged = NativeCodexCredentials.parse(syntheticNativeCredentials({ subject: "staged" }));
-    f.credentialsByHome.set("/synthetic/staging", staged);
-    f.responses["account/read"] = {
-      account: { type: "chatgpt", email: staged.email ?? "staged@example.test" },
-    };
-    await f.runtime.start("/synthetic/staging");
-    await f.runtime.verify(staged.identity);
-    expect(f.owner.start).toHaveBeenCalledWith({
-      homeOverride: "/synthetic/staging",
-      mode: "management-only",
-    });
-    expect(f.readCredentials).toHaveBeenCalledWith("/synthetic/staging");
-    expect(f.owner.controlRequest.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "account/read",
-      "config/read",
-      "account/read",
-    ]);
-  });
-  it("uses native capability checks without an executable version allowlist", async () => {
-    const f = await fixture();
-    f.owner.running = false;
-    await f.runtime.preflight();
-    expect(f.owner.start).toHaveBeenCalledOnce();
-    expect(f.owner.controlRequest.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "account/read",
-    ]);
-  });
-  it("stops a newly started unsupported store", async () => {
-    const unsupportedStore = await fixture();
-    unsupportedStore.owner.running = false;
-    unsupportedStore.responses["config/read"] = {
-      config: { cli_auth_credentials_store: "keyring" },
-    };
-    await expect(unsupportedStore.runtime.start()).rejects.toMatchObject({
-      code: "unsupported-storage",
-    });
-    expect(unsupportedStore.owner.start).toHaveBeenCalledOnce();
-    expect(unsupportedStore.owner.stop).toHaveBeenCalledOnce();
-  });
-  it.each(["keyring", "auto", "unknown"])(
-    "rejects %s without touching the existing backend",
-    async (store) => {
-      const f = await fixture();
-      f.responses["config/read"] = { config: { cli_auth_credentials_store: store } };
-      await expect(f.runtime.preflight()).rejects.toMatchObject({ code: "unsupported-storage" });
-      expect(f.owner.stop).not.toHaveBeenCalled();
-    },
+it("waits through initial null accounts without forcing token rotation", async () => {
+  vi.useFakeTimers();
+  let reads = 0;
+  const { runtime, controlRequest } = setup(async () => ({
+    result: { account: ++reads < 3 ? null : { type: "chatgpt" } },
+  }));
+  const verified = runtime.verify(credential("b").identity).then(
+    () => null,
+    (error: unknown) => error,
   );
-  it("keeps an omitted credentials-store value unsupported without native default evidence", async () => {
-    const f = await fixture();
-    f.responses["config/read"] = { config: {} };
-    await expect(f.runtime.preflight()).rejects.toMatchObject({ code: "unsupported-storage" });
-    expect(f.owner.stop).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(400);
+  expect(await verified).toBeNull();
+  expect(controlRequest).toHaveBeenCalledTimes(3);
+  for (const call of controlRequest.mock.calls)
+    expect(call).toEqual(["account/read", { refreshToken: false }]);
+});
+it.each([
+  [null, "verify-account-null"],
+  [{ type: "apiKey" }, "verify-account-type"],
+  [{ type: "chatgpt" }, "verify-identity-mismatch"],
+])("bounds persistent account failure: %j", async (account, step) => {
+  vi.useFakeTimers();
+  const { runtime } = setup(async () => ({ result: { account } }), credential("a"));
+  const result = runtime.verify(credential("b").identity).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(9_999);
+  const settled = vi.fn();
+  void result.then(settled);
+  await Promise.resolve();
+  expect(settled).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(await result).toMatchObject({ code: "authentication-failed", step });
+});
+it("retries native error responses and retains only the last numeric code", async () => {
+  vi.useFakeTimers();
+  let calls = 0;
+  const { runtime } = setup(async () =>
+    ++calls === 1
+      ? { result: { account: null } }
+      : { error: { code: -123, message: "secret-token email@example.com /secret/path" } },
+  );
+  const result = runtime.verify(credential("b").identity).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(await result).toMatchObject({
+    code: "authentication-failed",
+    step: "verify-read",
+    rpcCode: -123,
   });
-  it("rejects API key mode and external authentication overrides", async () => {
-    const f = await fixture();
-    f.responses["account/read"] = { account: { type: "apiKey" } };
-    await expect(f.runtime.preflight()).rejects.toMatchObject({ code: "unsupported-storage" });
-    f.responses["account/read"] = { account: null };
-    f.environment.OPENAI_API_KEY = "synthetic";
-    await expect(f.runtime.preflight()).rejects.toMatchObject({ code: "unsupported-storage" });
+  expect(JSON.stringify(await result)).not.toContain("secret");
+});
+it("succeeds after transient RPC errors", async () => {
+  vi.useFakeTimers();
+  let calls = 0;
+  const { runtime } = setup(async () =>
+    ++calls < 3 ? { error: { code: -123 } } : { result: { account: { type: "chatgpt" } } },
+  );
+  const result = runtime.verify(credential("b").identity);
+  await vi.advanceTimersByTimeAsync(400);
+  await expect(result).resolves.toBeUndefined();
+});
+it("bounds a hung management request", async () => {
+  vi.useFakeTimers();
+  const { runtime, controlRequest } = setup(() => new Promise(() => {}));
+  const result = runtime.verify(credential("b").identity).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(await result).toMatchObject({ code: "authentication-failed", step: "verify-read" });
+  expect(controlRequest).toHaveBeenCalledOnce();
+});
+it("accepts signed-out readiness only when the file is also absent", async () => {
+  const { runtime } = setup(async () => ({ result: { account: null } }), null);
+  await expect(runtime.verify(null)).resolves.toBeUndefined();
+});
+it("keeps storage checks and rejects native config errors", async () => {
+  const { runtime, controlRequest } = setup(async () => ({
+    error: { code: -42, message: "secret" },
+  }));
+  await expect(runtime.checkCredentialStorage()).rejects.toMatchObject({
+    code: "authentication-failed",
+    rpcCode: -42,
   });
-  it("checks the native account and credential identity without querying quota", async () => {
-    const f = await fixture();
-    await f.runtime.verify(f.native.identity);
-    expect(f.owner.controlRequest.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "account/read",
-    ]);
-    expect(f.owner.controlRequest).toHaveBeenCalledWith("account/read", {
-      refreshToken: true,
-    });
-    f.credentialsByHome.set(
-      "/synthetic/home",
-      NativeCodexCredentials.parse(syntheticNativeCredentials({ subject: "other" })),
-    );
-    await expect(f.runtime.verify(f.native.identity)).rejects.toMatchObject({
-      code: "authentication-failed",
-    });
-  });
-  it("does not depend on a working quota service for account verification", async () => {
-    const f = await fixture();
-    f.owner.controlRequest.mockImplementation(async (method) =>
-      method === "account/rateLimits/read"
-        ? { error: { message: "synthetic quota service unavailable" } }
-        : { result: f.responses[method] ?? {} },
-    );
-    await expect(f.runtime.verify(f.native.identity)).resolves.toBeUndefined();
-    expect(f.owner.controlRequest.mock.calls.map(([method]) => method)).not.toContain(
-      "account/rateLimits/read",
-    );
-  });
-  it("still rejects a native account RPC failure without exposing its body", async () => {
-    const f = await fixture();
-    f.owner.controlRequest.mockImplementation(async (method) =>
-      method === "account/read"
-        ? { error: { message: "synthetic-secret" } }
-        : { result: f.responses[method] ?? {} },
-    );
-    await expect(f.runtime.verify(f.native.identity)).rejects.toThrow("invalid-native-response");
-  });
-  it("still rejects credential identity changes during the native account check", async () => {
-    const f = await fixture();
-    f.owner.controlRequest.mockImplementation(async (method) => {
-      if (method === "account/read")
-        f.credentialsByHome.set(
-          "/synthetic/home",
-          NativeCodexCredentials.parse(syntheticNativeCredentials({ subject: "other" })),
-        );
-      return { result: f.responses[method] ?? {} };
-    });
-    await expect(f.runtime.verify(f.native.identity)).rejects.toMatchObject({
-      code: "authentication-failed",
-    });
-  });
-  it("checks only authentication and configuration before explicit stop", async () => {
-    const f = await fixture();
-    f.owner.running = false;
-    await f.runtime.preflight();
-    expect(f.owner.controlRequest.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "account/read",
-    ]);
-    expect(f.owner.start).toHaveBeenCalledWith({ mode: "management-only" });
-    expect(f.owner.stop).not.toHaveBeenCalled();
-    expect(f.owner.running).toBe(true);
-    await expect(f.runtime.reconcilePreviousWriter()).rejects.toMatchObject({ code: "busy" });
-    await f.runtime.stop();
-    expect(f.owner.stop).toHaveBeenCalledTimes(1);
-    expect(f.reconcile).toHaveBeenCalledOnce();
-    await f.runtime.reconcilePreviousWriter();
-    expect(f.reconcile).toHaveBeenCalledTimes(2);
-    expect(f.owner.running).toBe(false);
-  });
-  it("stops a cold bootstrap when preflight validation fails", async () => {
-    const f = await fixture();
-    f.owner.running = false;
-    f.responses["config/read"] = { config: { cli_auth_credentials_store: "keyring" } };
-    await expect(f.runtime.preflight()).rejects.toMatchObject({ code: "unsupported-storage" });
-    expect(f.owner.start).toHaveBeenCalledOnce();
-    expect(f.owner.stop).toHaveBeenCalledOnce();
-    expect(f.owner.running).toBe(false);
-  });
-  it("cannot bootstrap beside an unconfirmed previous process", async () => {
-    const f = await fixture();
-    f.owner.running = false;
-    f.reconcile.mockRejectedValue(new Error("unconfirmed"));
-    await expect(f.runtime.preflight()).rejects.toThrow("unconfirmed");
-    expect(f.owner.start).not.toHaveBeenCalled();
-  });
+  expect(controlRequest).toHaveBeenCalledWith("config/read", { includeLayers: true });
 });

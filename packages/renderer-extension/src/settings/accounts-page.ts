@@ -152,7 +152,6 @@ export function createAccountsSettingsPage(
       let accountRevision = 0;
       let accountInstanceId: string | undefined;
       let hasAccountSnapshot = false;
-      let cleanupRequired = false;
       let capabilities: CodexAccountListResult["capabilities"] = {
         manage: false,
         switch: false,
@@ -206,6 +205,8 @@ export function createAccountsSettingsPage(
                 const refreshedLogin = login;
                 // A ready Account event may already have advanced the displayed
                 // revision. Compare with this login's admission, not that event.
+                // Settings login stays ready: an advanced revision is not completion
+                // while the same login is still pending.
                 const snapshotAdvanced =
                   loginStartSnapshot &&
                   ((result.instanceId !== undefined &&
@@ -242,33 +243,19 @@ export function createAccountsSettingsPage(
         const restoreFocus = accountListFocusRestorer(list, search);
         body.replaceChildren();
         status.replaceChildren();
-        const cleanupOnly = cleanupRequired && accountPhase === "ready";
-        const accountStatus = cleanupRequired
-          ? cleanupOnly
-            ? messages.accountCleanupRequired
-            : messages.accountSavedUnavailable
-          : accountPhase === "unavailable" && capabilities.reason === "recovery-required"
-            ? messages.accountRecoveryRequired
-            : capabilities.reason === "migration-required"
-              ? accountPhase === "ready" && currentAccountId !== null
-                ? messages.accountLegacyCompatibility
-                : messages.accountMigrationRequired
-              : loginMessage;
+        const recoveryRequired =
+          accountPhase === "unavailable" && capabilities.reason === "recovery-required";
+        const accountStatus = recoveryRequired
+          ? [loginMessage, messages.accountRecoveryRequired].filter(Boolean).join(" ")
+          : loginMessage;
         if (accountStatus) status.append(accountStatus);
-        if (
-          (cleanupRequired || capabilities.reason === "recovery-required") &&
-          capabilities.recover
-        ) {
+        if (recoveryRequired && capabilities.recover) {
           const recover = document.createElement("button");
           recover.type = "button";
           recover.className = "settings-command-button settings-command-button--secondary";
-          recover.textContent = cleanupOnly
-            ? accountRecovering
-              ? messages.accountCleaningUp
-              : messages.accountRetryCleanup
-            : accountRecovering
-              ? messages.accountRecovering
-              : messages.accountRecover;
+          recover.textContent = accountRecovering
+            ? messages.accountRecovering
+            : messages.accountRecover;
           recover.disabled = accountBusy();
           recover.addEventListener("click", recoverAccounts);
           status.append(" ", recover);
@@ -502,7 +489,6 @@ export function createAccountsSettingsPage(
         accountPhase = result.phase;
         accountRevision = result.revision;
         accountInstanceId = result.instanceId;
-        cleanupRequired = result.cleanupRequired ?? false;
         capabilities = result.capabilities;
         for (const accountId of expandedResetAccounts) {
           if (!accounts.some((account) => account.accountId === accountId))
@@ -542,10 +528,10 @@ export function createAccountsSettingsPage(
         clearLoginRefresh();
         login = null;
         loginStartSnapshot = undefined;
-        cleanupRequired = result.cleanupRequired ?? cleanupRequired;
-        loginMessage =
-          result.saved || result.success
-            ? messages.accountLoginSucceeded
+        loginMessage = result.success
+          ? messages.accountLoginSucceeded
+          : result.saved
+            ? messages.accountSavedUnavailable
             : (result.error ?? messages.accountLoginFailed);
         render();
         if (result.saved || result.success) load(true);
@@ -713,10 +699,7 @@ export function createAccountsSettingsPage(
       const recoverAccounts = (): void => {
         if (accountBusy() || !capabilities.recover) return;
         accountRecovering = true;
-        loginMessage =
-          cleanupRequired && accountPhase === "ready"
-            ? messages.accountCleaningUp
-            : messages.accountRecovering;
+        loginMessage = messages.accountRecovering;
         render();
         void context.runLatest(() => client().recoverCodexAccounts({}), {
           success(result) {

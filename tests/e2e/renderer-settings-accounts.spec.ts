@@ -23,13 +23,12 @@ const { outputFiles } = await build({
         ];
         let currentAccountId = "native";
         let revision = 1;
+        let pendingOperation;
         const accountSnapshot = (selected = accounts) => ({
           version:2,currentAccountId,phase:"ready",revision,instanceId:"settings-host",
-          legacyHistoryPreserved: scenario === "legacy-adopted",
-          capabilities: scenario === "legacy"
-            ? {manage:false,switch:false,login:false,delete:false,logout:false,recover:false,reason:"migration-required"}
-            : {manage:true,switch:true,login:true,delete:true,logout:true,recover:true},
-          accounts:scenario === "legacy" ? selected.slice(0,1) : selected,
+          pendingOperation,
+          capabilities: {manage:true,switch:true,login:true,delete:true,logout:true,recover:true},
+          accounts:selected,
         });
         const snapshots = {
           native: { usedPercent:9,periodType:"seven_day",resetsAt:"2026-09-13T13:16:00Z",resetCredits:{availableCount:2,nextExpiresAt:"2026-10-04T01:54:00Z",expiresAt:["2026-10-04T01:54:00Z","2026-10-08T01:54:00Z"]} },
@@ -97,18 +96,20 @@ const { outputFiles } = await build({
           startCodexAccountLogin: async ({accountId}={}) => {
             accountId = accountId ?? "new";
             calls.login.push(accountId);
+            revision += 1;
+            pendingOperation = {kind:"login",operationId:"login-new"};
             if (scenario === "early-login") return loginStart;
             return {accountId,loginId:"login-new",verificationUrl:"https://example.com/device",userCode:"ABCD-EFGH"};
           },
-          cancelCodexAccountLogin: async () => ({cancelled:true}),
+          cancelCodexAccountLogin: async () => { pendingOperation=undefined; revision+=1; return {cancelled:true}; },
           subscribeCodexAccountLogin: listener => { loginListener=listener; return () => { loginListener=undefined; }; },
           subscribeCodexAccounts: listener => { accountListener=listener; return () => { accountListener=undefined; }; },
         };
         globalThis.accountsFixture = {
           calls,
           recover: () => { failUsage=false; },
-          requireAccountRecovery: (ready = false) => accountListener?.({
-            ...accountSnapshot(),phase:ready ? "ready" : "unavailable",cleanupRequired:true,
+          requireAccountRecovery: () => accountListener?.({
+            ...accountSnapshot(),phase:"unavailable",
             capabilities:{...accountSnapshot().capabilities,reason:"recovery-required"},
           }),
           clearHarnessAccounts: () => { harnessAccounts=[]; },
@@ -117,7 +118,14 @@ const { outputFiles } = await build({
           deliverTeam: () => resolveTeam({accountId:"team",usage:null,accountCredits:snapshots.team,freshness:"live",observedAt:"2026-09-10T08:20:00.000Z"}),
           completeReset: () => resolveReset(),
           completeActivation: () => resolveActivation(),
+          completeLogin: (success = true) => {
+            pendingOperation=undefined;
+            revision+=1;
+            loginListener?.({accountId:"new",loginId:"login-new",success,saved:true,error:success ? null : "Codex Account saved, but it could not be activated"});
+          },
           completeEarlyLogin: () => {
+            pendingOperation=undefined;
+            revision+=1;
             loginListener?.({accountId:"deduplicated",loginId:"login-new",success:true,saved:true,error:null});
             resolveLoginStart({accountId:"new",loginId:"login-new",verificationUrl:"https://example.com/device",userCode:"SHOULD-NOT-SHOW"});
           },
@@ -164,33 +172,6 @@ async function calls(page: Page, key: string) {
 }
 const nativeRow = '[data-account-id="native"]';
 const teamRow = '[data-account-id="team"]';
-
-test("explains native legacy compatibility without enabling managed account actions", async ({
-  page,
-}) => {
-  await setup(page, { locale: "en", scenario: "legacy" });
-  await expect(page.locator(".settings-account-status")).toContainText(
-    "Native compatibility mode: Codex uses the existing official home.",
-  );
-  await expect(page.locator(".settings-account-status")).toContainText(
-    "Other account homes and their history have not been merged",
-  );
-  await expect(page.getByRole("button", { name: "Add Codex account", exact: true })).toBeDisabled();
-  expect(await calls(page, "login")).toEqual([]);
-  expect(await calls(page, "activate")).toEqual([]);
-});
-
-test("shows adopted accounts without explanatory banners and allows switching", async ({
-  page,
-}) => {
-  await setup(page, { scenario: "legacy-adopted" });
-  await expect(page.locator(".settings-page-description")).toHaveCount(0);
-  await expect(page.locator(".settings-account-status")).toBeEmpty();
-  await page.locator(teamRow).getByRole("button", { name: "切换", exact: true }).click();
-  await expect(page.locator(teamRow)).toContainText("当前");
-  expect(await calls(page, "activate")).toEqual(["team"]);
-  await expect(page.locator(".settings-account-status")).toBeEmpty();
-});
 
 async function openAccountActions(page: Page, row = teamRow) {
   await page.locator(`${row} [data-account-focus$=":more"]`).click();
@@ -513,6 +494,36 @@ test("keeps add, native device login and cancellation available", async ({ page 
   await expect(page.getByRole("button", { name: "添加 Codex 账号", exact: true })).toBeEnabled();
 });
 
+for (const locale of ["en", "zh-CN"]) {
+  for (const success of [true, false]) {
+    test(`keeps ready-phase login pending until completion (${locale}, success=${success})`, async ({
+      page,
+    }) => {
+      await setup(page, { locale });
+      await page.locator(".settings-account-header button").click();
+      await expect(page.locator(".settings-account-verification")).toContainText("ABCD-EFGH");
+      await page.clock.runFor(2_250);
+      await expect(page.locator(".settings-account-verification")).toContainText("ABCD-EFGH");
+      await expect(page.locator(".settings-account-header button")).toBeDisabled();
+      await page.evaluate(
+        (success) => Reflect.get(globalThis, "accountsFixture").completeLogin(success),
+        success,
+      );
+      await expect(page.locator(".settings-account-verification")).toHaveCount(0);
+      await expect(page.locator(".settings-account-status")).toHaveText(
+        success
+          ? locale === "en"
+            ? "Sign-in completed."
+            : "登录成功。"
+          : locale === "en"
+            ? "Account saved, but it could not be activated."
+            : "账号已保存，但无法激活。",
+      );
+      await expect(page.locator(".settings-account-header button")).toBeEnabled();
+    });
+  }
+}
+
 test("reconciles login completion delivered before the start response", async ({ page }) => {
   await setup(page, { scenario: "early-login" });
   await page.getByRole("button", { name: "添加 Codex 账号", exact: true }).click();
@@ -524,29 +535,16 @@ test("reconciles login completion delivered before the start response", async ({
 });
 
 for (const scenario of [
-  { locale: "zh-CN", ready: false, message: "账号已保存，Codex 尚未就绪。", button: "恢复" },
-  { locale: "zh-CN", ready: true, message: "账号已保存，临时文件清理未完成。", button: "重试清理" },
+  { locale: "zh-CN", message: "继续工作前需要恢复 Codex 账号状态。", button: "恢复" },
   {
     locale: "en",
-    ready: false,
-    message: "Account saved. Codex is not ready yet.",
+    message: "Codex Account recovery is required before work can continue.",
     button: "Recover",
   },
-  {
-    locale: "en",
-    ready: true,
-    message: "Account saved. Temporary file cleanup is incomplete.",
-    button: "Retry cleanup",
-  },
 ]) {
-  test(`distinguishes saved Account recovery from cleanup (${scenario.locale}, ready=${scenario.ready})`, async ({
-    page,
-  }) => {
+  test(`recovers an unavailable backend (${scenario.locale})`, async ({ page }) => {
     await setup(page, { locale: scenario.locale });
-    await page.evaluate(
-      (ready) => Reflect.get(globalThis, "accountsFixture").requireAccountRecovery(ready),
-      scenario.ready,
-    );
+    await page.evaluate(() => Reflect.get(globalThis, "accountsFixture").requireAccountRecovery());
     await expect(page.locator(".settings-account-status")).toContainText(scenario.message);
     await page.getByRole("button", { name: scenario.button, exact: true }).click();
     await expect.poll(() => calls(page, "recover")).toEqual(["recover"]);

@@ -1,48 +1,31 @@
 import { afterEach, describe, expect, it } from "vitest";
-
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import {
   NativeAccountQuotas,
   parseWhamAccountCredits,
 } from "../src/account/native-account-quotas.js";
-import {
-  credential,
-  createNativeAccountTestState,
-  nativeAccountIds,
-  type NativeAccountTestState,
-} from "./fixtures/native-account-state.js";
-
-const states: NativeAccountTestState[] = [];
-
+import { createAccountState, credential } from "./fixtures/codex-account-fixtures.js";
+const states: Awaited<ReturnType<typeof createAccountState>>[] = [];
 afterEach(async () => {
-  await Promise.all(states.splice(0).map((state) => state.close()));
+  await Promise.all(states.splice(0).map((s) => s.close()));
 });
-
-function usageResponse(usedPercent: number): Response {
-  return Response.json({
-    rate_limit: {
-      primary_window: {
-        used_percent: usedPercent,
-        limit_window_seconds: 18_000,
-        reset_at: 2_000_000_000,
-      },
-    },
-  });
+async function setup() {
+  const state = await createAccountState();
+  states.push(state);
+  return state;
 }
-
-describe("native inactive-account quota combinations", () => {
-  it("parses only bounded renderer quota fields", () => {
+describe("inactive account quotas", () => {
+  it("parses bounded renderer quota fields", () => {
     expect(
       parseWhamAccountCredits({
         rate_limit: {
           primary_window: {
             used_percent: "37.5",
-            limit_window_seconds: 18_000,
+            limit_window_seconds: 18000,
             reset_at: 2_000_000_000,
           },
-          secondary_window: {
-            used_percent: 12,
-            limit_window_seconds: 604_800,
-          },
+          secondary_window: { used_percent: 12, limit_window_seconds: 604800 },
         },
         rate_limit_reset_credits: { available_count: 2 },
         ignored_secret: "never-project",
@@ -54,121 +37,76 @@ describe("native inactive-account quota combinations", () => {
       resetCredits: { availableCount: 2 },
     });
   });
-
-  it("refreshes B with CAS against the latest Vault without overwriting C", async () => {
-    const state = await createNativeAccountTestState({ readyRuntime: true });
-    states.push(state);
-    const a = credential("a");
-    const b1 = credential("b", 1, 1);
-    const b2 = credential("b", 2, 2_000_000_000);
-    const c = credential("c");
-    await state.seedAccounts({
-      current: { accountId: nativeAccountIds.a, credential: a },
-      saved: [
-        { accountId: nativeAccountIds.b, credential: b1 },
-        { accountId: nativeAccountIds.c, credential: c },
-      ],
-    });
-    const tokenStarted = Promise.withResolvers<undefined>();
-    const continueToken = Promise.withResolvers<undefined>();
-    const fetch: typeof globalThis.fetch = async (input) => {
-      const url = String(input);
-      if (url.endsWith("/oauth/token")) {
-        tokenStarted.resolve(undefined);
-        await continueToken.promise;
-        const oauth = b2.managedOAuthCredential();
-        return Response.json({
-          access_token: oauth.accessToken,
-          refresh_token: oauth.refreshToken,
-        });
-      }
-      if (url.endsWith("/wham/usage")) return usageResponse(23);
-      throw new Error("unexpected synthetic URL");
-    };
+  it("refreshes only B's saved grant without overwriting C or permanent auth", async () => {
+    const { store, runtime } = await setup();
+    await store.install(credential("a"));
+    await store.captureCurrent();
+    const b = await store.save(credential("b", 1, 1)),
+      c = await store.save(credential("c"));
+    const started = Promise.withResolvers<undefined>(),
+      resume = Promise.withResolvers<undefined>();
     const quotas = new NativeAccountQuotas({
-      files: state.files,
-      directory: state.store.directory,
-      credentials: state.store,
-      fetch,
-      admitCredentialRefresh: () => state.runtime.gate.admit("credential-write"),
+      directory: store.directory,
+      credentials: store,
+      admitCredentialRefresh: () => runtime.gate.admit("credential-write"),
+      fetch: async (input) => {
+        if (String(input).endsWith("/oauth/token")) {
+          started.resolve(undefined);
+          await resume.promise;
+          const oauth = credential("b", 2).managedOAuthCredential();
+          return Response.json({
+            access_token: oauth.accessToken,
+            refresh_token: oauth.refreshToken,
+          });
+        }
+        return Response.json({
+          rate_limit: { primary_window: { used_percent: 23, limit_window_seconds: 18000 } },
+        });
+      },
     });
-    await quotas.initialize(new Set([nativeAccountIds.a, nativeAccountIds.b, nativeAccountIds.c]));
-    const profileB = state.store.vault.accounts.find(
-      (account) => account.accountId === nativeAccountIds.b,
+    const inspection = quotas.inspect(
+      required(store.vault.accounts.find((a) => a.accountId === b)),
+      true,
     );
-    if (!profileB) throw new Error("missing synthetic B");
-
-    const inspection = quotas.inspect(profileB, true);
-    await tokenStarted.promise;
-    await state.store.mutate((next) => {
-      const profileC = next.accounts.find((account) => account.accountId === nativeAccountIds.c);
-      if (!profileC) throw new Error("missing synthetic C");
-      profileC.label = "C changed concurrently";
+    await started.promise;
+    await store.mutate((next) => {
+      required(next.accounts.find((a) => a.accountId === c)).label = "C changed";
     });
-    continueToken.resolve(undefined);
-    await expect(inspection).resolves.toMatchObject({
-      accountId: nativeAccountIds.b,
-      freshness: "live",
-      accountCredits: { usedPercent: 23 },
-    });
-
-    const latest = state.store.vault;
-    expect(latest.accounts.find((account) => account.accountId === nativeAccountIds.c)?.label).toBe(
-      "C changed concurrently",
-    );
-    const latestB = latest.accounts.find((account) => account.accountId === nativeAccountIds.b);
-    if (!latestB) throw new Error("missing refreshed B");
-    expect(state.store.restoreCredential(latestB).managedOAuthCredential()).toMatchObject({
-      accessToken: b2.managedOAuthCredential().accessToken,
-      refreshToken: b2.managedOAuthCredential().refreshToken,
-    });
-    expect((await state.store.readCredentials())?.serializeForNativeStore()).toBe(
-      a.serializeForNativeStore(),
+    resume.resolve(undefined);
+    await expect(inspection).resolves.toMatchObject({ accountCredits: { usedPercent: 23 } });
+    expect(store.vault.accounts.find((a) => a.accountId === c)?.label).toBe("C changed");
+    expect(
+      store
+        .credential(required(store.vault.accounts.find((a) => a.accountId === b)))
+        .managedOAuthCredential().refreshToken,
+    ).toBe(credential("b", 2).managedOAuthCredential().refreshToken);
+    expect((await store.readCredentials())?.serializeForNativeStore()).toBe(
+      credential("a").serializeForNativeStore(),
     );
   });
-
-  it("retries cache CAS by applying only its own Account patch to the latest file", async () => {
-    const state = await createNativeAccountTestState();
-    states.push(state);
-    const observedAt = new Date().toISOString();
-    const existingB = {
-      accountCredits: { usedPercent: 81, periodType: "weekly" as const },
-      observedAt,
+  it("serializes cache patches and preserves other accounts on disk", async () => {
+    const { store } = await setup();
+    const a = await store.save(credential("a")),
+      b = await store.save(credential("b"));
+    const file = path.join(store.directory, "codex-quota-cache.json");
+    const snapshot = {
+      accountCredits: { usedPercent: 81, periodType: "weekly" },
+      observedAt: new Date().toISOString(),
     };
-    const cache = {
-      version: 1,
-      snapshots: { [nativeAccountIds.b]: existingB },
-    };
-    state.files.failNext({
-      operation: "replace",
-      phase: "before",
-      matches: (_directory, name) => name === "codex-quota-cache.json",
-      run: () => {
-        state.files.seed(state.store.directory, "codex-quota-cache.json", JSON.stringify(cache));
-      },
-    });
-    const quotas = new NativeAccountQuotas({
-      files: state.files,
-      directory: state.store.directory,
-      credentials: state.store,
-      fetch: async () => {
-        throw new Error("network must not be used");
-      },
-    });
-
-    await quotas.record(nativeAccountIds.a, {
-      usedPercent: 14,
-      periodType: "five_hour",
-    });
-
-    const bytes = state.files.peek(state.store.directory, "codex-quota-cache.json");
-    expect(bytes).not.toBeNull();
-    const persisted = JSON.parse(bytes?.toString("utf8") ?? "null") as {
-      snapshots: Record<string, unknown>;
-    };
-    expect(persisted.snapshots[nativeAccountIds.b]).toEqual(existingB);
-    expect(persisted.snapshots[nativeAccountIds.a]).toMatchObject({
-      accountCredits: { usedPercent: 14, periodType: "five_hour" },
-    });
+    await writeFile(file, JSON.stringify({ version: 1, snapshots: { [b]: snapshot } }));
+    const quotas = new NativeAccountQuotas({ directory: store.directory, credentials: store });
+    await quotas.record(a, { usedPercent: 14, periodType: "five_hour" });
+    const saved = JSON.parse(await readFile(file, "utf8"));
+    expect(saved.snapshots[b]).toEqual(snapshot);
+    expect(saved.snapshots[a].accountCredits.usedPercent).toBe(14);
+    await quotas.initialize(new Set([a, b]));
+    expect(quotas.get(b)?.freshness).toBe("cached");
+    await quotas.remove(a);
+    expect(JSON.parse(await readFile(file, "utf8")).snapshots[a]).toBeUndefined();
   });
 });
+
+function required<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("Missing fixture");
+  return value;
+}

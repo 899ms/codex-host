@@ -1,127 +1,63 @@
-import type { JsonObject, JsonValue } from "@codexhost/protocol-core";
-
+import type { JsonObject } from "@codexhost/protocol-core";
 import type {
   OfficialClientSession,
   OfficialRuntimeOwner,
 } from "../codex-runtime/official-runtime-owner.js";
 import { OfficialAdmissionError } from "../codex-runtime/official-work-gate.js";
+import { NativeAccountError } from "./native-account-store.js";
 import {
   sameCodexCredentialIdentity,
   type CodexCredentialIdentity,
   type NativeCodexCredentials,
 } from "./native-codex-credentials.js";
 import type { NativeAccountRuntime } from "./native-account-runtime.js";
-
+import {
+  AccountReadFailure,
+  AccountTransportFailure,
+  rpcErrorCode,
+} from "./native-account-diagnostics.js";
 const object = (value: unknown): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-const managementInitialization = {
+const initialization = {
   clientInfo: { name: "codexhost_account_management", version: "1" },
   capabilities: { experimentalApi: true },
 };
-export class OfficialAccountVerificationError extends Error {
-  constructor(
-    readonly code:
-      | "unsupported-version"
-      | "unsupported-storage"
-      | "authentication-failed"
-      | "invalid-native-response",
-  ) {
-    super(`Codex Account ${code}`);
-    this.name = "OfficialAccountVerificationError";
-  }
-}
-
-type AccountRuntimeOwner = Pick<
+type Owner = Pick<
   OfficialRuntimeOwner,
-  "gate" | "running" | "start" | "stop" | "attachManagement" | "controlRequest"
+  "gate" | "start" | "stop" | "attachManagement" | "controlRequest"
 >;
-
-/** Native account operations. No refresh client, provider substitution or model inference. */
 export class OfficialAccountRuntime implements NativeAccountRuntime {
-  readonly #owner: AccountRuntimeOwner;
-  readonly #sharedCodexHome: string;
-  readonly #readCredentials: (home: string) => Promise<NativeCodexCredentials | null>;
-  readonly #environment: NodeJS.ProcessEnv;
-  readonly #reconcile: () => Promise<void>;
-  readonly #stopExternalProcesses: () => Promise<void>;
+  readonly #owner: Owner;
   readonly #control: OfficialClientSession;
-  readonly #listeners = new Set<(value: JsonValue) => void>();
-  #activeHome: string | undefined;
-
+  readonly #environment: NodeJS.ProcessEnv;
+  readonly #readCredentials: () => Promise<NativeCodexCredentials | null>;
+  readonly #stopExternal: () => Promise<void>;
   constructor(input: {
-    owner: AccountRuntimeOwner;
-    sharedCodexHome: string;
-    readCredentials(home: string): Promise<NativeCodexCredentials | null>;
-    environment?: NodeJS.ProcessEnv;
-    /** Reject recorded historical writers whose exit cannot be established, including orphans. */
-    reconcilePreviousWriter(): Promise<void>;
+    owner: Owner;
+    environment: NodeJS.ProcessEnv;
+    readCredentials(): Promise<NativeCodexCredentials | null>;
     stopExternalProcesses(): Promise<void>;
   }) {
     this.#owner = input.owner;
-    this.#sharedCodexHome = input.sharedCodexHome;
+    this.#environment = input.environment;
     this.#readCredentials = input.readCredentials;
-    this.#environment = input.environment ?? {};
-    this.#reconcile = input.reconcilePreviousWriter;
-    this.#stopExternalProcesses = input.stopExternalProcesses;
-    if (input.owner.running) this.#activeHome = input.sharedCodexHome;
-    this.#control = input.owner.attachManagement(async ({ value }) => {
-      for (const listener of this.#listeners) {
-        try {
-          listener(value);
-        } catch {
-          /* management subscribers are isolated */
-        }
-      }
-    });
-    this.#control.configure(managementInitialization);
+    this.#stopExternal = input.stopExternalProcesses;
+    this.#control = input.owner.attachManagement(async () => {});
+    this.#control.configure(initialization);
   }
-
   get gate() {
     return this.#owner.gate;
   }
-
-  async preflight(): Promise<void> {
-    if (!this.#owner.running) await this.reconcilePreviousWriter();
-    if (this.#owner.running) {
-      await this.#configuration();
-      await this.#authenticationMode();
-      return;
-    }
-    if (this.#owner.gate.phase === "ready") throw new OfficialAdmissionError("unavailable");
-    try {
-      // Existing Desktop clients remain attached but are not initialized or resumed here.
-      await this.#owner.start({ mode: "management-only" });
-      this.#activeHome = this.#sharedCodexHome;
-      await this.#configuration();
-      await this.#authenticationMode();
-    } catch (error) {
-      // A failed cold probe cannot leave an unverified writer behind. A successful
-      // probe remains available until the coordinator explicitly stops it.
-      await this.stop();
-      throw error;
-    }
+  stop(): Promise<void> {
+    return this.#owner.stop();
   }
-
-  async #authenticationMode(): Promise<void> {
-    const response = await this.#read("account/read", { refreshToken: true });
-    if (
-      response.account !== null &&
-      (!object(response.account) || response.account.type !== "chatgpt")
-    )
-      throw new OfficialAccountVerificationError("unsupported-storage");
+  start(): Promise<void> {
+    return this.#owner.start();
   }
-
-  /** Collection is optional; failure here must not stop an already running backend. */
+  stopExternalProcesses(): Promise<void> {
+    return this.#stopExternal();
+  }
   async checkCredentialStorage(): Promise<void> {
-    await this.#configuration();
-  }
-
-  async #configuration(): Promise<void> {
-    const response = await this.#read("config/read", { includeLayers: true });
-    if (!object(response.config))
-      throw new OfficialAccountVerificationError("invalid-native-response");
-    if (response.config.cli_auth_credentials_store !== "file")
-      throw new OfficialAccountVerificationError("unsupported-storage");
     const overrides = new Set([
       "OPENAI_API_KEY",
       "CODEX_API_KEY",
@@ -133,95 +69,77 @@ export class OfficialAccountRuntime implements NativeAccountRuntime {
         ([key, value]) => overrides.has(key.toUpperCase()) && !!value,
       )
     )
-      throw new OfficialAccountVerificationError("unsupported-storage");
+      throw new NativeAccountError("unsupported-storage");
+    const response = await this.#read("config/read", { includeLayers: true });
+    if (!object(response.config) || response.config.cli_auth_credentials_store !== "file")
+      throw new NativeAccountError("unsupported-storage");
   }
-
-  async stopExternalProcesses(): Promise<void> {
-    if (this.#owner.running) throw new OfficialAdmissionError("busy");
-    await this.#stopExternalProcesses();
-  }
-
-  async stop(): Promise<void> {
-    await this.#owner.stop();
-    this.#activeHome = undefined;
-  }
-  async reconcilePreviousWriter(): Promise<void> {
-    if (this.#owner.running) throw new OfficialAdmissionError("busy");
-    await this.#reconcile();
-  }
-  async start(stagingHome?: string): Promise<void> {
-    const wasRunning = this.#owner.running;
-    try {
-      await this.#owner.start(
-        stagingHome === undefined
-          ? { mode: "task" }
-          : { homeOverride: stagingHome, mode: "management-only" },
-      );
-      this.#activeHome = stagingHome ?? this.#sharedCodexHome;
-      // Never admit an unknown credential store merely because recovery reached start().
-      await this.#configuration();
-      await this.#authenticationMode();
-    } catch (error) {
-      if (!wasRunning) await this.stop();
-      throw error;
-    }
-  }
-
-  async controlRequest(method: string, params: JsonObject): Promise<JsonObject> {
-    await this.#control.initialize(managementInitialization);
-    return this.#owner.controlRequest(method, params);
-  }
-
   async verify(identity: CodexCredentialIdentity | null): Promise<void> {
-    await this.#configuration();
-    const home = this.#activeHome;
-    if (!home) throw new OfficialAccountVerificationError("invalid-native-response");
-    const before = await this.#safeReadCredentials(home);
-    if (identity === null) {
-      const response = await this.#read("account/read", { refreshToken: true });
-      if (before !== null || response.account !== null)
-        throw new OfficialAccountVerificationError("authentication-failed");
-      return;
+    const deadline = performance.now() + 10_000;
+    let last: Error = new AccountReadFailure(undefined, "verify-read");
+    while (performance.now() < deadline) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        // Bound the whole observation, including an RPC that never answers. Late
+        // read-only results cannot complete verification or start another poll.
+        const failure = await Promise.race([
+          this.#observe(identity),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(last), Math.max(0, deadline - performance.now()));
+          }),
+        ]);
+        if (!failure) return;
+        last = failure;
+      } catch (error) {
+        last =
+          error instanceof OfficialAdmissionError || error instanceof AccountReadFailure
+            ? error
+            : new AccountReadFailure(rpcErrorCode(error), "verify-read");
+      } finally {
+        clearTimeout(timer);
+      }
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(200, remaining)));
     }
-    if (!before || !sameCodexCredentialIdentity(before.identity, identity))
-      throw new OfficialAccountVerificationError("authentication-failed");
-    // Let native account/read handle refresh, then verify the resulting file identity.
-    // Quota availability is not an Account readiness or credential-commit condition.
-    const account = await this.#read("account/read", { refreshToken: true });
-    const after = await this.#safeReadCredentials(home);
+    throw last;
+  }
+  async #observe(
+    identity: CodexCredentialIdentity | null,
+  ): Promise<AccountReadFailure | undefined> {
+    let response: JsonObject;
+    try {
+      response = await this.#read("account/read", { refreshToken: false });
+    } catch (error) {
+      if (error instanceof OfficialAdmissionError) throw error;
+      return new AccountReadFailure(rpcErrorCode(error), "verify-read");
+    }
+    if (response.account === null && identity !== null)
+      return new AccountReadFailure(undefined, "verify-account-null");
     if (
-      !after ||
-      !sameCodexCredentialIdentity(after.identity, identity) ||
-      !object(account.account) ||
-      account.account.type !== "chatgpt"
+      identity === null
+        ? response.account !== null
+        : !object(response.account) || response.account.type !== "chatgpt"
     )
-      throw new OfficialAccountVerificationError("authentication-failed");
+      return new AccountReadFailure(undefined, "verify-account-type");
+    const current = await this.#readCredentials();
+    if (
+      identity === null
+        ? current !== null
+        : !current || !sameCodexCredentialIdentity(current.identity, identity)
+    )
+      return new AccountReadFailure(undefined, "verify-identity-mismatch");
   }
-
-  subscribe(listener: (value: JsonValue) => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
-
   async #read(method: string, params: JsonObject): Promise<JsonObject> {
-    let result: JsonObject;
+    let response: JsonObject;
     try {
-      result = await this.controlRequest(method, params);
-    } catch {
-      throw new OfficialAccountVerificationError("invalid-native-response");
+      await this.#control.initialize(initialization);
+      response = await this.#owner.controlRequest(method, params);
+    } catch (error) {
+      throw new AccountTransportFailure(rpcErrorCode(error));
     }
-    if (result.error || !object(result.result))
-      throw new OfficialAccountVerificationError("invalid-native-response");
-    return result.result;
-  }
-
-  async #safeReadCredentials(home: string): Promise<NativeCodexCredentials | null> {
-    try {
-      return await this.#readCredentials(home);
-    } catch {
-      // Native readers can encounter secret-bearing parser/storage errors. Never
-      // retain them as a cause or interpolate them into a public error.
-      throw new OfficialAccountVerificationError("invalid-native-response");
-    }
+    if (response.error || !object(response.result))
+      throw new AccountReadFailure(rpcErrorCode(response.error));
+    return response.result;
   }
 }

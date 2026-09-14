@@ -32,7 +32,6 @@ import {
   codexAccountResetCreditConsumeParamsSchema,
   codexAccountResetCreditConsumeOutcomeSchema,
   codexAccountResetCreditConsumeResultSchema,
-  codexAccountActivateParamsSchema,
   codexAccountSwitchParamsSchema,
   codexAccountSwitchResultSchema,
   codexAccountDeleteParamsSchema,
@@ -299,13 +298,17 @@ function codexAccountRpcError(error: unknown): { code: number; message: string }
       message: "Codex is busy",
     };
   if (code === "changing") return { code: -32085, message: "Codex Account is changing" };
-  if (code === "unavailable" || code === "recovery-required" || code === "stop-unconfirmed")
+  if (code === "unavailable" || code === "recovery-required")
     return { code: -32086, message: "Codex Account is unavailable" };
-  if (code === "unsupported" || code === "unsupported-version" || code === "unsupported-storage")
+  if (code === "unsupported" || code === "unsupported-storage")
     return { code: -32087, message: "Codex Account management is unsupported" };
   if (code === "authentication-failed")
     return { code: -32089, message: "Codex Account authentication failed" };
-  if (code === "rollback-failed") return { code: -32090, message: "Codex Account recovery failed" };
+  if (code === "requires-login") return { code: -32089, message: "Codex Account requires sign-in" };
+  if (code === "unknown-account") return { code: -32086, message: "Unknown Codex Account" };
+  if (code === "credential-conflict")
+    return { code: -32086, message: "Codex Account credentials changed; refresh and retry" };
+  if (code === "switch-failed") return { code: -32086, message: "Codex Account switch failed" };
   const message = error instanceof Error ? error.message : "";
   const safe = new Set([
     "Unknown Codex Account",
@@ -318,8 +321,6 @@ function codexAccountRpcError(error: unknown): { code: number; message: string }
     "SSH Host Account management is unsupported",
     "Codex Account sign-in is already in progress",
     "Inactive Codex Account quota is unavailable",
-    "Legacy Codex Account creation is no longer supported; start login directly",
-    "Legacy Account activation is no longer supported; use codexhost/account/switch",
   ]);
   return safe.has(message)
     ? { code: -32086, message }
@@ -573,7 +574,7 @@ export class AppServerHost {
       new OfficialRuntimeScope({
         diagnosticOutput: this.#options.diagnosticOutput,
         permanentHome,
-        createBackend: (role) =>
+        createBackend: () =>
           createOwnedConnectionBackend(() =>
             options.createOfficialConnection
               ? options.createOfficialConnection()
@@ -582,7 +583,7 @@ export class AppServerHost {
                   arguments: this.#options.arguments,
                   environment: {
                     ...officialEnvironment(environment),
-                    CODEX_HOME: role.home,
+                    CODEX_HOME: permanentHome,
                   },
                   ...(this.#options.spawnOfficial
                     ? { spawnOfficial: this.#options.spawnOfficial }
@@ -915,10 +916,8 @@ export class AppServerHost {
         request.method === "codexhost/account/rate-limit-reset/consume" ||
         request.method === "codexhost/account/list" ||
         request.method === "codexhost/account/refresh" ||
-        request.method === "codexhost/account/create" ||
         request.method === "codexhost/account/delete" ||
         request.method === "codexhost/account/switch" ||
-        request.method === "codexhost/account/activate" ||
         request.method === "codexhost/account/login/start" ||
         request.method === "codexhost/account/login/cancel" ||
         request.method === "codexhost/account/logout" ||
@@ -1062,16 +1061,6 @@ export class AppServerHost {
         continue;
       }
       if (request.method === "thread/list") {
-        if (
-          isRecord(request.params) &&
-          typeof request.params.cursor === "string" &&
-          request.params.cursor.startsWith("codexhost:official-accounts:v1:")
-        ) {
-          await this.#writer.json(
-            rpcError(request, -32602, "Legacy multi-Account cursor expired; reload the first page"),
-          );
-          continue;
-        }
         let listRequest: DecodedThreadListRequest;
         try {
           const decoded = decodeThreadListRequest(request);
@@ -1432,13 +1421,6 @@ export class AppServerHost {
     frame: Buffer<ArrayBufferLike>,
   ): Promise<void> {
     try {
-      const params = isRecord(request.params) ? request.params : null;
-      if (typeof params?.__codexhostAccountId === "string") {
-        await this.#writer.json(
-          rpcError(request, -32088, "Per-draft Codex Account routing is no longer supported"),
-        );
-        return;
-      }
       await this.#officialRuntime.sendFrame(frame);
     } catch {
       if (request.method === "turn/start") {
@@ -1457,7 +1439,6 @@ export class AppServerHost {
     value: JsonValue;
   }): Promise<void> {
     const parsed = input.value;
-    this.#accountControl.observe(parsed);
     this.#observeOfficialTurnStartResponse(parsed);
     let forwarded: JsonValue = parsed;
     if (isRecord(parsed) && typeof parsed.method === "string" && "id" in parsed) {
@@ -1627,12 +1608,6 @@ export class AppServerHost {
         );
         return;
       }
-      if (request.method === "codexhost/account/create") {
-        requestObject(request);
-        throw new Error(
-          "Legacy Codex Account creation is no longer supported; start login directly",
-        );
-      }
       if (request.method === "codexhost/account/switch") {
         const params = codexAccountSwitchParamsSchema.parse(requestObject(request));
         await this.#accountControl.switch(params.accountId);
@@ -1646,12 +1621,6 @@ export class AppServerHost {
         });
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
-      }
-      if (request.method === "codexhost/account/activate") {
-        codexAccountActivateParamsSchema.parse(requestObject(request));
-        throw new Error(
-          "Legacy Account activation is no longer supported; use codexhost/account/switch",
-        );
       }
       if (request.method === "codexhost/account/delete") {
         const params = codexAccountDeleteParamsSchema.parse(requestObject(request));

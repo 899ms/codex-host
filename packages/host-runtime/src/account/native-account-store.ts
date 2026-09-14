@@ -1,518 +1,333 @@
 import { randomUUID } from "node:crypto";
-import { migrateLegacyCredentials } from "./legacy-credential-migration.js";
-import { lstat, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import type { NativePrivateFileLease } from "../native-private-files.js";
+import { codexAccountPlanTypeSchema } from "@codexhost/shared-contracts";
 import {
   NativeCodexCredentials,
+  codexCredentialIdentitySchema,
   sameCodexCredentialIdentity,
   type CodexCredentialIdentity,
 } from "./native-codex-credentials.js";
-import {
-  NativeAccountError,
-  nativeDigest,
-  credentialDigest,
-  parseVault,
-  parseJournal,
-  serializePrivate,
-  sameVault,
-  validateVault,
-  snapshotCredential,
-  restoreCredential,
-  parseProfileAccount,
-  type NativeProfileVault,
-  type NativeProfileAccount,
-  type NativeProfileJournal,
-  type StoredNativeCredential,
-} from "./native-profile-vault.js";
 
-/** Lightweight check independent of Vault readability or the native file helper. */
-export async function hasPendingNativeAccountMutation(home: string): Promise<boolean> {
-  for (const name of ["transaction.json", "login.json"]) {
-    try {
-      await lstat(path.join(home, ".codexhost-native-accounts", name));
-      return true;
-    } catch (error) {
-      if (!(
-        error instanceof Error &&
-        "code" in error &&
-        ["ENOENT", "ENOTDIR"].includes(String(error.code))
-      ))
-        throw error;
-    }
+export class NativeAccountError extends Error {
+  constructor(
+    readonly code:
+      | "unknown-account"
+      | "requires-login"
+      | "unsupported-storage"
+      | "credential-conflict"
+      | "authentication-failed"
+      | "switch-failed"
+      | "recovery-required",
+  ) {
+    super(`Codex Account ${code}`);
+    this.name = "NativeAccountError";
   }
-  return false;
+}
+const accountSchema = z.object({
+  accountId: z.string().uuid(),
+  identity: codexCredentialIdentitySchema,
+  label: z.string(),
+  email: z.string().optional(),
+  planType: codexAccountPlanTypeSchema.optional(),
+  auth: z.string().nullable(),
+});
+export type NativeAccount = z.infer<typeof accountSchema>;
+export interface NativeAccountVault {
+  version: 3;
+  revision: number;
+  accounts: NativeAccount[];
 }
 
-export interface PrivateCredentialFiles {
-  ensureDirectory(directory: string): Promise<void>;
-  read(directory: string, name: string): Promise<Buffer | null>;
-  replace(
-    directory: string,
-    name: string,
-    content: Uint8Array,
-    expected: string | null,
-  ): Promise<void>;
-  remove(directory: string, name: string, expected: string): Promise<void>;
-  lock(directory: string, name: string): Promise<NativePrivateFileLease>;
-}
-export interface NativeAccountKeys {
-  read(keyId: string): Promise<Buffer | null>;
-}
-const stageSchema = z
-  .object({
-    version: z.literal(1),
-    operationId: z.string().uuid(),
-    sourceAccountId: z.string().uuid().nullable(),
-    requestedAccountId: z.string().uuid().optional(),
-    /** Recovery compatibility for native logins staged by older Host versions. */
-    activateOnSuccess: z.boolean().optional(),
-    nativeLoginId: z.string().min(1).max(1024).optional(),
-    /** Present only after a native login completion and stopped-file verification. */
-    candidate: z.unknown().optional(),
-    expiresAt: z.number().int().positive(),
-  })
-  .strict();
-export type NativeLoginStage = Omit<z.infer<typeof stageSchema>, "candidate"> & {
-  candidate?: NativeProfileAccount;
-};
-
-function parseLoginStage(bytes: Buffer): NativeLoginStage {
+export async function readOptionalFile(file: string): Promise<string | null> {
   try {
-    if (bytes.length > 5 * 1024 * 1024) throw new Error("large");
-    const parsed = stageSchema.parse(JSON.parse(bytes.toString("utf8")));
-    const { candidate, ...rest } = parsed;
-    if (candidate === undefined) return rest;
-    const account = parseProfileAccount(candidate);
-    if (!account.payload) throw new Error("candidate");
-    return { ...rest, candidate: account };
-  } catch {
-    throw new NativeAccountError("recovery-required");
+    return await readFile(file, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
   }
 }
+export async function writePrivateFile(file: string, text: string): Promise<void> {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, text, { mode: 0o600, flag: "wx" });
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+function parseVault(text: string): NativeAccountVault {
+  try {
+    const root = z
+      .object({
+        version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+        revision: z.number().int().nonnegative(),
+        accounts: z.array(z.record(z.string(), z.unknown())),
+      })
+      .parse(JSON.parse(text));
+    const accounts = root.accounts.map((entry) => {
+      const payload = entry.payload;
+      const auth =
+        root.version === 3
+          ? entry.auth
+          : payload &&
+              typeof payload === "object" &&
+              "nativeDocument" in payload &&
+              typeof payload.nativeDocument === "string"
+            ? payload.nativeDocument
+            : null;
+      const account = accountSchema.parse({ ...entry, auth });
+      if (account.auth) {
+        try {
+          if (
+            !sameCodexCredentialIdentity(
+              NativeCodexCredentials.parse(account.auth).identity,
+              account.identity,
+            )
+          )
+            account.auth = null;
+        } catch {
+          account.auth = null;
+        }
+      }
+      return account;
+    });
+    if (
+      new Set(accounts.map((a) => a.accountId)).size !== accounts.length ||
+      new Set(accounts.map((a) => JSON.stringify(a.identity))).size !== accounts.length
+    )
+      throw new Error();
+    return { version: 3, revision: root.revision, accounts };
+  } catch {
+    throw new NativeAccountError("unsupported-storage");
+  }
+}
+export function newProfile(
+  credential: NativeCodexCredentials,
+  accountId: string = randomUUID(),
+): NativeAccount {
+  return {
+    accountId,
+    identity: { ...credential.identity },
+    label: credential.email ?? `Codex ${accountId.slice(0, 8)}`,
+    ...(credential.email ? { email: credential.email } : {}),
+    ...(credential.planType ? { planType: credential.planType } : {}),
+    auth: credential.serializeForNativeStore(),
+  };
+}
+function upsert(
+  vault: NativeAccountVault,
+  credential: NativeCodexCredentials,
+  fillOnly = false,
+  accountId?: string,
+): NativeAccount {
+  const existing = vault.accounts.find((a) =>
+    sameCodexCredentialIdentity(a.identity, credential.identity),
+  );
+  if (!existing) {
+    const account = newProfile(credential, accountId);
+    vault.accounts.push(account);
+    return account;
+  }
+  if (!fillOnly || existing.auth === null) {
+    existing.auth = credential.serializeForNativeStore();
+    if (credential.email) existing.email = credential.email;
+    if (credential.planType) existing.planType = credential.planType;
+  }
+  return existing;
+}
 
-/** Private persistence for one home. Only the account Module mutates Vault/Journal. */
+/** Plain native credential copies; selection is observed, never persisted. */
 export class NativeAccountStore {
   readonly home: string;
   readonly directory: string;
-  readonly homeId: string;
-  readonly files: PrivateCredentialFiles;
-  readonly #homeFiles: PrivateCredentialFiles;
-  readonly #keys: NativeAccountKeys | undefined;
-  readonly #onLeaseLost: () => void;
-  #lease: NativePrivateFileLease | undefined;
+  #vault: NativeAccountVault = { version: 3, revision: 0, accounts: [] };
   #ready = false;
-  #vault: NativeProfileVault | undefined;
-  #observedIdentity: CodexCredentialIdentity | null = null;
+  #scanned = false;
+  #identity: CodexCredentialIdentity | null = null;
   #observationRevision = 0;
   #mutations: Promise<void> = Promise.resolve();
-
-  constructor(input: {
-    home: string;
-    files: PrivateCredentialFiles;
-    homeFiles?: PrivateCredentialFiles;
-    /** Used only to convert existing encrypted files; never creates a key. */
-    keys?: NativeAccountKeys;
-    onLeaseLost?: () => void;
-  }) {
+  constructor(input: { home: string }) {
     this.home = path.resolve(input.home);
     this.directory = path.join(this.home, ".codexhost-native-accounts");
-    this.homeId = nativeDigest(process.platform === "win32" ? this.home.toLowerCase() : this.home);
-    this.files = input.files;
-    this.#homeFiles = input.homeFiles ?? input.files;
-    this.#keys = input.keys;
-    this.#onLeaseLost = input.onLeaseLost ?? (() => {});
-  }
-
-  /** Legacy conversion is the only path that may read a keyring key. */
-  async open(options: { allowLocked?: boolean } = {}): Promise<boolean> {
-    if (this.#lease) throw new NativeAccountError("recovery-required");
-    await this.#homeFiles.ensureDirectory(this.home);
-    await this.files.ensureDirectory(this.directory);
-    const lease = await this.files.lock(this.directory, ".codexhost-writer.lock");
-    this.#lease = lease;
-    void lease.closed.then(() => {
-      if (this.#lease !== lease) return;
-      this.#lease = undefined;
-      this.#ready = false;
-      this.#onLeaseLost();
-    });
-    try {
-      try {
-        await migrateLegacyCredentials({
-          files: this.files,
-          directory: this.directory,
-          homeId: this.homeId,
-          readLegacyKey: () => this.#keys?.read(this.homeId) ?? Promise.resolve(null),
-          parseStage: parseLoginStage,
-        });
-      } catch (error) {
-        if (
-          options.allowLocked &&
-          error instanceof NativeAccountError &&
-          error.code === "keyring-unavailable"
-        )
-          return false;
-        throw error;
-      }
-      const bytes = await this.files.read(this.directory, "vault.json");
-      if (bytes) {
-        try {
-          this.#vault = parseVault(bytes, this.homeId);
-          if (JSON.parse(bytes.toString("utf8")).version === 1)
-            await this.files.replace(
-              this.directory,
-              "vault.json",
-              serializePrivate(this.#vault),
-              nativeDigest(bytes),
-            );
-        } finally {
-          bytes.fill(0);
-        }
-      } else {
-        const initial: NativeProfileVault = {
-          version: 2,
-          homeId: this.homeId,
-          revision: 0,
-          lastOperationId: null,
-          accounts: [],
-        };
-        await this.files.replace(this.directory, "vault.json", serializePrivate(initial), null);
-        this.#vault = initial;
-      }
-      this.#ready = true;
-      return true;
-    } catch (error) {
-      await this.close();
-      throw error;
-    }
   }
   get ready(): boolean {
     return this.#ready;
   }
-  assertFileOwnership(): void {
-    if (!this.#lease) throw new NativeAccountError("recovery-required");
-  }
-  assertOwnership(): void {
-    this.assertFileOwnership();
-    if (!this.#ready) throw new NativeAccountError("recovery-required");
-  }
-  get vault(): NativeProfileVault {
-    this.assertOwnership();
-    if (!this.#vault) throw new NativeAccountError("recovery-required");
+  get vault(): NativeAccountVault {
+    if (!this.#ready) throw new NativeAccountError("unsupported-storage");
     return structuredClone(this.#vault);
-  }
-  /** Derived from the last native file observation, never persisted as selection. */
-  get currentAccountId(): string | null {
-    const identity = this.#observedIdentity;
-    return identity
-      ? (this.#vault?.accounts.find((a) => sameCodexCredentialIdentity(a.identity, identity))
-          ?.accountId ?? null)
-      : null;
   }
   get observationRevision(): number {
     return this.#observationRevision;
   }
-  #observe(identity: CodexCredentialIdentity | null): void {
-    if (JSON.stringify(identity) !== JSON.stringify(this.#observedIdentity)) {
-      this.#observedIdentity = identity ? { ...identity } : null;
-      this.#observationRevision++;
-    }
+  get currentAccountId(): string | null {
+    const identity = this.#identity;
+    return identity
+      ? (this.#vault.accounts.find((a) => sameCodexCredentialIdentity(a.identity, identity))
+          ?.accountId ?? null)
+      : null;
   }
-  /** Collect official credentials without ever writing auth.json or inferring a login.
-   * Serialize with other collection writes; pending credential transactions win. */
-  captureCurrent(): Promise<NativeCodexCredentials | null> {
-    const pending = this.#mutations.then(async () => {
-      if ((await this.readJournal()) || (await this.readStage()))
-        throw new NativeAccountError("recovery-required");
-      const current = await this.readCredentials();
-      if (!current) return null;
-      const before = await this.reload();
-      const next = structuredClone(before);
-      let account = next.accounts.find((a) =>
-        sameCodexCredentialIdentity(a.identity, current.identity),
-      );
-      if (!account) {
-        account = newProfile(current);
-        next.accounts.push(account);
-      } else {
-        account.payload = this.snapshotCredential(account, current);
-        if (current.email) account.email = current.email;
-        if (current.planType) account.planType = current.planType;
-      }
-      if (sameVault(before, next)) return current;
-      if (credentialDigest(await this.readCredentials()) !== credentialDigest(current))
-        throw new NativeAccountError("credential-conflict");
-      next.revision++;
-      next.lastOperationId = randomUUID();
-      await this.replaceVault(next, before);
-      return current;
-    });
+  #serialize<T>(action: () => Promise<T>): Promise<T> {
+    const pending = this.#mutations.then(action);
     this.#mutations = pending.then(
       () => undefined,
       () => undefined,
     );
     return pending;
   }
-  async reload(): Promise<NativeProfileVault> {
-    this.assertOwnership();
-    const bytes = await this.files.read(this.directory, "vault.json");
-    if (!bytes) throw new NativeAccountError("recovery-required");
-    const observed = parseVault(bytes, this.homeId);
-    if (this.#vault && observed.revision < this.#vault.revision)
-      throw new NativeAccountError("credential-conflict");
-    this.#vault = observed;
+  open(): Promise<void> {
+    return this.#serialize(async () => {
+      await mkdir(this.home, { recursive: true, mode: 0o700 });
+      await mkdir(this.directory, { recursive: true, mode: 0o700 });
+      await chmod(this.directory, 0o700);
+      const text = await readOptionalFile(path.join(this.directory, "vault.json"));
+      const vault =
+        text === null ? { version: 3 as const, revision: 0, accounts: [] } : parseVault(text);
+      const before = JSON.stringify(vault.accounts);
+      const leftovers = [
+        "transaction.json",
+        "login.json",
+        "login",
+        ".codexhost-process.json",
+        ".codexhost-process-exit.json",
+        ".codexhost-writer.lock",
+      ].map((name) => path.join(this.directory, name));
+      if (!this.#scanned) {
+        const collect = (value: unknown): void => {
+          if (!value || typeof value !== "object") return;
+          for (const [key, child] of Object.entries(value)) {
+            if (key === "nativeDocument" && typeof child === "string") {
+              try {
+                upsert(vault, NativeCodexCredentials.parse(child), true);
+              } catch {
+                /* Not a readable native copy. */
+              }
+            } else collect(child);
+          }
+        };
+        const scan = async (file: string): Promise<void> => {
+          const entries = await readdir(file, { withFileTypes: true }).catch(() => null);
+          if (entries) {
+            for (const entry of entries)
+              if (!entry.isSymbolicLink()) await scan(path.join(file, entry.name));
+            return;
+          }
+          const bytes = await readOptionalFile(file);
+          if (!bytes) return;
+          try {
+            if (path.basename(file) === "auth.json")
+              upsert(vault, NativeCodexCredentials.parse(bytes), true);
+            else collect(JSON.parse(bytes));
+          } catch {
+            /* Obsolete noncredential record. */
+          }
+        };
+        for (const file of leftovers) await scan(file);
+      }
+      const accountsChanged = JSON.stringify(vault.accounts) !== before;
+      if (accountsChanged) vault.revision++;
+      if (text === null || JSON.parse(text).version !== 3 || accountsChanged)
+        await writePrivateFile(path.join(this.directory, "vault.json"), JSON.stringify(vault));
+      if (!this.#scanned) {
+        for (const file of leftovers) await rm(file, { recursive: true, force: true });
+        this.#scanned = true;
+      }
+      this.#vault = vault;
+      this.#ready = true;
+    });
+  }
+  async reload(): Promise<NativeAccountVault> {
+    const text = await readOptionalFile(path.join(this.directory, "vault.json"));
+    if (text === null) throw new NativeAccountError("unsupported-storage");
+    this.#vault = parseVault(text);
     return this.vault;
   }
-  async replaceVault(next: NativeProfileVault, expected: NativeProfileVault): Promise<void> {
-    this.assertOwnership();
-    const validated = validateVault(next, this.homeId),
-      content = serializePrivate(validated);
-    const previous = await this.files.read(this.directory, "vault.json");
-    if (!previous) throw new NativeAccountError("recovery-required");
-    const actual = parseVault(previous, this.homeId);
-    if (sameVault(actual, validated)) {
-      this.#vault = actual;
-      return;
-    }
-    if (!sameVault(actual, expected) || validated.revision !== expected.revision + 1)
-      throw new NativeAccountError("credential-conflict");
-    this.assertOwnership();
-    try {
-      await this.files.replace(this.directory, "vault.json", content, nativeDigest(previous));
-    } finally {
-      // A lost acknowledgement may follow durable rename. Re-read before exposing state.
-      await this.reload();
-    }
-  }
-  mutate(update: (next: NativeProfileVault) => void): Promise<void> {
-    const pending = this.#mutations.then(async () => {
-      if ((await this.readJournal()) || (await this.readStage()))
-        throw new NativeAccountError("recovery-required");
-      const before = await this.reload(),
-        next = structuredClone(before);
-      update(next);
-      next.revision++;
-      next.lastOperationId = randomUUID();
-      await this.replaceVault(next, before);
+  mutate(update: (next: NativeAccountVault) => void | Promise<void>): Promise<void> {
+    return this.#serialize(async () => {
+      const before = await this.reload();
+      const next = structuredClone(before);
+      await update(next);
+      if (JSON.stringify(before.accounts) === JSON.stringify(next.accounts)) return;
+      next.revision = before.revision + 1;
+      await writePrivateFile(path.join(this.directory, "vault.json"), JSON.stringify(next));
+      this.#vault = next;
     });
-    this.#mutations = pending.catch(() => undefined);
-    return pending;
   }
-  snapshotCredential(
-    account: NativeProfileAccount,
-    credential: NativeCodexCredentials,
-  ): StoredNativeCredential {
-    this.assertOwnership();
-    return snapshotCredential(account, credential);
+  async save(credential: NativeCodexCredentials, accountId?: string): Promise<string> {
+    let saved = "";
+    await this.mutate((next) => {
+      saved = upsert(next, credential, false, accountId).accountId;
+    });
+    return saved;
   }
-  restoreCredential(
-    account: NativeProfileAccount,
-    payload = account.payload,
-  ): NativeCodexCredentials {
-    this.assertOwnership();
-    if (!payload) throw new NativeAccountError("recovery-required");
-    return restoreCredential(account, payload);
+  async captureCurrent(): Promise<NativeCodexCredentials | null> {
+    let current: NativeCodexCredentials | null = null;
+    await this.#serialize(async () => {
+      current = await this.readCredentials();
+      const before = await this.reload();
+      const next = structuredClone(before);
+      if (current) upsert(next, current);
+      if (JSON.stringify(before.accounts) !== JSON.stringify(next.accounts)) {
+        next.revision++;
+        await writePrivateFile(path.join(this.directory, "vault.json"), JSON.stringify(next));
+        this.#vault = next;
+      }
+    });
+    return current;
   }
   async readCredentials(home = this.home): Promise<NativeCodexCredentials | null> {
-    this.assertOwnership();
-    const bytes = await (home === this.home ? this.#homeFiles : this.files).read(home, "auth.json");
-    if (!bytes) {
-      if (home === this.home) this.#observe(null);
-      return null;
-    }
+    const text = await readOptionalFile(path.join(home, "auth.json"));
+    let credential: NativeCodexCredentials | null;
     try {
-      const text = bytes.toString("utf8");
-      if (!Buffer.from(text).equals(bytes)) throw new Error("utf8");
-      const credential = NativeCodexCredentials.parse(text);
-      if (home === this.home) this.#observe(credential.identity);
-      return credential;
+      credential = text === null ? null : NativeCodexCredentials.parse(text);
     } catch {
       throw new NativeAccountError("unsupported-storage");
-    } finally {
-      bytes.fill(0);
     }
-  }
-  async install(
-    target: NativeCodexCredentials | null,
-    expected: NativeCodexCredentials | null,
-  ): Promise<void> {
-    this.assertOwnership();
-    const digest = credentialDigest(expected);
-    if (target) {
-      const bytes = Buffer.from(target.serializeForNativeStore());
-      try {
-        await this.#homeFiles.replace(this.home, "auth.json", bytes, digest);
-      } finally {
-        bytes.fill(0);
-      }
-    } else if (digest) await this.#homeFiles.remove(this.home, "auth.json", digest);
-    else if (await this.#homeFiles.read(this.home, "auth.json"))
-      throw new NativeAccountError("credential-conflict");
-    if (credentialDigest(await this.readCredentials()) !== credentialDigest(target))
-      throw new NativeAccountError("credential-conflict");
-  }
-  async readJournal(): Promise<NativeProfileJournal | null> {
-    this.assertOwnership();
-    const bytes = await this.files.read(this.directory, "transaction.json");
-    return bytes ? parseJournal(bytes, this.homeId) : null;
-  }
-  async writeJournal(journal: NativeProfileJournal): Promise<void> {
-    this.assertOwnership();
-    const bytes = serializePrivate(journal);
-    parseJournal(bytes, this.homeId);
-    const previous = await this.files.read(this.directory, "transaction.json");
-    if (previous && parseJournal(previous, this.homeId).operationId !== journal.operationId)
-      throw new NativeAccountError("recovery-required");
-    await this.files.replace(
-      this.directory,
-      "transaction.json",
-      bytes,
-      previous ? nativeDigest(previous) : null,
-    );
-  }
-  async clearJournal(operationId: string): Promise<void> {
-    this.assertOwnership();
-    const previous = await this.files.read(this.directory, "transaction.json");
-    if (!previous) return;
-    if (parseJournal(previous, this.homeId).operationId !== operationId)
-      throw new NativeAccountError("recovery-required");
-    await this.files.remove(this.directory, "transaction.json", nativeDigest(previous));
-  }
-  stageHome(stage: Pick<NativeLoginStage, "operationId">): string {
-    if (!z.string().uuid().safeParse(stage.operationId).success)
-      throw new NativeAccountError("recovery-required");
-    return path.join(this.directory, "login", stage.operationId);
-  }
-  async readStage(): Promise<NativeLoginStage | null> {
-    this.assertOwnership();
-    const bytes = await this.files.read(this.directory, "login.json");
-    if (!bytes) return null;
-    try {
-      return parseLoginStage(bytes);
-    } finally {
-      bytes.fill(0);
-    }
-  }
-  async writeStage(stage: NativeLoginStage): Promise<void> {
-    this.assertOwnership();
-    const previous = await this.files.read(this.directory, "login.json");
     if (
-      previous &&
-      stageSchema.parse(JSON.parse(previous.toString("utf8"))).operationId !== stage.operationId
-    )
-      throw new NativeAccountError("recovery-required");
-    const bytes = Buffer.from(JSON.stringify(stage));
-    if (bytes.length > 5 * 1024 * 1024) throw new NativeAccountError("unsupported-storage");
-    await this.files.replace(
-      this.directory,
-      "login.json",
-      bytes,
-      previous ? nativeDigest(previous) : null,
-    );
-  }
-  async createStage(
-    requestedAccountId?: string,
-    operationId: string = randomUUID(),
-  ): Promise<NativeLoginStage> {
-    if (await this.readStage()) throw new NativeAccountError("cleanup-required");
-    const stage: NativeLoginStage = {
-      version: 1,
-      operationId,
-      sourceAccountId: this.currentAccountId,
-      expiresAt: Date.now() + 10 * 60_000,
-      ...(requestedAccountId ? { requestedAccountId } : {}),
-    };
-    // Register before creating anything: a crash cannot leave an untracked secret directory.
-    await this.writeStage(stage);
-    const home = this.stageHome(stage);
-    await this.files.ensureDirectory(path.join(this.directory, "login"));
-    await this.files.ensureDirectory(home);
-    await this.files.replace(
-      home,
-      "config.toml",
-      Buffer.from('cli_auth_credentials_store = "file"\n[features]\nplugins = false\n'),
-      null,
-    );
-    return stage;
-  }
-  /** Caller has proved the staging process tree exited. Never follows a stage-root link. */
-  async clearStage(stage: NativeLoginStage): Promise<void> {
-    this.assertOwnership();
-    const recorded = await this.readStage();
-    if (!recorded) return;
-    if (recorded.operationId !== stage.operationId)
-      throw new NativeAccountError("recovery-required");
-    const home = this.stageHome(stage);
-    const stat = await lstat(home).catch((error: unknown) => {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-      throw error;
-    });
-    if (stat) {
-      if (!stat.isDirectory() || stat.isSymbolicLink())
-        throw new NativeAccountError("cleanup-required");
-      const bytes = await this.files.read(home, "auth.json");
-      if (bytes) {
-        try {
-          await this.files.remove(home, "auth.json", nativeDigest(bytes));
-        } finally {
-          bytes.fill(0);
-        }
-      }
-      await rm(home, { recursive: true });
+      home === this.home &&
+      JSON.stringify(this.#identity) !== JSON.stringify(credential?.identity ?? null)
+    ) {
+      this.#identity = credential?.identity ?? null;
+      this.#observationRevision++;
     }
-    const previous = await this.files.read(this.directory, "login.json");
-    if (previous) await this.files.remove(this.directory, "login.json", nativeDigest(previous));
+    return credential;
+  }
+  credential(account: NativeAccount): NativeCodexCredentials {
+    if (account.auth === null) throw new NativeAccountError("requires-login");
+    return NativeCodexCredentials.parse(account.auth);
+  }
+  install(target: NativeCodexCredentials | null): Promise<void> {
+    return this.#serialize(async () => {
+      const file = path.join(this.home, "auth.json");
+      if (target) await writePrivateFile(file, target.serializeForNativeStore());
+      else await rm(file, { force: true });
+      if ((await readOptionalFile(file)) !== (target?.serializeForNativeStore() ?? null))
+        throw new NativeAccountError("credential-conflict");
+      await this.readCredentials();
+    });
   }
   async replaceSaved(
     accountId: string,
     expected: NativeCodexCredentials,
     target: NativeCodexCredentials,
   ): Promise<void> {
-    await this.readCredentials();
-    await this.mutate((next) => {
-      if (this.currentAccountId === accountId) throw new NativeAccountError("credential-conflict");
+    await this.mutate(async (next) => {
+      await this.readCredentials();
       const account = next.accounts.find((a) => a.accountId === accountId);
       if (
+        this.currentAccountId === accountId ||
         !account ||
-        credentialDigest(this.restoreCredential(account)) !== credentialDigest(expected)
+        account.auth !== expected.serializeForNativeStore() ||
+        !sameCodexCredentialIdentity(account.identity, target.identity)
       )
         throw new NativeAccountError("credential-conflict");
-      account.payload = this.snapshotCredential(account, target);
+      upsert(next, target);
     });
   }
   async close(): Promise<void> {
-    const lease = this.#lease;
-    this.#lease = undefined;
+    await this.#mutations;
     this.#ready = false;
-    if (lease) await lease.release();
   }
-}
-
-export function newProfile(
-  credential: NativeCodexCredentials,
-  accountId: string = randomUUID(),
-): NativeProfileAccount {
-  const account: NativeProfileAccount = {
-    accountId,
-    identity: { ...credential.identity },
-    label: credential.email ?? `Codex ${accountId.slice(0, 8)}`,
-    ...(credential.email ? { email: credential.email } : {}),
-    ...(credential.planType ? { planType: credential.planType } : {}),
-    payload: null,
-  };
-  account.payload = snapshotCredential(account, credential);
-  return account;
-}
-export function matchProfile(
-  credential: NativeCodexCredentials | null,
-  account: NativeProfileAccount | null,
-): void {
-  if (
-    account === null
-      ? credential !== null
-      : !credential || !sameCodexCredentialIdentity(credential.identity, account.identity)
-  )
-    throw new NativeAccountError("credential-conflict");
 }

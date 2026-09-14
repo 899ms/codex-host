@@ -1,4 +1,66 @@
-import type { CodexCredentialIdentity } from "../../src/account/native-codex-credentials.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  NativeCodexCredentials,
+  type CodexCredentialIdentity,
+} from "../../src/account/native-codex-credentials.js";
+import { NativeAccountStore } from "../../src/account/native-account-store.js";
+import type { NativeAccountRuntime } from "../../src/account/native-account-runtime.js";
+import { OfficialWorkGate } from "../../src/codex-runtime/official-work-gate.js";
+
+export function credential(
+  subject: string,
+  generation = 1,
+  expiresAtUnix = 2_000_000_000,
+): NativeCodexCredentials {
+  return NativeCodexCredentials.parse(
+    syntheticNativeCredentials({ subject, generation, expiresAtUnix }),
+  );
+}
+export class FakeAccountRuntime implements NativeAccountRuntime {
+  readonly gate = new OfficialWorkGate();
+  readonly events: string[] = [];
+  onStop: (() => Promise<void>) | undefined;
+  onVerify: ((identity: CodexCredentialIdentity | null) => Promise<void>) | undefined;
+  onExternalStop: (() => Promise<void>) | undefined;
+  constructor() {
+    this.gate.initialized();
+  }
+  async checkCredentialStorage(): Promise<void> {
+    this.events.push("check");
+  }
+  async stop(): Promise<void> {
+    this.events.push("stop");
+    await this.onStop?.();
+  }
+  async stopExternalProcesses(): Promise<void> {
+    this.events.push("external");
+    await this.onExternalStop?.();
+  }
+  async start(): Promise<void> {
+    this.events.push("start");
+  }
+  async verify(identity: CodexCredentialIdentity | null): Promise<void> {
+    this.events.push("verify");
+    await this.onVerify?.(identity);
+  }
+}
+export async function createAccountState() {
+  const home = await mkdtemp(path.join(tmpdir(), "codex-account-test-"));
+  const store = new NativeAccountStore({ home });
+  await store.open();
+  const runtime = new FakeAccountRuntime();
+  return {
+    home,
+    store,
+    runtime,
+    close: async () => {
+      await store.close();
+      await rm(home, { recursive: true, force: true });
+    },
+  };
+}
 
 export function syntheticCodexIdentity(
   subject: string,

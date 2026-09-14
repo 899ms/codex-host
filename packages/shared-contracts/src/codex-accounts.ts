@@ -35,7 +35,7 @@ export const codexAccountSchema = z
     label: nonBlankTextSchema.max(256),
     email: z.string().email().max(320).optional(),
     planType: codexAccountPlanTypeSchema.optional(),
-    /** Legacy metadata retained when its credential was never backed up. */
+    /** Saved Account metadata without usable credentials. */
     requiresLogin: z.boolean().optional(),
   })
   .strict();
@@ -66,8 +66,6 @@ export const codexAccountCapabilitiesSchema = z
         "unsupported-storage",
         "unsupported-version",
         "recovery-required",
-        "keyring-unavailable",
-        "migration-required",
       ])
       .optional(),
   })
@@ -81,19 +79,12 @@ export const codexAccountListResultSchema = z
     phase: codexAccountPhaseSchema,
     revision: z.number().int().nonnegative(),
     instanceId: nonBlankTextSchema.max(1_024).optional(),
-    cleanupRequired: z.boolean().optional(),
-    /** Credentials were adopted; other native homes/history remain unmerged. */
-    legacyHistoryPreserved: z.boolean().optional(),
     pendingOperation: codexAccountPendingOperationSchema.optional(),
     capabilities: codexAccountCapabilitiesSchema,
     accounts: z.array(codexAccountSchema).max(128),
   })
   .strict();
 export type CodexAccountListResult = z.infer<typeof codexAccountListResultSchema>;
-
-/** Parse only to return an explicit upgrade error; never alias this to switch. */
-export const codexAccountActivateParamsSchema = z.object({ accountId: accountIdSchema }).strict();
-export type CodexAccountActivateParams = z.infer<typeof codexAccountActivateParamsSchema>;
 
 export const codexAccountSwitchParamsSchema = z.object({ accountId: accountIdSchema }).strict();
 export type CodexAccountSwitchParams = z.infer<typeof codexAccountSwitchParamsSchema>;
@@ -152,7 +143,6 @@ export const codexAccountLoginCompletedSchema = z
     success: z.boolean(),
     error: z.string().max(4_096).nullable(),
     saved: z.boolean().optional(),
-    cleanupRequired: z.boolean().optional(),
   })
   .strict();
 export type CodexAccountLoginCompleted = z.infer<typeof codexAccountLoginCompletedSchema>;
