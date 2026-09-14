@@ -792,9 +792,9 @@ describe("AppServerHost HarnessAdapter projection", () => {
     const unmanaged = createFixture();
     try {
       await unmanaged.ready;
-      writeRequest(unmanaged.desktopInput, { id: 903, method: "account/logout", params: {} });
+      writeRequest(unmanaged.desktopInput, { id: 903, method: "account/logout" });
       const forwarded = await readJsonLine(unmanaged.official.stdin);
-      expect(forwarded).toMatchObject({ id: 903, method: "account/logout", params: {} });
+      expect(forwarded).toEqual({ id: 903, method: "account/logout" });
       unmanaged.official.stdout.write(`${JSON.stringify({ id: 903, result: {} })}\n`);
       await expect(
         unmanaged.collector.waitFor((message) => message.id === 903),
@@ -881,12 +881,36 @@ describe("AppServerHost HarnessAdapter projection", () => {
     const managed = createFixture({ accountControl, allowNativeAuthPassthrough: false });
     try {
       await managed.ready;
-      writeRequest(managed.desktopInput, { id: 904, method: "account/logout", params: {} });
-      await expect(
-        managed.collector.waitFor((message) => message.id === 904),
-      ).resolves.toMatchObject({ result: {} });
-      expect(logout).toHaveBeenCalledOnce();
+      for (const request of [
+        { id: 904, method: "account/logout" },
+        { id: 910, method: "account/logout", params: null },
+        { id: 911, method: "account/logout", params: {} },
+      ]) {
+        writeRequest(managed.desktopInput, request);
+        await expect(
+          managed.collector.waitFor((message) => message.id === request.id),
+        ).resolves.toMatchObject({ result: {} });
+      }
+      expect(logout).toHaveBeenCalledTimes(3);
       expect(managed.official.stdin.read()).toBeNull();
+
+      for (const [index, params] of [false, 123, "invalid", []].entries()) {
+        const id = 920 + index;
+        writeRequest(managed.desktopInput, { id, method: "account/logout", params });
+        await expect(
+          managed.collector.waitFor((message) => message.id === id),
+        ).resolves.toHaveProperty("error");
+      }
+      expect(logout).toHaveBeenCalledTimes(3);
+      for (const [index, method] of ["account/login/start", "account/login/cancel"].entries()) {
+        const id = 930 + index;
+        writeRequest(managed.desktopInput, { id, method });
+        await expect(
+          managed.collector.waitFor((message) => message.id === id),
+        ).resolves.toHaveProperty("error");
+      }
+      expect(startNativeLogin).not.toHaveBeenCalled();
+      expect(accountControl.cancelLogin).not.toHaveBeenCalled();
 
       writeRequest(managed.desktopInput, {
         id: 905,

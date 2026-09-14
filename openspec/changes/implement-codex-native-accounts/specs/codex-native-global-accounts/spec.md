@@ -113,6 +113,12 @@ Account replacement SHALL retain native Thread IDs, persisted history and Harnes
 ### Requirement: Native Desktop authentication SHALL retain its protocol semantics
 Managed native ChatGPT OAuth and device-code login SHALL use the same Account coordinator and transaction as Settings, but SHALL activate the signed-in identity. Native branding and streamlined-login parameters SHALL reach the native login backend. Unsupported token-injection and non-ChatGPT modes MUST NOT bypass managed credential ownership.
 
+#### Scenario: Native logout omits parameters
+- **WHEN** Desktop sends `account/logout` without params, with null params or with an object
+- **THEN** managed authentication SHALL invoke the Account logout operation and return the native empty result
+- **AND** scalar or array logout params SHALL remain invalid; login start and cancellation SHALL retain their required-parameter validation
+- **AND** unmanaged native authentication SHALL preserve the original request without rewriting it
+
 #### Scenario: Native completion precedes the start response
 - **WHEN** native authentication completes before its start response can be delivered
 - **THEN** Host SHALL deliver the native response before its matching account/login/completed event

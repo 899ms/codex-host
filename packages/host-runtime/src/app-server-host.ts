@@ -1469,7 +1469,10 @@ export class AppServerHost {
   async #handleManagedNativeAuthRequest(request: JsonRpcRequest): Promise<void> {
     try {
       if (!this.#managedNativeAuth) throw new Error("Native Account control is unavailable");
-      await this.#managedNativeAuth.request(request.method, requestObject(request), (result) =>
+      // Native Desktop omits params for logout; no-argument RPCs may also use null.
+      const params =
+        request.method === "account/logout" && request.params == null ? {} : requestObject(request);
+      await this.#managedNativeAuth.request(request.method, params, (result) =>
         this.#writer.json(rpcEnvelope(request, { result })),
       );
     } catch (error) {
