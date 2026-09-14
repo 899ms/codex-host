@@ -63,16 +63,9 @@ https://github.com/user-attachments/assets/c48192d7-23ff-4f6e-b61a-6345a655bb76
 
 ## 빠른 시작
 
-**npm 사용**
+**설치 프로그램 다운로드** (macOS, Windows)
 
-> macOS, Windows 및 [x64/ARM64 Linux](linux.md)를 지원합니다.
-
-```bash
-npm install -g @codexhost/cli
-codexhost
-```
-
-**또는** [설치 프로그램](https://github.com/BytePioneer-AI/codex-host/releases) 다운로드 (macOS, Windows)
+[최신 릴리스](https://github.com/BytePioneer-AI/codex-host/releases/latest)에서 운영체제와 CPU 아키텍처에 맞는 설치 프로그램을 다운로드하세요. macOS는 DMG, Windows는 EXE를 선택합니다.
 
 <details>
 <summary>설치 문제 해결</summary>

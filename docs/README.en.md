@@ -63,16 +63,9 @@ https://github.com/user-attachments/assets/c48192d7-23ff-4f6e-b61a-6345a655bb76
 
 ## Quick Start
 
-**Use npm**
+**Download the installer** (macOS, Windows)
 
-> Supports macOS, Windows, and [x64/ARM64 Linux](linux.md).
-
-```bash
-npm install -g @codexhost/cli
-codexhost
-```
-
-**Or download** [installers](https://github.com/BytePioneer-AI/codex-host/releases) (macOS, Windows)
+Go to the [latest release](https://github.com/BytePioneer-AI/codex-host/releases/latest) and download the installer matching your OS and CPU architecture: DMG for macOS, EXE for Windows.
 
 <details>
 <summary>Installation troubleshooting</summary>
