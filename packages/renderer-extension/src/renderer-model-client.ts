@@ -98,6 +98,18 @@ export const THREAD_OWNERSHIP_LIST_METHOD = "codexhost/thread/ownership/list";
 export const THREAD_USAGE_INSPECT_METHOD = "codexhost/thread/usage/inspect";
 export const THREAD_USAGE_UPDATED_METHOD = "codexhost/thread/usage/updated";
 export const THREAD_TOKEN_USAGE_UPDATED_METHOD = "thread/tokenUsage/updated";
+/**
+ * Codex Desktop does not dispatch the custom `codexhost/thread/usage/updated`
+ * notification to renderer callbacks, and the native token-usage carrier is
+ * only projected once Context usage is known. Turn completion is dispatched,
+ * so it is the guaranteed point to re-read account quota after a reply.
+ */
+export const TURN_COMPLETED_METHOD = "turn/completed";
+const THREAD_USAGE_REFRESH_METHODS = [
+  THREAD_TOKEN_USAGE_UPDATED_METHOD,
+  THREAD_USAGE_UPDATED_METHOD,
+  TURN_COMPLETED_METHOD,
+] as const;
 export const UPDATE_CHECK_METHOD = "codexhost/update/check";
 export const UPDATE_START_METHOD = "codexhost/update/start";
 export const UPDATE_STATUS_METHOD = "codexhost/update/status";
@@ -112,8 +124,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function notifiedThreadId(notification: unknown): ThreadUsageInspectionParams["threadId"] | null {
   if (
     !isRecord(notification) ||
-    (notification.method !== THREAD_TOKEN_USAGE_UPDATED_METHOD &&
-      notification.method !== THREAD_USAGE_UPDATED_METHOD)
+    !(THREAD_USAGE_REFRESH_METHODS as readonly unknown[]).includes(notification.method)
   ) {
     return null;
   }
@@ -356,7 +367,7 @@ export function createRendererModelClient(
       let disposed = false;
       const generations = new Map<ThreadUsageInspectionParams["threadId"], number>();
       const removeNotificationCallback = notifications.addNotificationCallback(
-        [THREAD_TOKEN_USAGE_UPDATED_METHOD, THREAD_USAGE_UPDATED_METHOD],
+        THREAD_USAGE_REFRESH_METHODS,
         (notification) => {
           const threadId = notifiedThreadId(notification);
           if (!threadId) return;

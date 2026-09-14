@@ -27,6 +27,7 @@ import {
   THREAD_TOKEN_USAGE_UPDATED_METHOD,
   THREAD_USAGE_INSPECT_METHOD,
   THREAD_USAGE_UPDATED_METHOD,
+  TURN_COMPLETED_METHOD,
   UPDATE_CHECK_METHOD,
   UPDATE_START_METHOD,
   UPDATE_STATUS_METHOD,
@@ -415,7 +416,7 @@ describe("Renderer fixed Model request client", () => {
     const onUsage = vi.fn();
     const unsubscribe = client.subscribeThreadUsage?.(onUsage);
     expect(addNotificationCallback).toHaveBeenCalledWith(
-      [THREAD_TOKEN_USAGE_UPDATED_METHOD, THREAD_USAGE_UPDATED_METHOD],
+      [THREAD_TOKEN_USAGE_UPDATED_METHOD, THREAD_USAGE_UPDATED_METHOD, TURN_COMPLETED_METHOD],
       expect.any(Function),
     );
     usageNotification?.({
@@ -582,6 +583,40 @@ describe("Renderer fixed Model request client", () => {
       client.openHarnessWebUi({ harnessId, url: "http://127.0.0.1/?token=secret" } as never),
     ).rejects.toThrow();
     expect(sendRequest).toHaveBeenCalledOnce();
+  });
+
+  it("re-reads account quota when a Turn completes without a dispatched Usage notification", async () => {
+    // Codex Desktop drops `codexhost/thread/usage/updated` before renderer
+    // callbacks, and `thread/tokenUsage/updated` needs Context usage, so a
+    // completed reply must still refresh the quota pill on its own.
+    let notify: ((notification: unknown) => void) | undefined;
+    const addNotificationCallback = vi.fn(
+      (_method: string | readonly string[], callback: (notification: unknown) => void) => {
+        notify = callback;
+        return () => undefined;
+      },
+    );
+    const accountCredits = { usedPercent: 81, periodType: "five_hour" as const };
+    const sendRequest = vi.fn().mockResolvedValue({
+      threadId: "thread-1",
+      usage: null,
+      accountCredits,
+    });
+    const client = createRendererModelClient([{ addNotificationCallback, sendRequest }]);
+    const onUsage = vi.fn();
+    const unsubscribe = client?.subscribeThreadUsage?.(onUsage);
+
+    notify?.({ method: TURN_COMPLETED_METHOD, params: { threadId: "", turn: {} } });
+    notify?.({
+      method: TURN_COMPLETED_METHOD,
+      params: { threadId: "thread-1", turn: { id: "turn-1" } },
+    });
+
+    await vi.waitFor(() => expect(onUsage).toHaveBeenCalledOnce());
+    expect(sendRequest).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(THREAD_USAGE_INSPECT_METHOD, { threadId: "thread-1" });
+    expect(onUsage).toHaveBeenCalledWith({ threadId: "thread-1", usage: null, accountCredits });
+    unsubscribe?.();
   });
 
   it("defers Usage notification registration until a request manager is available", () => {
