@@ -5,6 +5,7 @@ import {
 } from "../renderer-transcript-dom.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
 import type { RendererSettingsMessages } from "./localization.js";
+import { mountIdleReleaseControls } from "./idle-release-controls.js";
 
 export function createAppearanceSettingsPage(
   messages: RendererSettingsMessages,
@@ -51,7 +52,11 @@ export function createAppearanceSettingsPage(
 
       row.append(copy, checkbox);
       context.content.append(heading, description, row);
-      return () => ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
+      const disposeIdleRelease = mountIdleReleaseControls(context.content, messages);
+      return () => {
+        ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
+        disposeIdleRelease();
+      };
     },
   });
 }

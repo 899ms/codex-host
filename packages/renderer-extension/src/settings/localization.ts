@@ -26,6 +26,16 @@ export interface RendererSettingsMessages {
   readonly generalSection: string;
   readonly otherSection: string;
   readonly appearanceDescription: string;
+  readonly idleReleaseSection: string;
+  readonly idleReleaseTitle: string;
+  readonly idleReleaseTimeout: string;
+  readonly idleReleaseRange: string;
+  readonly idleReleaseWarning: string;
+  readonly idleReleaseInvalid: string;
+  readonly idleReleaseApplied: string;
+  readonly idleReleasePending: string;
+  readonly idleReleaseUnavailable: string;
+  readonly idleReleaseFailed: string;
   readonly reasoningSoftWrapTitle: string;
   readonly reasoningSoftWrapDescription: string;
   readonly pageUnavailable: string;
@@ -199,7 +209,21 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   sectionsLabel: "Settings sections",
   generalSection: "General",
   otherSection: "Other",
-  appearanceDescription: "Adjust how thinking text is displayed in the conversation.",
+  appearanceDescription: "Adjust conversation appearance and local Host resource management.",
+  idleReleaseSection: "Resource management · Local Host only",
+  idleReleaseTitle: "Automatically release idle session resources",
+  idleReleaseTimeout: "Idle timeout (minutes)",
+  idleReleaseRange:
+    "10–1440 whole minutes. Shortening the timeout may release already-idle sessions at the next check (about once a minute).",
+  idleReleaseWarning:
+    "When enabled, external Agent sessions idle for {minutes} minutes will close their running instances to free resources, even while you are viewing the conversation. Services and background tasks started by the session may stop, their results may be lost, and they are not guaranteed to restart. Opening the session or sending a message will attempt to resume the original session and may take time.",
+  idleReleaseInvalid: "Enter a whole number of minutes between 10 and 1440.",
+  idleReleaseApplied: "Saved settings applied to the local Host.",
+  idleReleasePending: "Waiting for settings to be applied to the local Host…",
+  idleReleaseUnavailable:
+    "The current Host does not support this feature. Update codexhost to use it.",
+  idleReleaseFailed:
+    "Settings could not be saved or applied. The change is not confirmed; retry or reconnect to the local Host.",
   reasoningSoftWrapTitle: "Wrap thinking text",
   reasoningSoftWrapDescription:
     "Wrap long thinking lines in the transcript. Ordinary shell output is unaffected. Off by default.",
@@ -385,7 +409,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   aboutRepository: "Open-source repository",
   pageLabels: Object.freeze({
     connections: "Connections",
-    appearance: "Appearance",
+    appearance: "General",
     accounts: "Accounts",
     "session-import": "Session Import",
     updates: "Updates",
@@ -401,7 +425,19 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   sectionsLabel: "设置分类",
   generalSection: "通用",
   otherSection: "其他",
-  appearanceDescription: "调整会话中思考文本的显示方式。",
+  appearanceDescription: "调整会话外观与本地 Host 的资源管理。",
+  idleReleaseSection: "资源管理 · 仅本地 Host",
+  idleReleaseTitle: "自动释放空闲会话资源",
+  idleReleaseTimeout: "空闲超时时间（分钟）",
+  idleReleaseRange:
+    "范围为 10～1440 分钟整数。缩短时长可能使已闲置会话在下一次检查时被释放（约每分钟检查一次）。",
+  idleReleaseWarning:
+    "开启后，外部 Agent 会话连续空闲 {minutes} 分钟将关闭后台运行实例，以释放资源。即使您仍停留在该会话页面，也可能被释放。该会话启动的服务（如开发服务器）和后台任务可能同时停止，后续结果可能丢失，且不保证自动恢复。再次打开或发送消息时会尝试恢复原会话，需要等待 Agent 重新启动。",
+  idleReleaseInvalid: "请输入 10～1440 之间的整数分钟。",
+  idleReleaseApplied: "已保存的设置已应用到本地 Host。",
+  idleReleasePending: "正在等待设置应用到本地 Host…",
+  idleReleaseUnavailable: "当前 Host 不支持此功能，请更新 codexhost。",
+  idleReleaseFailed: "设置保存或下发失败，尚未确认变更生效，请重试或重新连接本地 Host。",
   reasoningSoftWrapTitle: "换行显示思考文本",
   reasoningSoftWrapDescription: "让思考块中的长行自动换行。普通 Shell 输出不受影响。默认关闭。",
   pageUnavailable: "页面不可用",
@@ -579,7 +615,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   aboutRepository: "开源仓库",
   pageLabels: Object.freeze({
     connections: "连接",
-    appearance: "外观",
+    appearance: "通用",
     accounts: "账号",
     "session-import": "会话导入",
     updates: "更新",

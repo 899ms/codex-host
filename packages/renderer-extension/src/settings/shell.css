@@ -740,6 +740,17 @@ button {
   cursor: pointer;
 }
 
+.settings-preference-number {
+  width: 110px;
+  padding: 8px;
+  border: 1px solid var(--settings-divider);
+  border-radius: 6px;
+  background: var(--settings-surface);
+  color: var(--settings-text);
+  font: inherit;
+}
+
+.settings-preference-number:focus-visible,
 .settings-preference-checkbox:focus-visible {
   outline: 2px solid var(--settings-focus);
   outline-offset: 2px;

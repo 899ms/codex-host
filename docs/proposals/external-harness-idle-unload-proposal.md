@@ -1,6 +1,6 @@
-# 外部 Harness 空闲会话自动释放方案（待评估）
+# 外部 Harness 空闲会话自动释放方案与实现
 
-> 状态：设计草案，仅供评估，尚未批准实施。本文不代表当前产品能力。
+> 状态：已按确认方案在独立分支实现，见 [PR #303](https://github.com/BytePioneer-AI/codex-host/pull/303)。尚未发布；真实 Desktop 与逐 Harness 实测仍待完成，PR 保持 Draft。
 > 来源：[#294](https://github.com/BytePioneer-AI/codex-host/issues/294) 及后续方案讨论。
 > 依据（2026-09-15）：源码核对；本机 Codex Desktop 26.908.40834 安装包与日志分析；stock `codex-cli 0.154.0-alpha.6.2` app-server 实测；Host 合成探针测试（临时文件，未提交）。未在真实 Desktop 上验证自动释放与恢复。
 > 修订：前几版分别评估了 Renderer 前台上报、接入 Codex 原生退订语义、Adapter 活动探针与进程组检查，均因复杂度或收益问题未采用（见第 6 节）。本版改为用户显式开启、达到可配置空闲时间后关闭会话的简化方案，并保留可恢复性与 Host 操作协调保护。最近一次审查后明确：方案仅考虑本地 Host，远程 Host 不在范围内；进行中的 Host 操作以按 Thread 的占用计数保护，不以空闲时长兜底；设置校验共用 `shared-contracts` schema；设置页内部 ID 保持 `appearance`；超时时间为 10～1440 分钟整数；设置存储采用 Renderer localStorage 并下发给本地 Host。
@@ -29,7 +29,7 @@
 
 ### 3.1 设置
 
-- 位置：现有“外观”页显示名称改为“通用”（英文 General），页面内部 ID 保持 `appearance`（`pages.ts`），保留已有外观设置和偏好，新增“资源管理”分组。只修改本地化中的页面名称和页面描述（现描述为“调整会话中思考文本的显示方式”，需改为覆盖外观与资源管理），控件、说明和错误提示均走现有本地化机制。
+- 位置：现有“外观”页显示名称改为“通用”（英文 General），页面内部 ID 保持 `appearance`（`appearance-page.ts`），保留已有外观设置和偏好，新增“资源管理”分组。只修改本地化中的页面名称和页面描述（现描述为“调整会话中思考文本的显示方式”，需改为覆盖外观与资源管理），控件、说明和错误提示均走现有本地化机制。
 - 作用范围：仅本地 Host。Renderer 只向本地 Host（`hostId` 为 `local`）发送该设置。远程 Host 不在范围内，本方案不为其增加任何处理。
 - 控件：“自动释放空闲会话资源”开关，以及“空闲超时时间”数值输入框，单位为分钟，不使用下拉框。开关默认关闭，时间默认 30 分钟；关闭开关不丢失已保存的时长。
 - 取值范围：**10～1440 分钟的整数**。输入框设置 `min=10`、`max=1440`、`step=1`，旁边注明范围；空值、小数、超出范围的输入禁止保存，并提示“请输入 10～1440 之间的整数分钟”。
@@ -43,8 +43,9 @@
   > 开启后，外部 Agent 会话连续空闲 {minutes} 分钟将关闭后台运行实例，以释放资源。即使您仍停留在该会话页面，也可能被释放。该会话启动的服务（如开发服务器）和后台任务可能同时停止，后续结果可能丢失，且不保证自动恢复。再次打开或发送消息时会尝试恢复原会话，需要等待 Agent 重新启动。
 
 - 存储方式：**Renderer localStorage + 下发给本地 Host**。
-  - Renderer 将开关和时长保存在 localStorage，沿用现有偏好模块的做法（如 `renderer-new-thread-preference.ts`、`agent-group-preference.ts`）；读写失败或读到无效值时按默认值（关闭、30 分钟）处理。
-  - Renderer 在与本地 Host 建立连接后、以及设置变更时，通过新增的 `codexhost/` 前缀请求（名称实施时确定）把完整设置下发给本地 Host。多个窗口重复下发同一设置是幂等的，以最后一次为准。
+  - Renderer 将开关和时长保存在 localStorage 的 `codexhost.idle-release.v1` 键中（JSON 对象 `{ enabled, timeoutMinutes }`），沿用现有偏好模块的做法；读取失败或读到无效值时按默认值（关闭、30 分钟）处理。写入失败明确提示保存失败，不将未保存的输入作为已生效设置，也不覆盖之前的有效配置。
+  - Renderer 在与本地 Host 建立连接后、以及设置变更时，通过 `codexhost/settings/idle-release/set` 把完整设置下发给本地 Host，成功响应返回应用的完整设置。多个窗口重复下发同一设置是幂等的，以最后一次为准。
+  - 每次实际下发前重新读取 localStorage；监听 `storage` 事件同步其他窗口的变更，不在重连时重放窗口缓存。单个连接串行下发并合并等待中的变更；新连接不被旧连接未完成的请求阻塞，旧响应不能覆盖新连接的应用状态。
   - Host 只把设置保存在内存，不新增持久化文件。Host 重启或连接重建后，在 Renderer 重新下发前按“关闭”处理。
   - Host 用共用 schema 校验；无效的设置返回错误，不覆盖已有有效配置。
   - 旧版 Host 不支持该请求时，Renderer 现有请求发送器会得到“方法不支持”错误，设置页提示当前 Host 不支持此功能，不静默当作已生效。
@@ -81,7 +82,7 @@
 - Host 在设置开启期间运行一个低频检查（例如每分钟一次，`unref` 定时器），Host 退出或设置关闭时停止。
 - 对满足条件的 Thread：
   1. 在同一受控入口内检查条件并标记该 Thread 正在关闭；此后需要执行实例的请求等待关闭结果。
-  2. 调用 `session.close()`，再等待 `outputTask` 结束。关闭标记覆盖关闭、输出 drain、持久化确认和最终移除全过程，整个过程需有明确的超时处理。
+  2. 调用 `session.close()`，再等待 `outputTask` 结束，清理关闭期间产生的待处理交互。关闭标记覆盖关闭、输出 drain、交互清理、持久化确认和最终移除全过程；关闭及 drain/交互清理合计最多等待 60 秒，超时按关闭失败处理。
   3. 再次确认恢复身份可用、没有输出处理或持久化失败，并确认 Runtime 中仍是这次关闭的原实例。
   4. 成功后移除原实例并清除关闭标记，等待中的请求按现有逻辑合并恢复。
 - 关闭失败、超时、输出消费失败或持久化失败：记录诊断，**保留原 Session 引用与 Host 侧明确的关闭失败标记**，不自动重试回收、不自动重建。关闭失败检查统一放在 `locate()`，所有经过 `locate()` / `resolve()` 的入口返回明确错误，不能依赖旧 Session 自行拒绝请求。等待关闭的请求也必须得到失败结果，不能无限等待。
@@ -89,9 +90,9 @@
 
 **操作协调**（不新建完整操作登记系统）：
 
-- 复用现有 `DesktopRequestQueue`：回收操作通过 `run(threadId, …)` 与该 Thread 的 Desktop 请求串行执行。
-- 队列只等待传入操作返回，不能覆盖所有路径：`turn/start`、`turn/steer` 在处理函数内另行 `#dispatchDesktopRequest`，委派控制 API、fork / rollback 的替换等也不在队列中。对这些路径增加**按 Thread 的 Host 操作占用计数**：
-  - 在 Runtime 受控入口中与 `resolve()` 取得 Thread **同一同步段内**加 1，调用方在 `finally` 中减 1，避免“已取得 Session 引用但尚未计数”的空窗；
+- 复用现有 `DesktopRequestQueue`：回收操作通过 `run(threadId, …)` 与该 Thread 的 Desktop 请求串行执行。入队后执行时重新检查设置、活动时间和占用条件；仍有操作就跳过，不在队列内等待占用清零。
+- Desktop 的 fork / rollback 等被 `await` 的路径已经在队列内；队列只等待传入操作返回，不能覆盖 `turn/start`、`turn/steer` 和命令执行另行派发的任务，以及委派控制 API、审批/提问响应。使用**按 Thread 的 Host 操作占用计数**覆盖这些路径及 Desktop 请求，并保护新 Thread 注册后的初始化操作：
+  - 通过 `runOperation(threadId, operation)` 在取得 Session 引用之前同步加 1，再执行 `locate()` / `resolve()` 和操作；统一在 `finally` 减 1，避免“已取得 Session 引用但尚未计数”的空窗；
   - 只跟踪 Host 操作，不探测原生后台任务，也不把整个 Turn 纳入计数（Turn 由条件 2 覆盖）；
   - 计数减为 0 时刷新最后活动时间。
 - 回收在同一同步段内确认计数为 0 并标记正在关闭；之后新的占用请求等待关闭结果。由于关闭只在无人持有执行实例时开始，已取得 Session 引用的异步操作不会与关闭交错；`locate()` 的失败检查只负责之后到达的请求。
@@ -175,7 +176,7 @@
 单元与合成测试（Fake Adapter、Fake Timers）：
 
 - 设置关闭或未收到设置时不发起回收；设置无效不启用，更新无效不覆盖已有有效配置。
-- Renderer：设置写入并从 localStorage 回显；localStorage 不可用或值无效时按默认值；连接本地 Host 后及设置变更时下发；Host 不支持该请求时设置页给出提示。
+- Renderer：设置写入并从 localStorage 回显；读取不可用或值无效时按默认值，写入失败明确提示；连接本地 Host 后及设置变更时下发；多窗口读取最新存储并同步；旧连接迟到响应不覆盖新状态；Host 不支持该请求时设置页给出提示。
 - Host：重启或连接重建后在收到下发前不回收；重复下发同一设置不重置已有活动时间。
 - “通用”页保留原外观选项，新增开关、时长输入和本地化说明；默认关闭、默认 30 分钟，已保存值正确回显。
 - 覆盖 10～1440 整数分钟校验：边界值 10、1440 可保存，9、1441、空值、小数拒绝并提示；Host 使用同一 schema 拒绝越界设置；时长增减生效，以及关闭后保留时长。
@@ -211,8 +212,30 @@
 - 存储：Renderer localStorage 保存，下发给本地 Host，Host 仅保存在内存；未采用在 `~/.codexhost` 新增配置文件的方案。
 - 协调：未完成的 Host 操作以复用 `DesktopRequestQueue` 加按 Thread 占用计数保护，不以空闲时长兜底。
 
-当前无待定决策。
+当前无待定产品决策；真实环境验证仍未完成（见第 11 节）。
 
 ## 10. 总结
 
 本方案在“通用”设置页提供默认关闭的自动释放开关及可修改的空闲超时时间（默认 30 分钟），全部功能仅针对本地 Host。以用户显式开启和明确提示为前提，使用 Host 已知的 Turn、Subagent、steering 和持久化状态，并以复用 `DesktopRequestQueue` 加按 Thread 占用计数保护进行中的 Host 操作，优先复用现有 `close()` 与 `resolve()` 恢复路径，不引入 Adapter 安全探针或原生退订语义。设置保存在 Renderer localStorage，并通过新增的 codexhost 请求下发给本地 Host，所有 Adapter 均需验证关闭恢复行为，必要修正按结果确定。代价是可能停止会话启动的服务和后台任务，以及恢复时的等待；这些在开启时告知用户。
+
+## 11. 实现与验证进展
+
+实现位置：
+
+- `shared-contracts/src/idle-release.ts`：共用 schema、默认值和设置请求名称。
+- `renderer-extension/src/renderer-idle-release-preference.ts`：存储、连接下发、多窗口同步与失败状态；`settings/idle-release-controls.ts`：开关、分钟输入、开启确认和应用结果提示。
+- `host-runtime/src/external-thread-idle-release.ts`：每分钟检查、占用计数、关闭/drain 超时和失败隔离；`ExternalThreadRuntime` / `AppServerHost` / 委派入口只增加必要接线。
+- 不修改 Adapter，不新增配置文件、不新增原生安全探针、不接入 Desktop 退订语义。
+
+已执行的验证：
+
+- `npm run typecheck`、`npm run lint`（含依赖边界检查）、`npm run build:renderer`。
+- Host 回收/恢复/委派及 Renderer 设置、客户端和路由的聚焦 Vitest 测试：17 个文件、367 项通过，覆盖假时钟、长操作、输出 drain、失败/超时、旧实例隔离、原身份恢复及继续发送。
+- 所有 11 个 Adapter 的现有关闭/恢复相关聚焦测试：16 个测试文件，107 项通过，445 项因名称筛选未运行。它们不是“所有真实 Harness 已完成整条自动释放流程”的证明。
+- `renderer-idle-release.spec.ts` 浏览器测试 3 项通过：数值校验和开启确认、持久化/重载、多窗口同步、旧 Host 不支持提示。
+
+未通过或未执行的验证：
+
+- 额外运行的既有 `renderer-binding-startup.spec.ts` 5 项失败：`about:blank` 测试页面中，既有 `installReasoningTranscriptSoftWrap()` 直接读取 localStorage 抛出 `SecurityError`，导致绑定未安装。已在未修改基线 `7b630f6e` 的隔离副本复现首项相同异常；本 PR 不扩大范围修改该既有问题。
+- 未启动真实 Codex Desktop，也未运行任何使用真实 Harness/账号的端到端自动释放验证，以免中断当前会话或启动付费请求。因此 Pi、OMP、Claude Code、CodeBuddy、Cursor、Grok、Hermes、Kiro、OpenCode、Antigravity、DeepSeek Harness 的真实资源释放范围、连续恢复和其他会话不受影响仍逐项待验证。
+- 全量测试、Rust 构建/测试未运行；没有 Rust 改动。

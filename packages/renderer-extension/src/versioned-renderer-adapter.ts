@@ -1,4 +1,5 @@
 import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bindings";
+import { installIdleReleasePreferenceSync } from "./renderer-idle-release-preference.js";
 import {
   encodeHarnessPluginRoute,
   harnessIdSchema,
@@ -1010,6 +1011,7 @@ export function installCurrentRendererAdapter(): {
   };
 
   const usageSubscription = createThreadUsageSubscriptionRelay();
+  const idleReleaseSync = installIdleReleasePreferenceSync(window);
   const requestRouteResolver = createRendererRequestRouteResolver(
     () => window.__codexhostDraftPrewarmPolicyV1,
     () => findActivePrewarmTargets(document),
@@ -1052,6 +1054,13 @@ export function installCurrentRendererAdapter(): {
     const policy = route?.policy ?? null;
     const client = route ? modelClientForTargets(route.targets, route.policy) : null;
     usageSubscription.connect(client);
+    const localClient =
+      policy?.hostId === "local"
+        ? client
+        : modelClientForTargets(
+            rendererRequestTargetsForHost(findActivePrewarmTargets(document), "local") ?? [],
+          );
+    idleReleaseSync.connect(localClient);
     if (activeRoutePolicy === policy && activeRouteClient === client) return client;
     activeRoutePolicy = policy;
     activeRouteClient = client;
@@ -1291,6 +1300,7 @@ export function installCurrentRendererAdapter(): {
         () => forkControl.dispose(),
         ...turnControlCleanups,
         () => usageSubscription.dispose(),
+        () => idleReleaseSync.dispose(),
       ];
       for (const cleanup of cleanups) {
         try {
