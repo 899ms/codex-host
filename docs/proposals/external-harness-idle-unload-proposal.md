@@ -18,7 +18,7 @@
 ## 2. 方案概述
 
 - 将现有设置中的“外观”页更名为“通用”，保留原有外观选项，新增“自动释放空闲会话资源”开关和空闲超时时间输入项。
-- 开关**默认关闭**，超时时间**默认 30 分钟、允许在 10～1440 分钟内修改**，开启前展示影响说明。
+- 开关**默认关闭**，超时时间**默认 30 分钟、允许在 10～1440 分钟内修改**。开启即生效，不弹确认框；影响说明放在标题旁的问号浮窗中，页面不出现大段文字。
 - **仅考虑本地 Host**：设置只下发给本地 Host；远程 Host 不在范围内。
 - 开启后，外部 Thread 空闲达到配置时长且满足 Host 保护条件时，Host 调用现有 `HarnessSession.close()` 关闭会话，并从内存移除该 Thread，不发送额外的卸载状态通知。
 - 之后需要执行实例的请求（打开、发送消息、读取历史等）经现有 `ExternalThreadRuntime.resolve()` 自动恢复；仅元数据等请求保持现有不恢复行为。
@@ -31,16 +31,21 @@
 
 - 位置：现有“外观”页显示名称改为“通用”（英文 General），页面内部 ID 保持 `appearance`（`appearance-page.ts`），保留已有外观设置和偏好，新增“资源管理”分组。只修改本地化中的页面名称和页面描述（现描述为“调整会话中思考文本的显示方式”，需改为覆盖外观与资源管理），控件、说明和错误提示均走现有本地化机制。
 - 作用范围：仅本地 Host。Renderer 只向本地 Host（`hostId` 为 `local`）发送该设置。远程 Host 不在范围内，本方案不为其增加任何处理。
-- 控件：“自动释放空闲会话资源”开关，以及“空闲超时时间”数值输入框，单位为分钟，不使用下拉框。开关默认关闭，时间默认 30 分钟；关闭开关不丢失已保存的时长。
-- 取值范围：**10～1440 分钟的整数**。输入框设置 `min=10`、`max=1440`、`step=1`，旁边注明范围；空值、小数、超出范围的输入禁止保存，并提示“请输入 10～1440 之间的整数分钟”。
+- 布局：页面标题与一行描述下分为“外观”“资源管理”两个卡片分组；资源管理标题右侧仅在设置未生效时以带颜色圆点的短文本显示状态（同步中、当前 Host 不支持、同步失败），同步成功时不显示；“仅作用于本地 Host”的说明放在问号浮窗中。每行只有标题、一行描述和右侧控件。
+- 控件：“自动释放空闲会话”开关（`role="switch"`），以及“空闲超时”数值输入框，单位“分钟”显示在输入框内，不使用下拉框。开关默认关闭，时间默认 30 分钟；关闭开关不丢失已保存的时长。
+- 取值范围：**10～1440 分钟的整数**。输入框设置 `min=10`、`max=1440`、`step=1`，描述行注明范围；空值、小数、超出范围的输入禁止保存，输入框变为错误样式，描述行改为“请输入 10～1440 之间的整数。”。
   - 下限 10 分钟：空闲检查约每分钟一次，过短的时长误差占比大；避免用户阅读或思考时频繁释放、恢复；给 Turn 结束后迟到的后台输出留出余量。进行中操作的保护仍由占用计数负责，不依赖下限。
   - 上限 1440 分钟（24 小时）：更长的时长基本等于不释放，应直接关闭开关；同时消除毫秒换算溢出问题。
 - 校验规则（含上下限）定义为 `shared-contracts` 中的单一 schema，Renderer 与 Host 共用，避免规则漂移。首次未设置时使用 30 分钟；无效持久化配置不启用自动释放。
 - Host 只应用完整且有效的设置。用户修改时长后，下一次检查按新阈值判断，不重置已有活动时间；缩短时长可能使已闲置会话在下一次检查被释放，界面需明确说明。
 - 关闭状态不发起新的检查或关闭；已经开始的关闭继续完成或明确失败，不能取消等待后直接恢复旧实例。
-- 开启时的说明文案（草案，其中时长使用当前设置值）：
-
-  > 开启后，外部 Agent 会话连续空闲 {minutes} 分钟将关闭后台运行实例，以释放资源。即使您仍停留在该会话页面，也可能被释放。该会话启动的服务（如开发服务器）和后台任务可能同时停止，后续结果可能丢失，且不保证自动恢复。再次打开或发送消息时会尝试恢复原会话，需要等待 Agent 重新启动。
+- 影响说明：开关标题旁的问号按钮在鼠标移入或键盘聚焦时显示浮窗（`role="tooltip"`，按 Esc 收起），以短句列出：
+  - 即使正停留在该会话页面，也可能被释放。
+  - 会话启动的服务（如开发服务器）和后台任务会一并停止，结果可能丢失。
+  - 再次打开或发送消息时恢复原会话，需等待 Agent 重新启动。
+  - 缩短超时后，已空闲的会话可能很快被释放。
+  - 仅作用于本地 Host 上的外部 Agent 会话。
+- 样式：设置页引入 Tailwind CSS（构建期依赖），由 `renderer-extension/scripts/tailwind-esbuild-plugin.mjs` 编译 `settings/tailwind.css` 并以文本注入设置页 Shadow DOM。只引入 theme 与 utilities、不引入 preflight；颜色映射到现有 `--settings-*` 变量以保持深浅色一致；插件显式声明 cascade layer 顺序，并把 `@property` 初始值展开为普通声明（Chromium 不在 Shadow DOM 中注册 `@property`）。现有 `shell.css` 的元素级基础样式移入 `@layer base`，其余组件样式保持不变。
 
 - 存储方式：**Renderer localStorage + 下发给本地 Host**。
   - Renderer 将开关和时长保存在 localStorage 的 `codexhost.idle-release.v1` 键中（JSON 对象 `{ enabled, timeoutMinutes }`），沿用现有偏好模块的做法；读取失败或读到无效值时按默认值（关闭、30 分钟）处理。写入失败明确提示保存失败，不将未保存的输入作为已生效设置，也不覆盖之前的有效配置。
@@ -216,14 +221,15 @@
 
 ## 10. 总结
 
-本方案在“通用”设置页提供默认关闭的自动释放开关及可修改的空闲超时时间（默认 30 分钟），全部功能仅针对本地 Host。以用户显式开启和明确提示为前提，使用 Host 已知的 Turn、Subagent、steering 和持久化状态，并以复用 `DesktopRequestQueue` 加按 Thread 占用计数保护进行中的 Host 操作，优先复用现有 `close()` 与 `resolve()` 恢复路径，不引入 Adapter 安全探针或原生退订语义。设置保存在 Renderer localStorage，并通过新增的 codexhost 请求下发给本地 Host，所有 Adapter 均需验证关闭恢复行为，必要修正按结果确定。代价是可能停止会话启动的服务和后台任务，以及恢复时的等待；这些在开启时告知用户。
+本方案在“通用”设置页提供默认关闭的自动释放开关及可修改的空闲超时时间（默认 30 分钟），全部功能仅针对本地 Host。以用户显式开启和明确提示为前提，使用 Host 已知的 Turn、Subagent、steering 和持久化状态，并以复用 `DesktopRequestQueue` 加按 Thread 占用计数保护进行中的 Host 操作，优先复用现有 `close()` 与 `resolve()` 恢复路径，不引入 Adapter 安全探针或原生退订语义。设置保存在 Renderer localStorage，并通过新增的 codexhost 请求下发给本地 Host，所有 Adapter 均需验证关闭恢复行为，必要修正按结果确定。代价是可能停止会话启动的服务和后台任务，以及恢复时的等待；这些通过设置项旁的问号浮窗告知用户。
 
 ## 11. 实现与验证进展
 
 实现位置：
 
 - `shared-contracts/src/idle-release.ts`：共用 schema、默认值和设置请求名称。
-- `renderer-extension/src/renderer-idle-release-preference.ts`：存储、连接下发、多窗口同步与失败状态；`settings/idle-release-controls.ts`：开关、分钟输入、开启确认和应用结果提示。
+- `renderer-extension/src/renderer-idle-release-preference.ts`：存储、连接下发、多窗口同步与失败状态；`settings/idle-release-controls.ts`：开关、分钟输入、问号浮窗说明和同步状态。
+- `renderer-extension/src/settings/preference-ui.ts`：分组卡片、开关、带单位数字输入、问号浮窗等设置页小组件，使用 Tailwind 工具类；`settings/tailwind.css` 与 `scripts/tailwind-esbuild-plugin.mjs`：Tailwind 编译接入，renderer 构建改为 `scripts/build.mjs`，相关 e2e 打包同样接入插件；发布包新增 `tailwindcss-LICENSE.txt`。
 - `host-runtime/src/external-thread-idle-release.ts`：每分钟检查、占用计数、关闭/drain 超时和失败隔离；`ExternalThreadRuntime` / `AppServerHost` / 委派入口只增加必要接线。
 - 不修改 Adapter，不新增配置文件、不新增原生安全探针、不接入 Desktop 退订语义。
 - 后续审查修正：异常退出时先关闭 steering 等待器再 drain 操作，避免无谓等待旧 Turn 的取消超时；本地客户端的无 policy 辅助查询复用已有缓存，不因本地/远程路由切换清空方法支持记录，真实连接或显式 policy 变化仍使缓存失效。两项均有回归测试。
@@ -233,10 +239,12 @@
 - `npm run typecheck`、`npm run lint`（含依赖边界检查）、`npm run build:renderer`。
 - Host 回收/恢复/委派及 Renderer 设置、客户端和路由的聚焦 Vitest 测试：17 个文件、367 项通过，覆盖假时钟、长操作、输出 drain、失败/超时、旧实例隔离、原身份恢复及继续发送。
 - 所有 11 个 Adapter 的现有关闭/恢复相关聚焦测试：16 个测试文件，107 项通过，445 项因名称筛选未运行。它们不是“所有真实 Harness 已完成整条自动释放流程”的证明。
-- `renderer-idle-release.spec.ts` 浏览器测试 3 项通过：数值校验和开启确认、持久化/重载、多窗口同步、旧 Host 不支持提示。
+- `renderer-idle-release.spec.ts` 浏览器测试 3 项通过：问号浮窗显示、数值校验、开启无弹窗即生效、持久化/重载、多窗口同步、旧 Host 不支持提示；`renderer-settings-accounts.spec.ts` 3 项通过。设置页 UI 改版后另以临时截图用例目视检查深色中文、浅色中文、深色英文三种状态。
+- 设置页 UI 改版后：`renderer-extension` 与 `tests/release` 的 Vitest 除下述既有失败外全部通过（含发布包许可证数量断言更新）；依赖边界检查通过。
 
 未通过或未执行的验证：
 
 - 额外运行的既有 `renderer-binding-startup.spec.ts` 5 项失败：`about:blank` 测试页面中，既有 `installReasoningTranscriptSoftWrap()` 直接读取 localStorage 抛出 `SecurityError`，导致绑定未安装。已在未修改基线 `7b630f6e` 的隔离副本复现首项相同异常；本 PR 不扩大范围修改该既有问题。
+- 以下失败在未修改的 HEAD 隔离 worktree 中同样复现，与设置页改版无关：`renderer-external-queue.test.ts` 4 项；`renderer-binding-startup.spec.ts` 与 `renderer-chat-composer-isolation.spec.ts` 共 6 项；`renderer-usage-notification.spec.ts` 因打包未配置 `.svg` loader 无法构建。
 - 未启动真实 Codex Desktop，也未运行任何使用真实 Harness/账号的端到端自动释放验证，以免中断当前会话或启动付费请求。因此 Pi、OMP、Claude Code、CodeBuddy、Cursor、Grok、Hermes、Kiro、OpenCode、Antigravity、DeepSeek Harness 的真实资源释放范围、连续恢复和其他会话不受影响仍逐项待验证。
 - 全量测试、Rust 构建/测试未运行；没有 Rust 改动。

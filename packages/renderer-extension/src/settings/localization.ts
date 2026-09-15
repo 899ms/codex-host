@@ -26,13 +26,16 @@ export interface RendererSettingsMessages {
   readonly generalSection: string;
   readonly otherSection: string;
   readonly appearanceDescription: string;
+  readonly appearanceGroup: string;
   readonly idleReleaseSection: string;
   readonly idleReleaseTitle: string;
+  readonly idleReleaseDescription: string;
+  readonly idleReleaseHelpLabel: string;
+  readonly idleReleaseHelp: readonly string[];
   readonly idleReleaseTimeout: string;
-  readonly idleReleaseRange: string;
-  readonly idleReleaseWarning: string;
+  readonly idleReleaseTimeoutDescription: string;
+  readonly idleReleaseMinutes: string;
   readonly idleReleaseInvalid: string;
-  readonly idleReleaseApplied: string;
   readonly idleReleasePending: string;
   readonly idleReleaseUnavailable: string;
   readonly idleReleaseFailed: string;
@@ -209,24 +212,29 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   sectionsLabel: "Settings sections",
   generalSection: "General",
   otherSection: "Other",
-  appearanceDescription: "Adjust conversation appearance and local Host resource management.",
-  idleReleaseSection: "Resource management · Local Host only",
-  idleReleaseTitle: "Automatically release idle session resources",
-  idleReleaseTimeout: "Idle timeout (minutes)",
-  idleReleaseRange:
-    "10–1440 whole minutes. Shortening the timeout may release already-idle sessions at the next check (about once a minute).",
-  idleReleaseWarning:
-    "When enabled, external Agent sessions idle for {minutes} minutes will close their running instances to free resources, even while you are viewing the conversation. Services and background tasks started by the session may stop, their results may be lost, and they are not guaranteed to restart. Opening the session or sending a message will attempt to resume the original session and may take time.",
-  idleReleaseInvalid: "Enter a whole number of minutes between 10 and 1440.",
-  idleReleaseApplied: "Saved settings applied to the local Host.",
-  idleReleasePending: "Waiting for settings to be applied to the local Host…",
-  idleReleaseUnavailable:
-    "The current Host does not support this feature. Update codexhost to use it.",
-  idleReleaseFailed:
-    "Settings could not be saved or applied. The change is not confirmed; retry or reconnect to the local Host.",
+  appearanceDescription: "Conversation display and local resource management.",
+  appearanceGroup: "Appearance",
+  idleReleaseSection: "Resource management",
+  idleReleaseTitle: "Release idle sessions",
+  idleReleaseDescription:
+    "Close background instances after the idle timeout; they resume on next use.",
+  idleReleaseHelpLabel: "About releasing idle sessions",
+  idleReleaseHelp: Object.freeze([
+    "A session can be released even while you are viewing it.",
+    "Services (such as dev servers) and background tasks started by the session stop, and their results may be lost.",
+    "Opening the session or sending a message resumes it after the Agent restarts.",
+    "After shortening the timeout, already-idle sessions may be released soon.",
+    "Applies only to external Agent sessions on the local Host.",
+  ]),
+  idleReleaseTimeout: "Idle timeout",
+  idleReleaseTimeoutDescription: "10–1440 minutes.",
+  idleReleaseMinutes: "min",
+  idleReleaseInvalid: "Enter a whole number from 10 to 1440.",
+  idleReleasePending: "Syncing…",
+  idleReleaseUnavailable: "Not supported by this Host",
+  idleReleaseFailed: "Sync failed, try again",
   reasoningSoftWrapTitle: "Wrap thinking text",
-  reasoningSoftWrapDescription:
-    "Wrap long thinking lines in the transcript. Ordinary shell output is unaffected. Off by default.",
+  reasoningSoftWrapDescription: "Wrap long lines in thinking blocks. Shell output is unaffected.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -425,21 +433,28 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   sectionsLabel: "设置分类",
   generalSection: "通用",
   otherSection: "其他",
-  appearanceDescription: "调整会话外观与本地 Host 的资源管理。",
-  idleReleaseSection: "资源管理 · 仅本地 Host",
-  idleReleaseTitle: "自动释放空闲会话资源",
-  idleReleaseTimeout: "空闲超时时间（分钟）",
-  idleReleaseRange:
-    "范围为 10～1440 分钟整数。缩短时长可能使已闲置会话在下一次检查时被释放（约每分钟检查一次）。",
-  idleReleaseWarning:
-    "开启后，外部 Agent 会话连续空闲 {minutes} 分钟将关闭后台运行实例，以释放资源。即使您仍停留在该会话页面，也可能被释放。该会话启动的服务（如开发服务器）和后台任务可能同时停止，后续结果可能丢失，且不保证自动恢复。再次打开或发送消息时会尝试恢复原会话，需要等待 Agent 重新启动。",
-  idleReleaseInvalid: "请输入 10～1440 之间的整数分钟。",
-  idleReleaseApplied: "已保存的设置已应用到本地 Host。",
-  idleReleasePending: "正在等待设置应用到本地 Host…",
-  idleReleaseUnavailable: "当前 Host 不支持此功能，请更新 codexhost。",
-  idleReleaseFailed: "设置保存或下发失败，尚未确认变更生效，请重试或重新连接本地 Host。",
+  appearanceDescription: "会话显示与本地资源管理。",
+  appearanceGroup: "外观",
+  idleReleaseSection: "资源管理",
+  idleReleaseTitle: "自动释放空闲会话",
+  idleReleaseDescription: "空闲超时后关闭后台实例，再次使用时自动恢复。",
+  idleReleaseHelpLabel: "自动释放空闲会话说明",
+  idleReleaseHelp: Object.freeze([
+    "即使正停留在该会话页面，也可能被释放。",
+    "会话启动的服务（如开发服务器）和后台任务会一并停止，结果可能丢失。",
+    "再次打开或发送消息时恢复原会话，需等待 Agent 重新启动。",
+    "缩短超时后，已空闲的会话可能很快被释放。",
+    "仅作用于本地 Host 上的外部 Agent 会话。",
+  ]),
+  idleReleaseTimeout: "空闲超时",
+  idleReleaseTimeoutDescription: "10～1440 分钟。",
+  idleReleaseMinutes: "分钟",
+  idleReleaseInvalid: "请输入 10～1440 之间的整数。",
+  idleReleasePending: "同步中…",
+  idleReleaseUnavailable: "当前 Host 不支持",
+  idleReleaseFailed: "同步失败，请重试",
   reasoningSoftWrapTitle: "换行显示思考文本",
-  reasoningSoftWrapDescription: "让思考块中的长行自动换行。普通 Shell 输出不受影响。默认关闭。",
+  reasoningSoftWrapDescription: "思考块中的长行自动换行，不影响 Shell 输出。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

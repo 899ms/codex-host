@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { build } from "esbuild";
 import path from "node:path";
 
+import { tailwindEsbuildPlugin } from "../../packages/renderer-extension/scripts/tailwind-esbuild-plugin.mjs";
+
 const browserExecutable = process.env.CODEXHOST_PLAYWRIGHT_EXECUTABLE_PATH;
 if (browserExecutable) test.use({ launchOptions: { executablePath: browserExecutable } });
 const { outputFiles } = await build({
@@ -38,6 +40,7 @@ const { outputFiles } = await build({
   platform: "browser",
   target: "es2024",
   loader: { ".css": "text", ".png": "dataurl", ".svg": "dataurl" },
+  plugins: [tailwindEsbuildPlugin()],
   write: false,
 });
 const bundle = outputFiles[0]?.text ?? "";
@@ -54,39 +57,57 @@ async function setup(page: Page, unsupported = false) {
   await page.evaluate((value) => Reflect.get(globalThis, "setupIdleRelease")(value), unsupported);
 }
 
-test("General retains appearance controls and validates, confirms and persists idle release", async ({
+test("General groups appearance and idle release controls without dialogs or long text", async ({
   page,
 }) => {
   await setup(page);
   await expect(page.getByRole("button", { name: "通用", exact: true })).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: "换行显示思考文本" })).toBeVisible();
-  const enabled = page.getByRole("checkbox", { name: "自动释放空闲会话资源" });
-  const minutes = page.getByRole("spinbutton", { name: "空闲超时时间（分钟）" });
+  await expect(page.getByRole("switch", { name: "换行显示思考文本" })).toBeVisible();
+  const enabled = page.getByRole("switch", { name: "自动释放空闲会话" });
+  const minutes = page.getByRole("spinbutton", { name: "空闲超时" });
   await expect(enabled).not.toBeChecked();
   await expect(minutes).toHaveValue("30");
+
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toBeHidden();
+  await page.getByRole("button", { name: "自动释放空闲会话说明" }).hover();
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText("一并停止");
+
   await minutes.fill("9");
   await minutes.press("Tab");
-  await expect(page.getByRole("status")).toContainText("10～1440");
+  await expect(minutes).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText("请输入 10～1440 之间的整数。")).toBeVisible();
   await minutes.fill("10");
-  await expect(minutes).toHaveValue("10");
   await minutes.press("Tab");
-  await expect(page.getByRole("status")).toContainText("已应用到本地 Host");
-  page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain("空闲 10 分钟");
-    expect(dialog.message()).toContain("可能同时停止");
-    await dialog.dismiss();
-  });
+  await expect(minutes).toHaveAttribute("aria-invalid", "false");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Reflect.get(globalThis, "idleFixture").calls.at(-1)?.params.timeoutMinutes,
+      ),
+    )
+    .toBe(10);
+  // Successful sync is silent; the scope badge is no longer shown.
+  await expect(page.getByText("同步中…")).toBeHidden();
+  await expect(page.getByText("仅本地 Host", { exact: true })).toHaveCount(0);
+
+  // Enabling applies immediately; Playwright would auto-dismiss any unexpected dialog.
   await enabled.click();
-  await expect(enabled).not.toBeChecked();
-  page.once("dialog", (dialog) => dialog.accept());
-  await enabled.check();
-  await expect(page.getByRole("status")).toContainText("已应用到本地 Host");
+  await expect(enabled).toBeChecked();
+  await expect
+    .poll(() =>
+      page.evaluate(() => Reflect.get(globalThis, "idleFixture").calls.at(-1)?.params.enabled),
+    )
+    .toBe(true);
+  await expect(page.getByText("同步中…")).toBeHidden();
   expect(
     await page.evaluate(() =>
       JSON.parse(localStorage.getItem("codexhost.idle-release.v1") ?? "null"),
     ),
   ).toEqual({ enabled: true, timeoutMinutes: 10 });
-  await enabled.uncheck();
+  await enabled.click();
+  await expect(enabled).not.toBeChecked();
   await expect(minutes).toHaveValue("10");
   await page.reload();
   await page.addScriptTag({ content: bundle });
@@ -102,10 +123,9 @@ test("another window's change updates both the UI and the Host without stale cac
   await setup(page);
   const other = await context.newPage();
   await setup(other);
-  const enabled = page.getByRole("checkbox", { name: "自动释放空闲会话资源" });
-  page.once("dialog", (dialog) => dialog.accept());
+  const enabled = page.getByRole("switch", { name: "自动释放空闲会话" });
   await enabled.check();
-  const otherEnabled = other.getByRole("checkbox", { name: "自动释放空闲会话资源" });
+  const otherEnabled = other.getByRole("switch", { name: "自动释放空闲会话" });
   await expect(otherEnabled).toBeChecked();
   await otherEnabled.uncheck();
   await expect(enabled).not.toBeChecked();
@@ -119,5 +139,5 @@ test("another window's change updates both the UI and the Host without stale cac
 
 test("unsupported Host is visible rather than reported as applied", async ({ page }) => {
   await setup(page, true);
-  await expect(page.getByRole("status")).toContainText("当前 Host 不支持此功能");
+  await expect(page.getByRole("status")).toContainText("当前 Host 不支持");
 });

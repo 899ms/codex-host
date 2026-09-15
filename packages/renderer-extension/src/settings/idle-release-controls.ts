@@ -1,4 +1,4 @@
-import { idleReleaseSettingsSchema } from "@codexhost/shared-contracts";
+import { idleReleaseSettingsSchema, type IdleReleaseSettings } from "@codexhost/shared-contracts";
 import {
   IDLE_RELEASE_CHANGE_EVENT,
   IDLE_RELEASE_STATUS_EVENT,
@@ -8,6 +8,13 @@ import {
   type IdleReleaseSyncStatus,
 } from "../renderer-idle-release-preference.js";
 import type { RendererSettingsMessages } from "./localization.js";
+import {
+  createNumberField,
+  createPreferenceGroup,
+  createPreferenceItem,
+  createPreferenceSwitch,
+  preferenceId,
+} from "./preference-ui.js";
 
 export function mountIdleReleaseControls(
   content: HTMLElement,
@@ -16,101 +23,103 @@ export function mountIdleReleaseControls(
   const document = content.ownerDocument;
   const owner = document.defaultView;
   if (!owner) return () => undefined;
-  const heading = document.createElement("div");
-  heading.className = "settings-section-label";
-  heading.textContent = messages.idleReleaseSection;
-  const toggleRow = document.createElement("label");
-  toggleRow.className = "settings-preference-row";
-  const copy = document.createElement("span");
-  copy.className = "settings-preference-row__copy";
-  const title = document.createElement("strong");
-  title.textContent = messages.idleReleaseTitle;
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.className = "settings-preference-checkbox";
-  checkbox.setAttribute("aria-label", messages.idleReleaseTitle);
-  copy.append(title);
-  toggleRow.append(copy, checkbox);
-  const timeoutRow = document.createElement("label");
-  timeoutRow.className = "settings-preference-row";
-  const timeoutTitle = document.createElement("span");
-  timeoutTitle.textContent = messages.idleReleaseTimeout;
-  const minutes = document.createElement("input");
-  minutes.type = "number";
-  minutes.className = "settings-preference-number";
-  minutes.min = "10";
-  minutes.max = "1440";
-  minutes.step = "1";
-  minutes.setAttribute("aria-label", messages.idleReleaseTimeout);
-  timeoutRow.append(timeoutTitle, minutes);
-  const help = document.createElement("p");
-  help.className = "settings-page-description";
-  help.textContent = messages.idleReleaseRange;
-  const warning = document.createElement("p");
-  warning.className = "settings-page-description";
-  const status = document.createElement("p");
-  status.className = "settings-page-description";
-  status.setAttribute("role", "status");
+  const { group, header, card } = createPreferenceGroup(document, messages.idleReleaseSection);
+
+  const status = document.createElement("div");
+  status.className =
+    "group/status ml-auto inline-flex items-center gap-1.5 text-xs leading-[18px] text-settings-muted data-[state=failed]:text-settings-danger data-[state=unavailable]:text-settings-warning";
+  const statusDot = document.createElement("span");
+  statusDot.setAttribute("aria-hidden", "true");
+  statusDot.className =
+    "size-1.5 shrink-0 rounded-full bg-settings-subtle group-data-[state=failed]/status:bg-settings-danger group-data-[state=unavailable]/status:bg-settings-warning";
+  const statusText = document.createElement("span");
+  statusText.setAttribute("role", "status");
+  status.append(statusDot, statusText);
+  header.append(status);
+
+  const enabledId = preferenceId("idle-release-enabled");
+  const toggle = createPreferenceItem(document, {
+    title: messages.idleReleaseTitle,
+    description: messages.idleReleaseDescription,
+    controlId: enabledId,
+    help: { label: messages.idleReleaseHelpLabel, lines: messages.idleReleaseHelp },
+  });
+  const enabled = createPreferenceSwitch(document, enabledId, toggle.description.id);
+  toggle.item.append(enabled);
+
+  const minutesId = preferenceId("idle-release-minutes");
+  const timeout = createPreferenceItem(document, {
+    title: messages.idleReleaseTimeout,
+    description: messages.idleReleaseTimeoutDescription,
+    controlId: minutesId,
+  });
+  const { field, control: minutes } = createNumberField(document, {
+    id: minutesId,
+    describedBy: timeout.description.id,
+    unit: messages.idleReleaseMinutes,
+    min: 10,
+    max: 1440,
+  });
+  timeout.item.append(field);
+  card.append(toggle.item, timeout.item);
+  content.append(group);
+
+  const statusMessages: Record<Exclude<IdleReleaseSyncStatus, "applied">, string> = {
+    pending: messages.idleReleasePending,
+    unavailable: messages.idleReleaseUnavailable,
+    failed: messages.idleReleaseFailed,
+  };
   const showStatus = (value: IdleReleaseSyncStatus): void => {
-    status.textContent =
-      value === "applied"
-        ? messages.idleReleaseApplied
-        : value === "unavailable"
-          ? messages.idleReleaseUnavailable
-          : value === "failed"
-            ? messages.idleReleaseFailed
-            : messages.idleReleasePending;
+    status.dataset.state = value;
+    // An applied setting needs no message; only pending, unsupported or failed sync is shown.
+    status.hidden = value === "applied";
+    statusText.textContent = value === "applied" ? "" : statusMessages[value];
+  };
+  const setInvalid = (invalid: boolean): void => {
+    field.dataset.invalid = String(invalid);
+    timeout.description.dataset.invalid = String(invalid);
+    timeout.description.textContent = invalid
+      ? messages.idleReleaseInvalid
+      : messages.idleReleaseTimeoutDescription;
+    minutes.setAttribute("aria-invalid", String(invalid));
+    minutes.setCustomValidity(invalid ? messages.idleReleaseInvalid : "");
   };
   const sync = (): void => {
     const settings = readIdleReleasePreference(owner);
-    checkbox.checked = settings.enabled;
-    minutes.value = String(settings.timeoutMinutes);
-    warning.textContent = messages.idleReleaseWarning.replace("{minutes}", minutes.value);
+    enabled.checked = settings.enabled;
+    // Keep an invalid draft visible until the user corrects it.
+    if (minutes.getAttribute("aria-invalid") !== "true") {
+      minutes.value = String(settings.timeoutMinutes);
+    }
   };
-  const save = (): void => {
+  const save = (settings: IdleReleaseSettings): void => {
+    if (writeIdleReleasePreference(owner, settings)) return;
+    sync();
+    showStatus("failed");
+  };
+
+  enabled.addEventListener("change", () => {
+    save({ ...readIdleReleasePreference(owner), enabled: enabled.checked });
+  });
+  minutes.addEventListener("change", () => {
     const parsed = idleReleaseSettingsSchema.safeParse({
-      enabled: checkbox.checked,
+      enabled: readIdleReleasePreference(owner).enabled,
       timeoutMinutes: minutes.valueAsNumber,
     });
-    minutes.setCustomValidity(parsed.success ? "" : messages.idleReleaseInvalid);
-    minutes.setAttribute("aria-invalid", String(!parsed.success));
-    if (!parsed.success) {
-      status.textContent = messages.idleReleaseInvalid;
-      checkbox.checked = readIdleReleasePreference(owner).enabled;
-      return;
-    }
-    const notice = messages.idleReleaseWarning.replace(
-      "{minutes}",
-      String(parsed.data.timeoutMinutes),
-    );
-    if (
-      parsed.data.enabled &&
-      !readIdleReleasePreference(owner).enabled &&
-      !owner.confirm(notice)
-    ) {
-      sync();
-      return;
-    }
-    if (!writeIdleReleasePreference(owner, parsed.data)) {
-      sync();
-      showStatus("failed");
-    }
-  };
+    setInvalid(!parsed.success);
+    if (parsed.success) save(parsed.data);
+  });
+  minutes.addEventListener("input", () => {
+    if (minutes.getAttribute("aria-invalid") === "true") setInvalid(false);
+  });
   const storage = (event: StorageEvent): void => {
     if (event.key === IDLE_RELEASE_STORAGE_KEY || event.key === null) sync();
   };
   const onStatus = (event: Event): void =>
     showStatus((event as CustomEvent<IdleReleaseSyncStatus>).detail);
-  checkbox.addEventListener("change", save);
-  minutes.addEventListener("change", save);
-  minutes.addEventListener("input", () => {
-    minutes.setCustomValidity("");
-    minutes.removeAttribute("aria-invalid");
-  });
   owner.addEventListener(IDLE_RELEASE_CHANGE_EVENT, sync);
   owner.addEventListener(IDLE_RELEASE_STATUS_EVENT, onStatus);
   owner.addEventListener("storage", storage);
-  content.append(heading, toggleRow, timeoutRow, help, warning, status);
   sync();
   showStatus("pending");
   // Ask the installed connection synchronizer to report whether the saved setting was applied.
