@@ -22,11 +22,14 @@
   <a href="https://openai.com/codex/"><img alt="Codex" src="docs/imgs/badge-codex.svg" /></a>
   <a href="https://code.claude.com/docs/en/quickstart"><img alt="Claude Code" src="https://img.shields.io/badge/Claude_Code-D97757?logo=claudecode&logoColor=white" /></a>
   <a href="https://opencode.ai/docs/"><img alt="OpenCode" src="docs/imgs/badge-opencode.svg" /></a>
-  <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-4D6BFE?logo=deepseek&logoColor=white" /></a>
   <a href="https://grok.com/"><img alt="Grok" src="https://img.shields.io/badge/Grok-000000?logo=x&logoColor=white" /></a>
-  <a href="https://github.com/can1357/oh-my-pi"><img alt="Oh My Pi" src="docs/imgs/badge-omp-v5.svg" /></a>
+  <a href="https://github.com/can1357/oh-my-pi"><img alt="Oh My Pi" src="docs/imgs/badge-omp-v5.svg" /></a><br />
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek_Harness-4D6BFE?logo=deepseek&logoColor=white" /></a>
   <a href="https://antigravity.google/product/antigravity-cli"><img alt="AGY" src="docs/imgs/badge-agy.svg" /></a>
   <a href="https://kiro.dev/docs/cli/"><img alt="Kiro CLI" src="docs/imgs/badge-kiro.svg" /></a>
+  <a href="https://www.codebuddy.cn/home/"><img alt="CodeBuddy" src="docs/imgs/badge-codebuddy.svg" /></a>
+  <a href="https://cursor.com/docs/cli/overview"><img alt="Cursor" src="docs/imgs/badge-cursor.svg" /></a>
+  <a href="https://hermes-agent.nousresearch.com/docs"><img alt="Hermes" src="docs/imgs/badge-hermes.svg" /></a>
 </p>
 
 <p align="center">
@@ -60,21 +63,13 @@ https://github.com/user-attachments/assets/c48192d7-23ff-4f6e-b61a-6345a655bb76
 
 ## 快速使用
 
-**使用 npm**
+**下载安装包**（macOS、Windows）
 
-> 支持 macOS、Windows 和 [x64/ARM64 Linux](docs/linux.zh-CN.md)。
-
-```bash
-npm install -g @codexhost/cli
-codexhost
-```
-
-**或下载** [安装包](https://github.com/BytePioneer-AI/codex-host/releases)（macOS、Windows）
+前往 [最新版本](https://github.com/BytePioneer-AI/codex-host/releases/latest) 下载与系统和 CPU 架构匹配的安装包：macOS 选择 DMG，Windows 选择 EXE。
 
 <details>
 <summary>安装问题排查</summary>
-
-**macOS** - Apple 验证问题
+**macOS**
 
 首次打开时如提示应用无法验证，请执行：
 
@@ -106,26 +101,6 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
     </td>
   </tr>
   <tr>
-    <td width="50%" valign="top">
-      <p><strong>Agent、账号与 Model 选择</strong></p>
-      <div align="center">
-        <img width="70%" src="docs/imgs/harness-account-selector.png" alt="在输入框中选择 Codex 账号，或切换到 Pi、Claude Code、DeepSeek Harness、OpenCode、Grok、Oh My Pi 和 Antigravity CLI">
-      </div>
-    </td>
-    <td width="50%" valign="top">
-      <p><strong>Usage 与费用信息</strong></p>
-      <img src="docs/imgs/usage-panel.png" alt="Usage 面板展示上下文、缓存命中与费用估算">
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" valign="top">
-      <p><strong>多账号与额度管理</strong></p>
-      <div align="center">
-        <img width="90%" src="docs/imgs/account-management.png" alt="统一管理多个 Codex 账号，并查看 Codex、Claude Code 和 Grok 账号的剩余额度与重置时间">
-      </div>
-    </td>
-  </tr>
-  <tr>
     <td colspan="2" valign="top">
       <img src="docs/imgs/grok-usage-limits.png" alt="五小时与七天窗口的剩余额度和重置时间">
       <p>macOS 会在原生 ChatGPT 菜单栏图标内追加剩余额度百分比，Windows 则使用任务栏覆盖图标；优先使用 5 小时窗口，没有时回退到 7 天窗口。</p>
@@ -143,23 +118,21 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 
 ## 功能状态
 
-| 能力 | <a href="https://openai.com/codex/"><img alt="Codex" src="docs/imgs/badge-codex.svg" /></a> | <a href="https://pi.dev/"><img alt="Pi" src="https://img.shields.io/badge/Pi-000000?logo=pi&logoColor=white" /></a> | <a href="https://github.com/can1357/oh-my-pi"><img alt="Oh My Pi" src="docs/imgs/badge-omp-v5.svg" /></a> | <a href="https://code.claude.com/docs/en/quickstart"><img alt="Claude Code" src="https://img.shields.io/badge/Claude_Code-D97757?logo=claudecode&logoColor=white" /></a> | <a href="https://opencode.ai/docs/"><img alt="OpenCode" src="docs/imgs/badge-opencode.svg" /></a> | <a href="https://grok.com/"><img alt="Grok" src="https://img.shields.io/badge/Grok-000000?logo=x&logoColor=white" /></a> | <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-4D6BFE?logo=deepseek&logoColor=white" /></a> | <a href="https://antigravity.google/product/antigravity-cli"><img alt="AGY" src="docs/imgs/badge-agy.svg" /></a> |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 流式回复 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 工具状态 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Edit Diff | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 提问 / 取消 | 原生 | ✅ | — / ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Model / Thinking 选择 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 工具审批 | 原生 | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅¹ |
-| 权限模式 | 原生 | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Agent 间任务协作 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Usage | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Fork | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 上下文压缩 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| 斜杠命令 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 修订上一条消息 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-> **Antigravity：**¹ 工具审批需选择 **Desktop approvals**，支持允许一次或拒绝；该模式使用进程级自动执行配合审批 Hook，启动前校验 Hook 已加载，现有权限模式保持不变。提问支持单选和文本，子代理支持原生卡片与只读过程记录。详见[工具审批](docs/antigravity-tool-approval.md)和[子代理说明](docs/antigravity-subagents.md)。
+| 能力 | <a href="https://openai.com/codex/"><img alt="Codex" src="docs/imgs/harness-icon-codex.svg" /></a> | <a href="https://pi.dev/"><img alt="Pi" src="https://img.shields.io/badge/-000000?logo=pi&logoColor=white" /></a> | <a href="https://github.com/can1357/oh-my-pi"><img alt="Oh My Pi" src="docs/imgs/harness-icon-omp-v5.svg" /></a> | <a href="https://code.claude.com/docs/en/quickstart"><img alt="Claude Code" src="https://img.shields.io/badge/-D97757?logo=claudecode&logoColor=white" /></a> | <a href="https://opencode.ai/docs/"><img alt="OpenCode" src="docs/imgs/harness-icon-opencode.svg" /></a> | <a href="https://grok.com/"><img alt="Grok" src="https://img.shields.io/badge/-000000?logo=x&logoColor=white" /></a> | <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/-4D6BFE?logo=deepseek&logoColor=white" /></a> | <a href="https://antigravity.google/product/antigravity-cli"><img alt="AGY" src="docs/imgs/harness-icon-agy.svg" /></a> | <a href="https://www.codebuddy.cn/home/"><img alt="CodeBuddy" src="docs/imgs/harness-icon-codebuddy.svg" /></a> | <a href="https://cursor.com/docs/cli/overview"><img alt="Cursor" src="docs/imgs/harness-icon-cursor.svg" /></a> | <a href="https://hermes-agent.nousresearch.com/docs"><img alt="Hermes" src="docs/imgs/harness-icon-hermes.svg" /></a> |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 流式回复 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 工具状态 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Edit Diff | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| 提问 / 取消 | 原生 | ✅ | — / ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — / ✅ |
+| Model / Thinking 选择 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / — | ✅ / — |
+| 工具审批 | 原生 | ✅ | — | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
+| 权限模式 | 原生 | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Agent 间任务协作 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ |
+| Usage | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| Fork | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
+| 上下文压缩 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | — |
+| 斜杠命令 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
+| 修订上一条消息 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
 
 ## 跨 Agent 协作
 
@@ -248,12 +221,14 @@ CodexHost 尽量不走这条路：
       <sub><strong>欢迎一起贡献~ </strong></sub>
     </td>
     <td align="center">
-      <img width="230" alt="7ba6eda891ba4c8d091f2a71a8b8e81d" src="https://github.com/user-attachments/assets/6bdddc62-596a-477a-9953-936d4752667c" />
+      <img width="230" alt="7ba6eda891ba4c8d091f2a71a8b8e81d" src="https://github.com/user-attachments/assets/0e3c7269-c0c5-4f62-984a-f78b59166d6d" />
     </td>
   </tr>
 </table>
 
 ## 开发
+
+提交 Issue 或 PR 前可阅读[贡献说明](CONTRIBUTING.md)；PR 标题标签、简短 CI 结果和发布前校验见[仓库维护自动化](docs/repository-maintenance.md)。
 
 环境要求：官方 Codex Desktop、Node.js 22.19+ 或 24、Rust。
 

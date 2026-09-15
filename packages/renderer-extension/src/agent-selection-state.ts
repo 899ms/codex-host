@@ -14,6 +14,9 @@ export const KNOWN_RENDERER_AGENTS = [
   "omp",
   "antigravity",
   "kiro-cli",
+  "codebuddy",
+  "cursor-cli",
+  "hermes",
 ] as const;
 export const DEFAULT_RENDERER_AGENTS = KNOWN_RENDERER_AGENTS;
 export type RendererAgent = (typeof KNOWN_RENDERER_AGENTS)[number];
@@ -26,7 +29,6 @@ export interface DraftComposerState {
   agent: RendererAgent;
   phase: ComposerAgentPhase;
   composerId: string;
-  codexAccountId?: string;
   piModel?: HarnessModelRef;
   piThinkingOptionId?: HarnessThinkingOptionId;
   claudeModel?: HarnessModelRef;
@@ -42,6 +44,10 @@ export interface DraftComposerState {
   antigravityThinkingOptionId?: HarnessThinkingOptionId;
   kiroCliModel?: HarnessModelRef;
   kiroCliThinkingOptionId?: HarnessThinkingOptionId;
+  codeBuddyModel?: HarnessModelRef;
+  codeBuddyThinkingOptionId?: HarnessThinkingOptionId;
+  cursorCliModel?: HarnessModelRef;
+  hermesModel?: HarnessModelRef;
   permissionModeByAgent?: Partial<Record<ExternalRendererAgent, HarnessPermissionModeId>>;
 }
 
@@ -193,23 +199,34 @@ export class DraftAgentController<Composer extends object> {
     model?: HarnessModelRef,
     thinkingOptionId?: HarnessThinkingOptionId,
     permissionModeId?: HarnessPermissionModeId,
-    codexAccountId?: string,
   ): Readonly<DraftComposerState> | null {
     if (!this.#enabledAgents.has(agent)) return null;
     const state = this.#state(composer);
     this.#pendingSubmissions.delete(state);
     state.agent = agent;
     state.phase = "locked";
-    if (agent === "codex" && codexAccountId) state.codexAccountId = codexAccountId;
-    else delete state.codexAccountId;
     if (agent === "pi" && model) state.piModel = model;
+    else if (agent === "pi") delete state.piModel;
     if (agent === "claude-code" && model) state.claudeModel = model;
+    else if (agent === "claude-code") delete state.claudeModel;
     if (agent === "deepseek-harness" && model) state.deepSeekHarnessModel = model;
+    else if (agent === "deepseek-harness") delete state.deepSeekHarnessModel;
     if (agent === "opencode" && model) state.openCodeModel = model;
+    else if (agent === "opencode") delete state.openCodeModel;
     if (agent === "grok" && model) state.grokModel = model;
+    else if (agent === "grok") delete state.grokModel;
     if (agent === "omp" && model) state.ompModel = model;
+    else if (agent === "omp") delete state.ompModel;
     if (agent === "antigravity" && model) state.antigravityModel = model;
+    else if (agent === "antigravity") delete state.antigravityModel;
     if (agent === "kiro-cli" && model) state.kiroCliModel = model;
+    else if (agent === "kiro-cli") delete state.kiroCliModel;
+    if (agent === "codebuddy" && model) state.codeBuddyModel = model;
+    else if (agent === "codebuddy") delete state.codeBuddyModel;
+    if (agent === "cursor-cli" && model) state.cursorCliModel = model;
+    else if (agent === "cursor-cli") delete state.cursorCliModel;
+    if (agent === "hermes" && model) state.hermesModel = model;
+    else if (agent === "hermes") delete state.hermesModel;
     if (agent === "pi" && thinkingOptionId) state.piThinkingOptionId = thinkingOptionId;
     else if (agent === "pi") delete state.piThinkingOptionId;
     if (agent === "claude-code" && thinkingOptionId) {
@@ -228,6 +245,9 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "kiro-cli" && thinkingOptionId) {
       state.kiroCliThinkingOptionId = thinkingOptionId;
     } else if (agent === "kiro-cli") delete state.kiroCliThinkingOptionId;
+    if (agent === "codebuddy" && thinkingOptionId) {
+      state.codeBuddyThinkingOptionId = thinkingOptionId;
+    } else if (agent === "codebuddy") delete state.codeBuddyThinkingOptionId;
     if (agent !== "codex") {
       const permissionModeByAgent: NonNullable<DraftComposerState["permissionModeByAgent"]> = {};
       for (const candidate of [
@@ -239,6 +259,9 @@ export class DraftAgentController<Composer extends object> {
         "omp",
         "antigravity",
         "kiro-cli",
+        "codebuddy",
+        "cursor-cli",
+        "hermes",
       ] as const) {
         const current = state.permissionModeByAgent?.[candidate];
         if (candidate !== agent && current) permissionModeByAgent[candidate] = current;
@@ -263,6 +286,9 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "omp") return state.ompModel;
     if (agent === "antigravity") return state.antigravityModel;
     if (agent === "kiro-cli") return state.kiroCliModel;
+    if (agent === "codebuddy") return state.codeBuddyModel;
+    if (agent === "cursor-cli") return state.cursorCliModel;
+    if (agent === "hermes") return state.hermesModel;
     return undefined;
   }
 
@@ -278,6 +304,7 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "omp") return state.ompThinkingOptionId;
     if (agent === "antigravity") return state.antigravityThinkingOptionId;
     if (agent === "kiro-cli") return state.kiroCliThinkingOptionId;
+    if (agent === "codebuddy") return state.codeBuddyThinkingOptionId;
     return undefined;
   }
 
@@ -315,6 +342,10 @@ export class DraftAgentController<Composer extends object> {
     else if (agent === "omp") state.ompModel = model;
     else if (agent === "antigravity") state.antigravityModel = model;
     else if (agent === "kiro-cli") state.kiroCliModel = model;
+    else if (agent === "codebuddy") state.codeBuddyModel = model;
+    else if (agent === "cursor-cli") state.cursorCliModel = model;
+    else if (agent === "hermes") state.hermesModel = model;
+    else state.antigravityModel = model;
     return state;
   }
 
@@ -366,6 +397,10 @@ export class DraftAgentController<Composer extends object> {
       state.kiroCliThinkingOptionId = thinkingOptionId;
     } else if (agent === "kiro-cli") {
       delete state.kiroCliThinkingOptionId;
+    } else if (agent === "codebuddy" && thinkingOptionId) {
+      state.codeBuddyThinkingOptionId = thinkingOptionId;
+    } else if (agent === "codebuddy") {
+      delete state.codeBuddyThinkingOptionId;
     }
     return state;
   }
@@ -397,19 +432,10 @@ export class DraftAgentController<Composer extends object> {
   clearPendingSubmission(composer: Composer): void {
     const state = this.#state(composer);
     this.#pendingSubmissions.delete(state);
-    if (state.phase === "draft") delete state.codexAccountId;
   }
 
-  recordSubmission(composer: Composer, codexAccountId?: string): Readonly<DraftComposerState> {
+  recordSubmission(composer: Composer): Readonly<DraftComposerState> {
     const state = this.#state(composer);
-    if (
-      state.agent === "codex" &&
-      state.phase === "draft" &&
-      !state.codexAccountId &&
-      codexAccountId
-    ) {
-      state.codexAccountId = codexAccountId;
-    }
     this.#lastSubmittedAgent = state.agent;
     return state;
   }

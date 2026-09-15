@@ -1,4 +1,5 @@
 import {
+  decodeHarnessPluginRoute,
   harnessModelRefSchema,
   harnessPermissionModeIdSchema,
   harnessThinkingOptionIdSchema,
@@ -33,6 +34,7 @@ import {
   modelSelectionForAgent,
   deepSeekHarnessTransportModelId,
   grokTransportModelId,
+  hermesTransportModelId,
   openCodeTransportModelId,
   piTransportModelId,
   threadIdFromComposerModelTarget,
@@ -119,6 +121,135 @@ describe("current Codex Renderer Agent adapter", () => {
     expect(findActivePrewarmTargets(root)[0]?.addNotificationCallback).toBe(
       addNotificationCallback,
     );
+  });
+
+  it("unwraps a Desktop 26.908 host/manager/status hook wrapper to the outer manager", () => {
+    const editor = {
+      parentElement: null,
+      querySelectorAll: () => [],
+    } as unknown as Element;
+    const root = { querySelector: () => editor } as unknown as ParentNode;
+    const addNotificationCallback = vi.fn(() => () => undefined);
+    const requestClient = {
+      hostId: "local",
+      sendRequest: vi.fn<(method: string, params: unknown) => void>(),
+      prewarmThreadStart: () => undefined,
+      enqueueRequest: () => undefined,
+    };
+    const manager = {
+      requestClient,
+      sendRequest: async (method: string, params: unknown) =>
+        requestClient.sendRequest(method, params),
+      addNotificationCallback,
+    };
+    const wrapper = { hostId: "local", manager, status: "ready" };
+    Object.defineProperty(editor, "__reactFiber$test", {
+      configurable: true,
+      value: {
+        memoizedState: {
+          memoizedState: wrapper,
+          next: { memoizedState: wrapper, next: null },
+        },
+        return: null,
+      },
+    });
+
+    expect(findActivePrewarmTargets(root)).toEqual([manager]);
+    expect(findActivePrewarmTargets(root)[0]?.addNotificationCallback).toBe(
+      addNotificationCallback,
+    );
+  });
+
+  it("routes account requests through the committed manager when the DOM retains the retired Fiber", async () => {
+    const retired = {
+      hostId: "local",
+      sendRequest: vi.fn(),
+      prewarmThreadStart: vi.fn(),
+      enqueueRequest: vi.fn(),
+    };
+    const active = {
+      ...retired,
+      sendRequest: vi.fn().mockRejectedValue(new Error("Codex is busy")),
+    };
+    const rootState: { current?: object } = {};
+    const oldRoot = { stateNode: rootState };
+    const newRoot: { stateNode: typeof rootState; child?: object } = { stateNode: rootState };
+    const current = { memoizedState: { memoizedState: active, next: null }, return: newRoot };
+    const previous = {
+      memoizedState: { memoizedState: retired, next: null },
+      return: oldRoot,
+      alternate: current,
+    };
+    newRoot.child = current;
+    rootState.current = newRoot;
+    const editor = { parentElement: null, querySelectorAll: () => [] } as unknown as Element;
+    Object.defineProperty(editor, "__reactFiber$test", { value: previous });
+    const targets = findActivePrewarmTargets({
+      querySelector: () => editor,
+    } as unknown as ParentNode);
+    expect(targets).toEqual([active]);
+    await expect(targets[0]?.sendRequest?.("codexhost/account/switch", {})).rejects.toThrow(
+      "Codex is busy",
+    );
+    expect(retired.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("finds a nearby request manager without requiring the root within 200 ancestors", async () => {
+    const active = {
+      hostId: "local",
+      sendRequest: vi.fn().mockRejectedValue(new Error("Codex is busy")),
+      prewarmThreadStart: vi.fn(),
+      enqueueRequest: vi.fn(),
+    };
+    const first: Record<string, unknown> = { memoizedState: { memoizedState: active, next: null } };
+    let node = first;
+    for (let depth = 1; depth < 209; depth += 1) {
+      const parent: Record<string, unknown> = { child: node };
+      node.return = parent;
+      node = parent;
+    }
+    node.stateNode = { current: node };
+    const editor = { parentElement: null, querySelectorAll: () => [] } as unknown as Element;
+    Object.defineProperty(editor, "__reactFiber$test", { value: first });
+    const targets = findActivePrewarmTargets({
+      querySelector: () => editor,
+    } as unknown as ParentNode);
+    expect(targets).toEqual([active]);
+    await expect(targets[0]?.sendRequest?.("codexhost/account/switch", {})).rejects.toThrow(
+      "Codex is busy",
+    );
+    expect(active.sendRequest).toHaveBeenCalledOnce();
+  });
+
+  it("ignores Host manager registries and unrelated nested manager fields", () => {
+    const editor = {
+      parentElement: null,
+      querySelectorAll: () => [],
+    } as unknown as Element;
+    const root = { querySelector: () => editor } as unknown as ParentNode;
+    Object.defineProperty(editor, "__reactFiber$test", {
+      configurable: true,
+      value: {
+        memoizedState: {
+          memoizedState: {
+            addManager: () => undefined,
+            getForHostId: () => undefined,
+            scope: {},
+          },
+          next: {
+            memoizedState: {
+              hostId: "local",
+              manager: { getHostId: () => "local" },
+              status: "ready",
+            },
+            next: null,
+          },
+        },
+        return: null,
+      },
+    });
+
+    expect(findActivePrewarmTargets(root)).toEqual([]);
   });
 
   it("keeps local and remote request targets independently addressable", () => {
@@ -315,6 +446,35 @@ describe("current Codex Renderer Agent adapter", () => {
     });
 
     expect(findComposerModelTarget(composer)).toEqual(["default", "client-new-thread:opaque"]);
+  });
+
+  it("finds the Desktop 26.908 duplicated client-new-thread memo identity", () => {
+    const nineteenSlot = Array.from({ length: 19 }, () => ({}));
+    nineteenSlot[2] = "client-new-thread:opaque-19";
+    nineteenSlot[7] = "client-new-thread:opaque-19";
+    const thirteenSlot = Array.from({ length: 13 }, () => ({}));
+    thirteenSlot[3] = "client-new-thread:opaque-13";
+    thirteenSlot[5] = "client-new-thread:opaque-13";
+    thirteenSlot[6] = "client-new-thread:opaque-13";
+    const unduplicated = Array.from({ length: 19 }, () => ({}));
+    unduplicated[2] = "client-new-thread:once";
+
+    const nineteen = composerWithFiber({
+      updateQueue: { memoCache: { data: [nineteenSlot] } },
+      return: null,
+    });
+    const thirteen = composerWithFiber({
+      updateQueue: { memoCache: { data: [thirteenSlot] } },
+      return: null,
+    });
+    const missing = composerWithFiber({
+      updateQueue: { memoCache: { data: [unduplicated] } },
+      return: null,
+    });
+
+    expect(findComposerModelTarget(nineteen)).toEqual(["default", "client-new-thread:opaque-19"]);
+    expect(findComposerModelTarget(thirteen)).toEqual(["default", "client-new-thread:opaque-13"]);
+    expect(findComposerModelTarget(missing)).toBeNull();
   });
 
   it("uses the current Composer conversation identity", () => {
@@ -636,6 +796,21 @@ describe("current Codex Renderer Agent adapter", () => {
     expect(
       modelSelectionForAgent(null, null, "opencode", model, thinkingOptionId, permissionModeId)
         ?.model,
+    ).toBe(carrier);
+  });
+
+  it("encodes Hermes Model and Permission Mode through the shared plugin route", () => {
+    const model = harnessModelRefSchema.parse({ id: "hermes-model-v1.emFpOmdsbS01LXR1cmJv" });
+    const permissionModeId = harnessPermissionModeIdSchema.parse("accept_edits");
+    const carrier = hermesTransportModelId(model, permissionModeId);
+
+    expect(decodeHarnessPluginRoute(carrier)).toEqual({
+      harnessId: "hermes",
+      model,
+      permissionModeId,
+    });
+    expect(
+      modelSelectionForAgent(null, null, "hermes", model, undefined, permissionModeId)?.model,
     ).toBe(carrier);
   });
 

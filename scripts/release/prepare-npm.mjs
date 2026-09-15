@@ -50,6 +50,12 @@ export function npmPlatformPackageName(target) {
 
 const runtimeLicenses = [
   {
+    packageName: "@agentclientprotocol/sdk",
+    license: "Apache-2.0",
+    source: "LICENSE",
+    output: "Agent-Client-Protocol-SDK-LICENSE.txt",
+  },
+  {
     packageName: "@anthropic-ai/claude-agent-sdk",
     license: "SEE LICENSE IN README.md",
     source: "LICENSE.md",
@@ -205,9 +211,11 @@ export function expectedNpmPackagePaths(target) {
     "app/renderer-extension.js",
     ...preinstalledHarnessPluginPaths(),
     "licenses/Anthropic-SDK-LICENSE.txt",
+    "licenses/Agent-Client-Protocol-SDK-LICENSE.txt",
     "licenses/Claude-Agent-SDK-LICENSE.md",
     "licenses/MCP-SDK-LICENSE.txt",
     "licenses/OpenCode-SDK-LICENSE.txt",
+    "licenses/opencodex-LICENSE.txt",
     "licenses/diff-LICENSE.txt",
     "licenses/lucide-LICENSE.txt",
     "licenses/ws-LICENSE.txt",
@@ -769,6 +777,17 @@ export async function writeThirdPartyNotices(root, packageRoot) {
       "",
     );
   }
+  await copyReleaseFile(
+    path.join(root, "third-party", "opencodex.LICENSE"),
+    path.join(licensesDirectory, "opencodex-LICENSE.txt"),
+    "opencodex native profile license",
+  );
+  notices.push(
+    "opencodex native profiles (2d4d7a22381a2e497c2442902104619e25f937c7)",
+    "License: MIT",
+    "License text: licenses/opencodex-LICENSE.txt",
+    "",
+  );
   await writeFile(
     path.join(packageRoot, "THIRD_PARTY_NOTICES.txt"),
     `${notices.join("\n").trimEnd()}\n`,

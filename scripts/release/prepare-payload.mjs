@@ -14,6 +14,12 @@ import { parseReleaseArguments, releaseUsage } from "./targets.mjs";
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const runtimeLicenses = [
   {
+    packageName: "@agentclientprotocol/sdk",
+    license: "Apache-2.0",
+    source: "LICENSE",
+    output: "Agent-Client-Protocol-SDK-LICENSE.txt",
+  },
+  {
     packageName: "@anthropic-ai/claude-agent-sdk",
     license: "SEE LICENSE IN README.md",
     source: "LICENSE.md",
@@ -201,6 +207,17 @@ export async function writeThirdPartyNotices(root, payloadRoot) {
     "License text: licenses/create-dmg-background-LICENSE.txt",
     "",
   );
+  await copyReleaseFile(
+    path.join(root, "third-party", "opencodex.LICENSE"),
+    path.join(licensesDirectory, "opencodex-LICENSE.txt"),
+    "opencodex native profile license",
+  );
+  notices.push(
+    "opencodex native profiles (2d4d7a22381a2e497c2442902104619e25f937c7)",
+    "License: MIT",
+    "License text: licenses/opencodex-LICENSE.txt",
+    "",
+  );
   await writeFile(
     path.join(payloadRoot, "THIRD_PARTY_NOTICES.txt"),
     `${notices.join("\n").trimEnd()}\n`,
@@ -221,11 +238,13 @@ export function expectedPayloadPaths(target) {
     "app/renderer-extension.js",
     ...preinstalledHarnessPluginPaths(),
     "licenses/Node.js-LICENSE.txt",
+    "licenses/Agent-Client-Protocol-SDK-LICENSE.txt",
     "licenses/Anthropic-SDK-LICENSE.txt",
     "licenses/Claude-Agent-SDK-LICENSE.md",
     "licenses/create-dmg-background-LICENSE.txt",
     "licenses/MCP-SDK-LICENSE.txt",
     "licenses/OpenCode-SDK-LICENSE.txt",
+    "licenses/opencodex-LICENSE.txt",
     "licenses/diff-LICENSE.txt",
     "licenses/lucide-LICENSE.txt",
     "licenses/ws-LICENSE.txt",

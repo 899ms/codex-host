@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AccountCreditsSnapshot } from "@codexhost/shared-contracts";
 
 vi.mock("../../src/settings/icons.js", () => ({
   createRendererSettingsIcon: () => "icon",
@@ -6,14 +7,16 @@ vi.mock("../../src/settings/icons.js", () => ({
 
 import {
   renderAccountResetCredits,
-  renderAccountUsage,
+  renderAccountUsage as renderUsage,
   resetCreditDetailLine,
+  type AccountUsageViewState,
 } from "../../src/settings/accounts-usage.js";
 import { rendererSettingsMessages } from "../../src/settings/localization.js";
 
 class FakeElement {
   readonly children: unknown[] = [];
   readonly attributes = new Map<string, string>();
+  readonly dataset: Record<string, string> = {};
   readonly style: Record<string, string> = {};
   readonly listeners = new Map<string, () => void>();
   className = "";
@@ -57,10 +60,24 @@ const credits = {
   resetsAt: "2026-09-10T03:12:00.000Z",
 };
 
-function usage(snapshot = credits, display: "used" | "remaining" = "used") {
+function renderAccountUsage(
+  document: Document,
+  state: AccountUsageViewState | undefined,
+  messages: ReturnType<typeof rendererSettingsMessages>,
+  display: "used" | "remaining",
+  onRetry: () => void,
+): HTMLElement {
+  const result = renderUsage(document, state, messages, display, onRetry);
+  const root = document.createElement("div");
+  root.append(...result.cells);
+  if (result.additional) root.append(result.additional);
+  return root;
+}
+
+function usage(snapshot: AccountCreditsSnapshot = credits, display: "used" | "remaining" = "used") {
   const result = renderAccountUsage(
     document,
-    { status: "ready", credits: snapshot },
+    { status: "ready", credits: snapshot, freshness: "live", observedAt: null },
     messages,
     display,
     vi.fn(),
@@ -73,15 +90,23 @@ describe("Account limit windows", () => {
   it("does not synthesize a 5h window for weekly-only accounts", () => {
     const result = renderAccountUsage(
       document,
-      { status: "ready", credits: { usedPercent: 9, periodType: "seven_day" } },
+      {
+        status: "ready",
+        credits: { usedPercent: 9, periodType: "seven_day" },
+        freshness: "live",
+        observedAt: null,
+      },
       messages,
       "used",
       vi.fn(),
     );
     if (!result) throw new Error("Expected limits");
     expect(text(result)).toContain("7 天");
-    expect(text(result)).not.toContain("5 小时");
-    expect(text(result)).not.toContain("未返回");
+    expect(text(result)).toContain("—");
+    expect(text(result)).not.toContain("未提供此窗口");
+    expect(
+      elements(result).filter((el) => el.className === "settings-account-usage__missing"),
+    ).toHaveLength(1);
     expect(elements(result).filter((el) => el.attributes.get("role") === "meter")).toHaveLength(1);
   });
 
@@ -90,6 +115,8 @@ describe("Account limit windows", () => {
       document,
       {
         status: "ready",
+        freshness: "live",
+        observedAt: null,
         credits: {
           ...credits,
           productUsage: [
@@ -115,9 +142,9 @@ describe("Account limit windows", () => {
     ).toHaveLength(1);
   });
 
-  it("places the display label beside the percent and keeps warnings based on used usage", () => {
+  it("keeps the display mode accessible and warnings based on used usage", () => {
     const result = usage(credits, "remaining");
-    expect(text(result)).toContain("剩余 9%");
+    expect(text(result)).toContain("9%");
     const meter = elements(result).find((el) => el.attributes.get("role") === "meter");
     expect(meter?.attributes.get("aria-valuenow")).toBe("9");
     expect(meter?.attributes.get("aria-label")).toBe("5 小时 · 剩余");
@@ -137,7 +164,11 @@ describe("Account limit windows", () => {
   });
 
   it("keeps unavailable, loading, empty, and failed states distinct from zero usage", () => {
-    expect(renderAccountUsage(document, undefined, messages, "used", vi.fn())).toBeNull();
+    expect(
+      elements(renderAccountUsage(document, undefined, messages, "used", vi.fn())).some(
+        (el) => el.attributes.get("role") === "meter",
+      ),
+    ).toBe(false);
     for (const status of ["loading", "empty", "error"] as const) {
       const retry = vi.fn();
       const result = renderAccountUsage(document, { status }, messages, "used", retry);
@@ -150,8 +181,49 @@ describe("Account limit windows", () => {
         expect(retry).toHaveBeenCalledOnce();
       } else expect(elements(result).some((el) => el.tagName === "button")).toBe(false);
       if (status === "loading")
-        expect((result as unknown as FakeElement).attributes.get("aria-busy")).toBe("true");
+        expect(elements(result).some((el) => el.attributes.get("aria-busy") === "true")).toBe(true);
     }
+  });
+});
+
+describe("Quota comparison columns", () => {
+  function columns(credits: AccountCreditsSnapshot) {
+    const result = renderUsage(
+      document,
+      { status: "ready", credits, freshness: "live", observedAt: null },
+      messages,
+      "remaining",
+      vi.fn(),
+    );
+    const [fiveHour, sevenDay] = result.cells;
+    if (!fiveHour || !sevenDay) throw new Error("Expected two comparison columns");
+    return { ...result, cells: [fiveHour, sevenDay] as const };
+  }
+
+  it("places weekly zero usage only in the 7-day column", () => {
+    const result = columns({ usedPercent: 0, periodType: "weekly" });
+    expect(elements(result.cells[0]).some((el) => el.attributes.get("role") === "meter")).toBe(
+      false,
+    );
+    expect(
+      elements(result.cells[1])
+        .find((el) => el.attributes.get("role") === "meter")
+        ?.attributes.get("aria-valuenow"),
+    ).toBe("100");
+    expect(result.additional).toBeNull();
+  });
+
+  it("places the exact secondary window in its column without merging duplicate reports", () => {
+    const result = columns({
+      ...credits,
+      productUsage: [
+        { product: "7-day window", usagePercent: 20 },
+        { product: "7-day window", usagePercent: 35 },
+      ],
+    });
+    expect(text(result.cells[0])).toContain("9%");
+    expect(text(result.cells[1])).toContain("80%");
+    expect(result.additional && text(result.additional)).toContain("65%");
   });
 });
 
@@ -166,43 +238,32 @@ describe("Account reset-card details", () => {
   });
 
   it("does not invent a zero card count when no reset snapshot is provided", () => {
-    expect(
-      renderAccountResetCredits(document, credits, messages, {
-        usingReset: false,
-        resetDisabled: false,
-      }),
-    ).toBeNull();
+    expect(renderAccountResetCredits(document, credits, messages)).toBeNull();
   });
 
-  it("shows a count and reset action even without per-card expiry data", () => {
-    const onUseReset = vi.fn();
+  it("shows only a count without per-card expiry data", () => {
     const result = renderAccountResetCredits(
       document,
       { ...credits, resetCredits: { availableCount: 2 } },
       messages,
-      { usingReset: false, resetDisabled: false, onUseReset },
     );
     if (!result) throw new Error("Expected reset details");
     expect(text(result.summary)).toContain("2 张");
     expect(elements(result.details).some((el) => el.tagName === "ul")).toBe(false);
-    elements(result.details)
-      .find((el) => el.tagName === "button")
-      ?.listeners.get("click")?.();
-    expect(onUseReset).toHaveBeenCalledOnce();
+    expect(elements(result.details).some((el) => el.tagName === "button")).toBe(false);
   });
 
-  it("renders every expiry and disables consumption while another reset is pending", () => {
+  it("renders every expiry without a consume action", () => {
     const expiresAt = ["2026-09-10T16:12:00.000Z", "2026-09-18T08:00:00.000Z"];
     const result = renderAccountResetCredits(
       document,
       { ...credits, resetCredits: { availableCount: 2, nextExpiresAt: expiresAt[0], expiresAt } },
       messages,
-      { usingReset: false, resetDisabled: true, onUseReset: vi.fn() },
     );
     if (!result) throw new Error("Expected reset details");
     expect(elements(result.details).filter((el) => el.tagName === "li")).toHaveLength(2);
     expect(text(result.details)).toContain("第 1 张");
     expect(text(result.details)).toContain("第 2 张");
-    expect(elements(result.details).find((el) => el.tagName === "button")?.disabled).toBe(true);
+    expect(elements(result.details).some((el) => el.tagName === "button")).toBe(false);
   });
 });

@@ -57,6 +57,7 @@ export interface CodexQuestionProjection extends CodexTurnProjection {
 }
 
 export interface HistoricalTurnProjectionInput {
+  threadId?: string;
   turnId: HostTurnId;
   cwd: string;
   snapshot: HostTurnSnapshot;
@@ -528,7 +529,15 @@ function projectItem(
         changes: projectFileChanges(item.changes),
         status: itemStatus(outcome),
       };
-    case "subagentDelegation":
+    case "subagentDelegation": {
+      const primary = item.subagents[0];
+      // Codex exposes one configuration per Item, not per receiver. Do not
+      // attribute the first child's configuration to a heterogeneous group.
+      const sameConfiguration = item.subagents.every(
+        (subagent) =>
+          subagent.model === primary?.model &&
+          subagent.reasoningEffort === primary?.reasoningEffort,
+      );
       return {
         id: item.itemId,
         type: "collabAgentToolCall",
@@ -537,8 +546,8 @@ function projectItem(
         senderThreadId: senderThreadId ?? "",
         receiverThreadIds: item.subagents.map(({ subagentId }) => subagentId),
         prompt: item.prompt ?? null,
-        model: null,
-        reasoningEffort: null,
+        model: sameConfiguration ? (primary?.model ?? null) : null,
+        reasoningEffort: sameConfiguration ? (primary?.reasoningEffort ?? null) : null,
         agentsStates: Object.fromEntries(
           item.subagents.map(({ subagentId, status, resultSummary }) => [
             subagentId,
@@ -546,6 +555,7 @@ function projectItem(
           ]),
         ),
       };
+    }
   }
 }
 
@@ -651,10 +661,10 @@ export function projectHistoricalTurn(input: HistoricalTurnProjectionInput): Jso
         }
         return item.type === "reasoning"
           ? [
-              projectItem(item, outcome, cwd, true, ""),
+              projectItem(item, outcome, cwd, true, input.threadId ?? ""),
               projectReasoningTranscriptItem(item, outcome, cwd),
             ]
-          : [projectItem(item, outcome, cwd, true, "")];
+          : [projectItem(item, outcome, cwd, true, input.threadId ?? "")];
       }),
     ],
     error,

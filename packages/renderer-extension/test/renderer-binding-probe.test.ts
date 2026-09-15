@@ -24,7 +24,7 @@ import {
   refreshConnectionHosts,
   restoredThreadOwnership,
   retryableHarnessAvailabilityAgents,
-  resolveCodexAccountSelection,
+  resolveCurrentCodexAccountId,
   shouldRefreshCodexAccountsForAdapterState,
   rendererUsageRefreshDelay,
   shouldApplyDraftAgentCarrier,
@@ -54,56 +54,52 @@ import {
 } from "../src/renderer-usage-control.js";
 
 describe("Renderer connection diagnostics", () => {
-  it("round trips Kiro effort without reviving a choice cleared by the native model", () => {
-    const model = harnessModelRefSchema.parse({ id: "adjustable" });
-    const high = harnessThinkingOptionIdSchema.parse("high");
-    const selection = modelSelectionForAgent(null, "medium", "kiro-cli", model, high);
-    if (!selection || typeof selection.model !== "string") throw new Error("Missing Kiro carrier");
-    expect(decodeHarnessPluginRoute(selection.model)).toMatchObject({
-      harnessId: "kiro-cli",
-      model,
-      thinkingOptionId: high,
-    });
-    const inspection = {
-      owner: "external" as const,
-      harnessId: "kiro-cli",
-      transportModelId: selection.model,
-      locked: true as const,
-      effectiveModel: model,
-      history: { fork: true, forkAcrossCwd: true, rollbackLastTurn: true },
-    };
-    expect(
-      restoredThreadOwnership({
-        ...inspection,
-        effectiveThinkingOptionId: high,
-        availableThinkingOptions: [{ id: high, label: "High" }],
-      }).thinkingOptionId,
-    ).toBe(high);
-    expect(
-      restoredThreadOwnership({
-        ...inspection,
-        effectiveModel: harnessModelRefSchema.parse({ id: "fixed-paid" }),
-        availableThinkingOptions: [],
-      }).thinkingOptionId,
-    ).toBeUndefined();
-    expect(restoredThreadOwnership(inspection).thinkingOptionId).toBe(high);
-  });
+  it.each(["kiro-cli", "codebuddy"] as const)(
+    "round trips %s effort without reviving a choice cleared by the native model",
+    (agent) => {
+      const model = harnessModelRefSchema.parse({ id: "adjustable" });
+      const high = harnessThinkingOptionIdSchema.parse("high");
+      const selection = modelSelectionForAgent(null, "medium", agent, model, high);
+      if (!selection || typeof selection.model !== "string")
+        throw new Error("Missing Kiro carrier");
+      expect(decodeHarnessPluginRoute(selection.model)).toMatchObject({
+        harnessId: agent,
+        model,
+        thinkingOptionId: high,
+      });
+      const inspection = {
+        owner: "external" as const,
+        harnessId: agent,
+        transportModelId: selection.model,
+        locked: true as const,
+        effectiveModel: model,
+        history: { fork: true, forkAcrossCwd: true, rollbackLastTurn: true },
+      };
+      expect(
+        restoredThreadOwnership({
+          ...inspection,
+          effectiveThinkingOptionId: high,
+          availableThinkingOptions: [{ id: high, label: "High" }],
+        }).thinkingOptionId,
+      ).toBe(high);
+      expect(
+        restoredThreadOwnership({
+          ...inspection,
+          effectiveModel: harnessModelRefSchema.parse({ id: "fixed-paid" }),
+          availableThinkingOptions: [],
+        }).thinkingOptionId,
+      ).toBeUndefined();
+      expect(restoredThreadOwnership(inspection).thinkingOptionId).toBe(high);
+    },
+  );
 
-  it("adopts a newly active Codex Account unless the draft has an explicit override", () => {
+  it("resolves only the Host-wide current Codex Account", () => {
     const accounts = [
-      { accountId: "old", label: "Old", codexHome: "/old", active: false, isDefault: true },
-      { accountId: "new", label: "New", codexHome: "/new", active: true, isDefault: false },
+      { accountId: "old", label: "Old" },
+      { accountId: "new", label: "New" },
     ];
-    expect(resolveCodexAccountSelection(accounts, null)).toEqual({
-      activeAccountId: "new",
-      overrideAccountId: null,
-      selectedAccountId: "new",
-    });
-    expect(resolveCodexAccountSelection(accounts, "old")).toEqual({
-      activeAccountId: "new",
-      overrideAccountId: "old",
-      selectedAccountId: "old",
-    });
+    expect(resolveCurrentCodexAccountId(accounts, "new")).toBe("new");
+    expect(resolveCurrentCodexAccountId(accounts, "missing")).toBeNull();
   });
 
   it("retries the Codex Account list when the request adapter becomes ready", () => {
@@ -173,6 +169,8 @@ describe("Renderer Composer DOM behavior", () => {
           omp: undefined,
           antigravity: undefined,
           "kiro-cli": undefined,
+          codebuddy: undefined,
+          "cursor-cli": undefined,
         },
       ),
     ).toEqual([]);
@@ -201,6 +199,8 @@ describe("Renderer Composer DOM behavior", () => {
           omp: undefined,
           antigravity: undefined,
           "kiro-cli": undefined,
+          codebuddy: undefined,
+          "cursor-cli": undefined,
         },
       ),
     ).toEqual(["deepseek-harness"]);
@@ -229,6 +229,8 @@ describe("Renderer Composer DOM behavior", () => {
           omp: undefined,
           antigravity: undefined,
           "kiro-cli": undefined,
+          codebuddy: undefined,
+          "cursor-cli": undefined,
         },
       ),
     ).toEqual(["deepseek-harness"]);
@@ -255,6 +257,8 @@ describe("Renderer Composer DOM behavior", () => {
           omp: undefined,
           antigravity: undefined,
           "kiro-cli": undefined,
+          codebuddy: undefined,
+          "cursor-cli": undefined,
         },
       ),
     ).toEqual(["pi", "claude-code", "deepseek-harness", "opencode", "grok", "omp", "antigravity"]);
@@ -283,6 +287,8 @@ describe("Renderer Composer DOM behavior", () => {
           omp: undefined,
           antigravity: undefined,
           "kiro-cli": undefined,
+          codebuddy: undefined,
+          "cursor-cli": undefined,
         },
       ),
     ).toEqual([]);
@@ -311,6 +317,8 @@ describe("Renderer Composer DOM behavior", () => {
           omp: undefined,
           antigravity: undefined,
           "kiro-cli": undefined,
+          codebuddy: undefined,
+          "cursor-cli": undefined,
         },
       ),
     ).toEqual(["deepseek-harness"]);
@@ -1089,6 +1097,23 @@ describe("Renderer Composer DOM behavior", () => {
       model: { id: "gpt-5.6-sol" },
       thinkingOptionId: "high",
       permissionModeId: "configured",
+    });
+    expect(
+      restoredThreadOwnership({
+        owner: "external",
+        harnessId: "hermes",
+        transportModelId: "codexhost/plugin-v1@synthetic",
+        history: { fork: false, forkAcrossCwd: false, rollbackLastTurn: false },
+        effectiveModel: harnessModelRefSchema.parse({
+          id: "hermes-model-v1.emFpOmdsbS01LXR1cmJv",
+        }),
+        effectivePermissionModeId: harnessPermissionModeIdSchema.parse("accept_edits"),
+        locked: true,
+      }),
+    ).toEqual({
+      agent: "hermes",
+      model: { id: "hermes-model-v1.emFpOmdsbS01LXR1cmJv" },
+      permissionModeId: "accept_edits",
     });
     expect(() =>
       restoredThreadOwnership({
