@@ -99,7 +99,7 @@ export function createHarnessAdapter(context: HarnessPluginContext) {
 }
 ```
 
-这里的 `SampleAdapter` 代表插件自行实现的 [`HarnessAdapter`](../../packages/harness-adapter/src/text-session.ts)，不是仓库提供的类。返回对象的 `harnessId` 必须与 Manifest 一致；工厂可异步返回，每个 Host 连接分别创建实例。Node.js 仍缓存模块，模块级可变状态不会自动按连接隔离。
+这里的 `SampleAdapter` 代表插件自行实现的 [`HarnessAdapter`](../../packages/harness-adapter/src/text-session.ts)，不是仓库提供的类。返回对象的 `harnessId` 必须与 Manifest 一致；工厂可异步返回，每个 Host 连接分别创建实例。Node.js 仍缓存模块，模块级可变状态不会自动按连接隔离。Claude Code 获取用户 Shell 环境使用异步子进程，保留 3 秒超时，避免同步等待阻塞 Host 事件循环。
 
 插件可以额外导出可选的 `warmup(adapter): Promise<void>`。Host 调用它进行尽力而为的后台预取，不等待其完成后才服务请求；失败只记录稳定诊断码。当前 Claude Code 和 Antigravity 使用这个入口，其他插件无需为统一形式添加空实现。预取创建的原生资源也由 Adapter 的幂等关闭负责。专用运行时可以请求不预取的冷实例。
 
@@ -114,7 +114,10 @@ Context 包含环境变量快照、平台、是否为受管远程 Host，以及�
 - 单插件导入、工厂或资源错误转为 unavailable，不妨碍其他正常插件加载。
 - 诊断仅包含稳定错误码和公开 ID，不透传插件抛出的路径、环境值或异常正文。
 - Manifest 最大 32 KiB，图标最大 128 KiB，总候选插件最多 128；加载器 API 最多接受 8 个根目录，当前启动组合使用预装和用户两个根目录。
-- 最多 4 个加载 worker；每个插件的异步导入和工厂有独立的默认 10 秒超时，后加载的插件不会分到前一个插件剩下的时间。文件系统发现、同步代码和关闭操作不保证可被超时中断。Host 先初始化官方 app-server，再加载已启用插件；插件加载失败不会阻止 Desktop 转发。关闭时取消尚未开始和可取消的加载等待，迟到的 Adapter 仍会关闭。
+- 最多 4 个加载 worker；每个插件的异步导入和工厂有独立的默认 10 秒超时，后加载的插件不会分到前一个插件剩下的时间。文件系统发现、同步代码和关闭操作不保证可被超时中断。
+- Host 先初始化官方 app-server，再后台整体加载已启用插件。涉及外部 Harness 的查询、创建、恢复及委派等待同一批加载完成，不采用按需加载或按 Harness 独立等待，原有同步 Adapter 注册表保持不变。
+- Desktop 请求在读取循环之外派发，同 Thread 的请求路由和 Session 打开按接收顺序执行；不同 Thread 及无 Thread 的请求独立处理。命令列表、创建或恢复等待插件时，不阻塞后续官方请求。官方初始化仍在读取循环内完成；运行中 Turn、命令及中断维持原有异步处理方式，不把整个 Turn 串行排队。
+- 关闭或 Desktop 输入 EOF 时先取消插件加载，再等待已接收的路由和 Session 打开任务完成，最后取 Session 快照并关闭资源，避免遗漏迟到的 Session。取消后迟到的 Adapter 仍会关闭；未加载或不可用的外部 Harness 不回退到官方 Codex。
 - 超时后才返回的 Adapter 会尝试关闭；未返回实例前创建的资源仍须由插件自行负责清理。
 - Host 退出时关闭已加载 Adapter；Registry 自身的 `close()` 幂等，并尝试关闭所有实例，即使某个实例同步抛错。
 
