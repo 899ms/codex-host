@@ -32,7 +32,6 @@ import {
   contentText,
   deepSeekUsageKey,
   isRecord,
-  mergeStructuredDiffs,
   mergeDeepSeekUsage,
   nonBlankString,
   parseArguments,
@@ -40,7 +39,7 @@ import {
   parseDeepSeekUsage,
   projectToolResult,
   projectTurnReason,
-  type StructuredDiffState,
+  structuredDiffs,
 } from "../projection.js";
 
 interface HistoryTool {
@@ -54,8 +53,6 @@ interface HistoryTurn {
   input: HostTurnSnapshot["input"];
   items: HostItemSnapshot[];
   tools: Map<string, HistoryTool>;
-  fileChangeIndex?: number;
-  fileChangeState: StructuredDiffState[];
   model: HarnessModelRef | undefined;
 }
 
@@ -221,7 +218,6 @@ export function projectDeepSeekHistory(input: {
         input: [],
         items: [],
         tools: new Map(),
-        fileChangeState: [],
         model: effectiveModel,
       };
       continue;
@@ -328,30 +324,15 @@ export function projectDeepSeekHistory(input: {
             : { status: "succeeded" },
       };
       if (!result.failed && data.error === undefined) {
-        const merged = mergeStructuredDiffs(active.fileChangeState, data.meta);
-        if (merged) {
-          active.fileChangeState = merged.state;
-          const index = active.fileChangeIndex;
-          if (index === undefined) {
-            const fileItem: HostFileChangeItem = {
-              type: "fileChange",
-              itemId: itemId(input.sessionId, event.seq, "file-change"),
-              changes: merged.changes,
-            };
-            active.fileChangeIndex = active.items.length;
-            active.items.push({ item: fileItem, outcome: { status: "succeeded" } });
-          } else {
-            const snapshot = active.items[index];
-            if (snapshot?.item.type === "fileChange") {
-              active.items[index] = {
-                item: {
-                  ...snapshot.item,
-                  changes: merged.changes,
-                },
-                outcome: { status: "succeeded" },
-              };
-            }
-          }
+        const changes = structuredDiffs(data.meta);
+        if (changes) {
+          const fileItem: HostFileChangeItem = {
+            type: "fileChange",
+            itemId: itemId(input.sessionId, event.seq, "file-change"),
+            sourceItemIds: [item.itemId],
+            changes,
+          };
+          active.items.push({ item: fileItem, outcome: { status: "succeeded" } });
         }
       }
       continue;

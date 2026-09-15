@@ -112,7 +112,6 @@ import {
   contentText,
   deepSeekUsageKey,
   isRecord,
-  mergeStructuredDiffs,
   mergeDeepSeekUsage,
   nonBlankString,
   parseArguments,
@@ -121,7 +120,7 @@ import {
   parseDeepSeekUsage,
   projectToolResult,
   projectTurnReason,
-  type StructuredDiffState,
+  structuredDiffs,
 } from "../projection.js";
 
 export interface DeepSeekHarnessAdapterOptions extends DeepSeekHostConnectionOptions {
@@ -168,8 +167,6 @@ interface ActiveTurn {
   cancellationRequested: boolean;
   agentItem: HostAgentMessageItem | null;
   reasoningItem: HostReasoningItem | null;
-  fileChangeItem: HostFileChangeItem | null;
-  fileChangeState: StructuredDiffState[];
   tools: Map<string, ActiveTool>;
   interactions: Map<HostInteractionId, ActiveInteraction>;
   snapshots: HostItemSnapshot[];
@@ -255,8 +252,6 @@ function createActiveTurn(command: TurnStartCommand): ActiveTurn {
     cancellationRequested: false,
     agentItem: null,
     reasoningItem: null,
-    fileChangeItem: null,
-    fileChangeState: [],
     tools: new Map(),
     interactions: new Map(),
     snapshots: [],
@@ -1724,32 +1719,16 @@ class DeepSeekHarnessSession implements HarnessSession, DeepSeekHostSubscriber {
         : { status: "succeeded" },
     );
     if (!failed) {
-      const merged = mergeStructuredDiffs(active.fileChangeState, data.meta);
-      if (merged) {
-        active.fileChangeState = merged.state;
-        if (active.fileChangeItem) {
-          active.fileChangeItem = {
-            ...active.fileChangeItem,
-            changes: merged.changes,
-          };
-          this.#emit({
-            type: "item.updated",
-            turnId: active.command.turnId,
-            itemId: active.fileChangeItem.itemId,
-            update: { type: "fileChanges.replace", changes: active.fileChangeItem.changes },
-          });
-        } else {
-          active.fileChangeItem = {
-            type: "fileChange",
-            itemId: this.#newItemId(),
-            changes: merged.changes,
-          };
-          this.#emit({
-            type: "item.started",
-            turnId: active.command.turnId,
-            item: active.fileChangeItem,
-          });
-        }
+      const changes = structuredDiffs(data.meta);
+      if (changes) {
+        const fileItem: HostFileChangeItem = {
+          type: "fileChange",
+          itemId: this.#newItemId(),
+          sourceItemIds: [tool.item.itemId],
+          changes,
+        };
+        this.#emit({ type: "item.started", turnId: active.command.turnId, item: fileItem });
+        this.#completeItem(active, fileItem, { status: "succeeded" });
       }
     }
   }
@@ -1890,10 +1869,6 @@ class DeepSeekHarnessSession implements HarnessSession, DeepSeekHostSubscriber {
     this.#completeAgent(active, itemOutcome);
     for (const tool of active.tools.values()) this.#completeItem(active, tool.item, itemOutcome);
     active.tools.clear();
-    if (active.fileChangeItem) {
-      this.#completeItem(active, active.fileChangeItem, { status: "succeeded" });
-      active.fileChangeItem = null;
-    }
     for (const interactionId of [...active.interactions.keys()]) {
       this.#closeHostInteraction(active, interactionId, "cancelled");
     }
@@ -1988,10 +1963,6 @@ class DeepSeekHarnessSession implements HarnessSession, DeepSeekHostSubscriber {
       this.#completeAgent(active, outcome);
       for (const tool of active.tools.values()) this.#completeItem(active, tool.item, outcome);
       active.tools.clear();
-      if (active.fileChangeItem) {
-        this.#completeItem(active, active.fileChangeItem, { status: "succeeded" });
-        active.fileChangeItem = null;
-      }
       for (const interactionId of [...active.interactions.keys()]) {
         this.#closeHostInteraction(active, interactionId, "cancelled");
       }
