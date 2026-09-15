@@ -1032,7 +1032,13 @@ export function installCurrentRendererAdapter(): {
     const target = targets[0];
     if (targets.length !== 1 || !target) return null;
     const cached = clientsByTarget.get(target);
-    if (cached?.policy === policy && cached.requestClient === target.requestClient)
+    // A policy-less auxiliary lookup must not replace the active route's client.
+    // Explicit policy changes and request-client replacement still invalidate it.
+    if (
+      cached &&
+      (policy === null || cached.policy === policy) &&
+      cached.requestClient === target.requestClient
+    )
       return cached.client;
     const client = createRendererModelClient([target]);
     if (client) {

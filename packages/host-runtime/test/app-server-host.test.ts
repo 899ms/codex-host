@@ -7421,6 +7421,40 @@ describe("AppServerHost HarnessAdapter projection", () => {
     await stopFixture(fixture);
   });
 
+  it("cancels pending steering before draining operations after a Desktop input error", async () => {
+    const fixture = createFixture();
+    try {
+      const threadId = await startPiThread(fixture);
+      const oldTurnId = await startPiTurn(fixture, threadId);
+      const session = fixture.adapter.sessions[0];
+      if (!session) throw new Error("Fake Session was not opened");
+      const execute = vi.spyOn(session, "execute");
+      writeRequest(fixture.desktopInput, {
+        id: 100,
+        method: "turn/steer",
+        params: {
+          threadId,
+          expectedTurnId: oldTurnId,
+          input: [{ type: "text", text: "must not start during shutdown" }],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(execute).toHaveBeenCalledWith({ type: "turn.cancel", turnId: oldTurnId }),
+      );
+      // No terminal event: only shutdown, not the 20-second steering timeout, can release this waiter.
+      fixture.desktopInput.destroy(new Error("Synthetic Desktop input failure"));
+      const response = await fixture.collector.waitFor((message) => requestId(message, 100));
+      expect(response).toMatchObject({ error: { code: -32074 } });
+      expect(JSON.stringify(response)).toContain("connection closed before replacement");
+      expect(execute).not.toHaveBeenCalledWith(expect.objectContaining({ type: "turn.start" }));
+      expect(await fixture.running).toBe(1);
+    } finally {
+      fixture.host.close();
+      await fixture.running;
+      rmSync(fixture.mappingStoreDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("steers an external Thread by cancelling, waiting for terminal projection, and starting once", async () => {
     const fixture = createFixture();
     const threadId = await startPiThread(fixture);

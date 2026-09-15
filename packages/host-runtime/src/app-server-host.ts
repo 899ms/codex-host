@@ -784,11 +784,12 @@ export class AppServerHost {
       return this.#closeRequested ? 0 : 1;
     } finally {
       this.#pluginLoadAbort.abort();
+      // Stop replacement waiters before waiting for their tracked Host operations.
+      this.#externalSteering.close();
       await this.#desktopRequests.drain();
       this.#externalRuntime.idleRelease.stop();
       await this.#externalRuntime.idleRelease.drain();
       await this.#pluginLoading;
-      this.#externalSteering.close();
       const threads = this.#externalRuntime.values();
       await Promise.allSettled(threads.map(({ session }) => session.close()));
       await Promise.allSettled(threads.map(({ outputTask }) => outputTask));

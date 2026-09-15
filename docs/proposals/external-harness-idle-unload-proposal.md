@@ -226,6 +226,7 @@
 - `renderer-extension/src/renderer-idle-release-preference.ts`：存储、连接下发、多窗口同步与失败状态；`settings/idle-release-controls.ts`：开关、分钟输入、开启确认和应用结果提示。
 - `host-runtime/src/external-thread-idle-release.ts`：每分钟检查、占用计数、关闭/drain 超时和失败隔离；`ExternalThreadRuntime` / `AppServerHost` / 委派入口只增加必要接线。
 - 不修改 Adapter，不新增配置文件、不新增原生安全探针、不接入 Desktop 退订语义。
+- 后续审查修正：异常退出时先关闭 steering 等待器再 drain 操作，避免无谓等待旧 Turn 的取消超时；本地客户端的无 policy 辅助查询复用已有缓存，不因本地/远程路由切换清空方法支持记录，真实连接或显式 policy 变化仍使缓存失效。两项均有回归测试。
 
 已执行的验证：
 

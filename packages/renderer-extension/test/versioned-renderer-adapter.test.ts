@@ -623,6 +623,40 @@ describe("current Codex Renderer Agent adapter", () => {
               timeoutMinutes: 30,
             },
           );
+          const localClient = adapter.modelControl?.clientForHost?.("local");
+          expect(localClient).toBeTruthy();
+          // The local target remains discoverable while the remote route is active.
+          fakeDocument.querySelector.mockReturnValue({
+            querySelectorAll: () => [],
+            __reactFiber$idle: {
+              memoizedState: { memoizedState: requestTarget, next: null },
+              return: null,
+            },
+          });
+          const remoteTarget = {
+            ...requestTarget,
+            hostId: "remote-ssh-discovered:mac",
+            sendRequest: vi.fn(),
+          };
+          for (let index = 0; index < 2; index += 1) {
+            fakeWindow.__codexhostDraftPrewarmPolicyV1 = {
+              ...policy,
+              hostId: remoteTarget.hostId,
+              requestTarget: () => remoteTarget,
+            };
+            expect(adapter.modelControl?.currentHostId?.()).toBe(remoteTarget.hostId);
+            fakeWindow.__codexhostDraftPrewarmPolicyV1 = policy;
+            expect(adapter.modelControl?.clientForHost?.("local")).toBe(localClient);
+          }
+          expect(requestTarget.sendRequest).toHaveBeenCalledTimes(1);
+          expect(remoteTarget.sendRequest).not.toHaveBeenCalled();
+          // Auxiliary lookups must not disable real connection or explicit policy invalidation.
+          Object.defineProperty(requestTarget, "requestClient", { value: { ...requestTarget } });
+          const reconnected = adapter.modelControl?.clientForHost?.("local");
+          expect(reconnected).toBeTruthy();
+          expect(reconnected).not.toBe(localClient);
+          fakeWindow.__codexhostDraftPrewarmPolicyV1 = { ...policy };
+          expect(adapter.modelControl?.clientForHost?.("local")).not.toBe(reconnected);
         } else {
           expect(requestTarget.sendRequest).not.toHaveBeenCalled();
         }
