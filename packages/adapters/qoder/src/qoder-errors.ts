@@ -11,7 +11,7 @@ export function mapQoderResultError(result: SDKResultMessage): HarnessError {
     (errorObj?.errors && errorObj.errors.length > 0 ? errorObj.errors.join("; ") : undefined) ||
     `Qoder execution error (code ${errorCode ?? result.subtype})`;
 
-  if (errorCode === 105) {
+  if (errorCode === 105 || result.terminal_reason === "auth_required") {
     return {
       code: "authenticationRequired",
       message: "Qoder authentication expired or required",

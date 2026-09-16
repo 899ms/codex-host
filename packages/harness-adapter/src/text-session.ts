@@ -329,8 +329,6 @@ export interface HostFileChange {
   path: string;
   kind: "add" | "update" | "delete";
   unifiedDiff: string;
-  oldText?: string;
-  newText?: string;
 }
 
 export interface HostFileChangeItem {

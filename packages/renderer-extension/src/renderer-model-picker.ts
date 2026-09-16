@@ -1,7 +1,5 @@
 import type {
-  HarnessModel,
   HarnessModelCatalog,
-  HarnessModelGroup,
   HarnessModelRef,
   HarnessThinkingOption,
   HarnessThinkingOptionId,
@@ -61,8 +59,6 @@ interface ModelOptionControl {
   button: HTMLButtonElement;
   check: HTMLElement;
   searchText: string;
-  selectable?: boolean;
-  groupHeading?: HTMLElement;
 }
 
 interface ThinkingOptionControl {
@@ -258,66 +254,6 @@ function createHeading(text: string): HTMLElement {
   return heading;
 }
 
-function createModelGroupHeading(text: string): HTMLElement {
-  const heading = document.createElement("div");
-  heading.className = HEADING_CLASSES;
-  heading.dataset.codexhostModelGroupHeading = "true";
-  heading.setAttribute("role", "heading");
-  heading.setAttribute("aria-level", "3");
-  heading.tabIndex = -1;
-  heading.style.display = "flex";
-  heading.style.alignItems = "center";
-  heading.style.gap = "8px";
-  heading.style.marginTop = "8px";
-  heading.style.paddingTop = "8px";
-  heading.style.fontSize = "11px";
-  heading.style.fontWeight = "600";
-  heading.style.letterSpacing = "0.06em";
-  heading.style.textTransform = "uppercase";
-  heading.style.pointerEvents = "none";
-  heading.style.userSelect = "none";
-  heading.style.cursor = "default";
-
-  const label = document.createElement("span");
-  label.textContent = text;
-  const rule = document.createElement("span");
-  rule.setAttribute("aria-hidden", "true");
-  rule.style.flex = "1";
-  rule.style.height = "1px";
-  rule.style.backgroundColor = "var(--token-border, rgba(255, 255, 255, 0.14))";
-  heading.append(label, rule);
-  return heading;
-}
-
-const MODEL_GROUP_LABELS: Readonly<Record<HarnessModelGroup, string>> = {
-  default: "Default",
-  new: "New",
-  custom: "Custom",
-};
-
-export interface RendererModelPickerGroup {
-  group: HarnessModelGroup;
-  label: string;
-  models: HarnessModel[];
-}
-
-export function rendererModelPickerGroups(
-  models: readonly HarnessModel[],
-): RendererModelPickerGroup[] {
-  if (!models.some((model) => model.group !== undefined)) return [];
-  return (Object.keys(MODEL_GROUP_LABELS) as HarnessModelGroup[])
-    .map((group) => ({
-      group,
-      label: MODEL_GROUP_LABELS[group],
-      models: models.filter((model) => (model.group ?? "default") === group),
-    }))
-    .filter(({ models: groupModels }) => groupModels.length > 0)
-    .map((group) => ({
-      ...group,
-      label: `${group.label} (${group.models.length})`,
-    }));
-}
-
 export function syncRendererLabelText(
   element: { textContent: string | null },
   text: string,
@@ -330,20 +266,11 @@ export function syncRendererLabelText(
 function applyModelSearchFilter(control: RendererModelPickerControl): void {
   const query = control.searchInput.value.trim().toLowerCase();
   let visibleCount = 0;
-  const visibleGroups = new Map<HTMLElement, boolean>();
   for (const option of control.options.values()) {
     const matches = query.length === 0 || option.searchText.includes(query);
     option.row.hidden = !matches;
     option.row.style.display = matches ? "flex" : "none";
     if (matches) visibleCount += 1;
-    if (option.groupHeading && matches) visibleGroups.set(option.groupHeading, true);
-  }
-  for (const option of control.options.values()) {
-    if (option.groupHeading) {
-      const visible = visibleGroups.has(option.groupHeading);
-      option.groupHeading.hidden = !visible;
-      option.groupHeading.style.display = visible ? "flex" : "none";
-    }
   }
   control.searchEmpty.hidden = query.length === 0 || visibleCount > 0;
 }
@@ -356,17 +283,12 @@ function syncFavorite(option: ModelOptionControl, favorite: boolean): void {
 }
 
 function orderModelFavorites(control: RendererModelPickerControl): void {
-  // Keep native groups intact and preserve catalog order within each partition.
-  const groups = new Set([...control.options.values()].map((option) => option.groupHeading));
-  for (const heading of groups) {
-    if (heading) control.modelMenu.append(heading);
-    for (const favorite of [true, false]) {
-      for (const [id, option] of control.options) {
-        if (option.groupHeading !== heading) continue;
-        const isFavorite = control.favorites.has(id);
-        syncFavorite(option, isFavorite);
-        if (isFavorite === favorite) control.modelMenu.append(option.row);
-      }
+  // Map iteration preserves the Harness catalog order within each partition.
+  for (const favorite of [true, false]) {
+    for (const [id, option] of control.options) {
+      const isFavorite = control.favorites.has(id);
+      syncFavorite(option, isFavorite);
+      if (isFavorite === favorite) control.modelMenu.append(option.row);
     }
   }
 }
@@ -611,7 +533,6 @@ export function mountRendererModelPicker(
         ? event.target.closest<HTMLButtonElement>("button[data-model-id]")
         : null;
     if (!target?.dataset.modelId) return;
-    if (target.disabled) return;
     close();
     trigger.focus();
     onSelectModel(target.dataset.modelId);
@@ -742,9 +663,7 @@ function rebuildOptions(control: RendererModelPickerControl, view: RendererModel
   control.modelButton.replaceChildren(modelText, modelChevron);
   control.menu.append(control.modelButton);
 
-  const models = view.catalog?.models ?? [];
-  const groups = rendererModelPickerGroups(models);
-  const appendModel = (model: HarnessModel, groupHeading?: HTMLElement): void => {
+  for (const model of view.catalog?.models ?? []) {
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.modelId = model.ref.id;
@@ -774,19 +693,8 @@ function rebuildOptions(control: RendererModelPickerControl, view: RendererModel
       button,
       check,
       searchText: `${model.label} ${model.ref.id}`.toLowerCase(),
-      ...(typeof model.selectable === "boolean" ? { selectable: model.selectable } : {}),
-      ...(groupHeading ? { groupHeading } : {}),
     });
     control.modelMenu.append(row);
-  };
-  if (groups.length > 0) {
-    for (const group of groups) {
-      const heading = createModelGroupHeading(group.label);
-      control.modelMenu.append(heading);
-      for (const model of group.models) appendModel(model, heading);
-    }
-  } else {
-    for (const model of models) appendModel(model);
   }
   orderModelFavorites(control);
   applyModelSearchFilter(control);
@@ -860,7 +768,7 @@ export function renderRendererModelPicker(
     const selected = modelId === view.selected?.id;
     option.button.setAttribute("aria-checked", String(selected));
     option.button.classList.toggle("bg-token-list-hover-background", selected);
-    option.button.disabled = control.trigger.disabled || option.selectable === false;
+    option.button.disabled = control.trigger.disabled;
     option.check.style.visibility = selected ? "visible" : "hidden";
   }
   for (const [thinkingOptionId, option] of control.thinkingOptions) {

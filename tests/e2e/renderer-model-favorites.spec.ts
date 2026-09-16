@@ -26,15 +26,6 @@ const { outputFiles } = await build({
         harnessId = id;
         renderRendererModelPicker(control, view, true, id);
       };
-      globalThis.useGroupedCatalog = () => {
-        view.catalog.models = [
-          { ref: { id: "a" }, label: "Auto", group: "default" },
-          { ref: { id: "b" }, label: "Performance", group: "default" },
-          { ref: { id: "c" }, label: "Latest", group: "new" },
-          { ref: { id: "d" }, label: "Unavailable", group: "custom", selectable: false },
-        ];
-        globalThis.changeHarness("qoder");
-      };
       globalThis.changeHarness("pi");
     `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -48,52 +39,6 @@ const { outputFiles } = await build({
 const bundle = outputFiles[0]?.text;
 if (!bundle) throw new Error("Model favorites test bundle was not generated");
 
-test("favorites preserve native groups, search visibility and unavailable models", async ({
-  page,
-}) => {
-  await page.route("http://favorites.test/", (route) =>
-    route.fulfill({
-      contentType: "text/html",
-      body: '<!doctype html><body style="display:flex;align-items:flex-end;height:100vh;margin:0"></body>',
-    }),
-  );
-  await page.goto("http://favorites.test/");
-  await page.addScriptTag({ content: bundle });
-  await page.evaluate(() => Reflect.get(globalThis, "useGroupedCatalog")());
-  const trigger = page.locator("[data-codexhost-model-control] > button");
-  const menu = page.locator('[aria-label="Model"]');
-  await trigger.click();
-  await menu.locator('[data-favorite-model-id="b"]').click();
-  await menu.locator('[data-favorite-model-id="c"]').click();
-  const order = () =>
-    menu
-      .locator(':scope > [role="heading"], :scope > [data-codexhost-model-row]')
-      .evaluateAll((nodes) =>
-        nodes.map(
-          (node) =>
-            node.querySelector("[data-model-id]")?.getAttribute("data-model-id") ??
-            node.textContent,
-        ),
-      );
-  expect(await order()).toEqual(["Default (2)", "b", "a", "New (1)", "c", "Custom (1)", "d"]);
-  await trigger.click();
-  await trigger.click();
-  expect(await order()).toEqual(["Default (2)", "b", "a", "New (1)", "c", "Custom (1)", "d"]);
-  await expect(menu.locator('[data-model-id="d"]')).toBeDisabled();
-  await menu.getByRole("searchbox").fill("Latest");
-  await expect(menu.getByRole("heading")).toHaveText(["New (1)"]);
-  await expect(menu.locator("button[data-model-id]:visible")).toHaveCount(1);
-  await expect(menu.locator("button[data-favorite-model-id]:visible")).toHaveCount(1);
-  await menu.getByRole("searchbox").fill("no matching model");
-  await expect(menu.getByRole("heading")).toHaveCount(0);
-  await menu.getByRole("searchbox").fill("");
-  await expect(menu.getByRole("heading")).toHaveText(["Default (2)", "New (1)", "Custom (1)"]);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "selections"))).toBe(0);
-  await menu.locator('[data-model-id="b"]').focus();
-  await page.keyboard.press("Enter");
-  await expect(trigger).toContainText("Performance");
-  expect(await page.evaluate(() => Reflect.get(globalThis, "selections"))).toBe(1);
-});
 test("favorites persist, reorder immediately, remain searchable and are Harness scoped", async ({
   page,
 }) => {

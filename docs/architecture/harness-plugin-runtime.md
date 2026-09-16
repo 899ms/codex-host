@@ -123,9 +123,11 @@ Context 包含环境变量快照、平台、是否为受管远程 Host，以及�
 
 图标只接受识别出的 PNG、JPEG、WebP 或受限 SVG，由 Host 转成数据 URL。SVG 拒绝脚本、事件属性及部分外部资源构造。消费者必须使用 `img`，不得把 SVG 或描述字段当作 HTML 注入。
 
-## 公共查询和路由
+Qoder 的启动认证失败或消息流意外结束会终结活动 Turn、发布 `session.faulted` 并关闭 Session，后续请求返回 `invalidState`。取消回执只表示受理；收到原生 Turn 结果前仍保持忙碌，迟到输出归属原 Turn。无人值守创建策略 `unattended-full-access` 映射为原生 `bypassPermissions`，与显式非 bypass 权限冲突时拒绝创建。
 
-恢复历史时，只有确认完成的 Turn 才投影为 `completed`；`HistoricalTurnOutcome.unknown` 投影为 `interrupted`，不把缺失终态当作成功。Qoder 以末条 Assistant 的原生 `stop_reason: end_turn` 且所有工具调用都有结果作为成功依据；没有工具结果时沿用 `cancelled` Item 和原因说明，并省略 Bash 退出码。这表示完成结果未确认，不代表已观测到非零退出码。
+Qoder 沿用现有公共 Model Catalog 和工具投影契约，不增加专用分组、禁用状态或文件全文字段。模型目录保留 SDK 返回的模型及顺序，不因 `isEnabled` 字段过滤模型；模型选择是否成功由原生接口决定。Write/Edit 沿用 Pi/OMP 已使用的公共工具投影兼容路径，不增加 namespace 开关或原生 patch 门槛，也不改变其他 Harness 的历史状态投影。
+
+## 公共查询和路由
 
 目录请求在被请求的 Host 连接内处理，不接受客户端提供文件系统路径：
 

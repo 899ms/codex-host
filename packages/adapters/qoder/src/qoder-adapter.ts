@@ -10,6 +10,7 @@ import type {
 } from "@codexhost/harness-adapter";
 import {
   harnessIdSchema,
+  harnessPermissionModeIdSchema,
   nativeCheckpointRefSchema,
   nativeSessionRefSchema,
   type HarnessId,
@@ -28,6 +29,7 @@ import {
   qoderEnvironment,
   resolveQoderExecutable,
 } from "./qoder-command.js";
+import { mapQoderException } from "./qoder-errors.js";
 import { mapQoderSnapshot } from "./qoder-history.js";
 import { decodeQoderModelRef, parseQoderModelCatalog } from "./qoder-models.js";
 import {
@@ -165,8 +167,13 @@ export class QoderAdapter implements HarnessAdapter {
                 // Ignore query close error
               }
             }
-          } catch {
-            // Keep empty catalog on error
+          } catch (error) {
+            const result: HarnessInspection = {
+              status: "unavailable",
+              error: mapQoderException(error),
+            };
+            this.#inspections.set(cacheKey, { result, refreshAfter: now + 5_000 });
+            return result;
           }
         }
 
@@ -234,6 +241,20 @@ export class QoderAdapter implements HarnessAdapter {
           retryable: false,
         },
       };
+    }
+    let permissionModeId = "permissionModeId" in input ? input.permissionModeId : undefined;
+    if (input.kind === "create" && input.executionPolicy === "unattended-full-access") {
+      if (permissionModeId && !["bypassPermissions", "yolo"].includes(permissionModeId)) {
+        return {
+          ok: false,
+          error: {
+            code: "invalidRequest",
+            message: "unattended-full-access requires Qoder bypassPermissions",
+            retryable: false,
+          },
+        };
+      }
+      permissionModeId = harnessPermissionModeIdSchema.parse("bypassPermissions");
     }
     const environment = qoderEnvironment(input.environment ?? this.#environment);
     let pathToQoderCLIExecutable: string | undefined;
@@ -430,26 +451,29 @@ export class QoderAdapter implements HarnessAdapter {
         ? cachedInspection.catalog
         : undefined;
 
-    const session = new QoderSession({
-      sessionId,
-      cwd: input.cwd,
-      environment,
-      ...("model" in input && input.model ? { model: input.model } : {}),
-      ...("permissionModeId" in input && input.permissionModeId
-        ? { permissionModeId: input.permissionModeId }
-        : {}),
-      ...("thinkingOptionId" in input && input.thinkingOptionId
-        ? { thinkingOptionId: input.thinkingOptionId }
-        : {}),
-      ...(catalog ? { catalog } : {}),
-      ...(openResumeId ? { resume: openResumeId } : {}),
-      queryFactory: this.#queryFactory,
-      getSessionMessages: this.#getSessionMessages,
-      ...(pathToQoderCLIExecutable ? { pathToQoderCLIExecutable } : {}),
-      onClosed: () => {
-        this.#sessions.delete(session);
-      },
-    });
+    let session: QoderSession;
+    try {
+      session = new QoderSession({
+        sessionId,
+        cwd: input.cwd,
+        environment,
+        ...("model" in input && input.model ? { model: input.model } : {}),
+        ...(permissionModeId ? { permissionModeId } : {}),
+        ...("thinkingOptionId" in input && input.thinkingOptionId
+          ? { thinkingOptionId: input.thinkingOptionId }
+          : {}),
+        ...(catalog ? { catalog } : {}),
+        ...(openResumeId ? { resume: openResumeId } : {}),
+        queryFactory: this.#queryFactory,
+        getSessionMessages: this.#getSessionMessages,
+        ...(pathToQoderCLIExecutable ? { pathToQoderCLIExecutable } : {}),
+        onClosed: () => {
+          this.#sessions.delete(session);
+        },
+      });
+    } catch (error) {
+      return { ok: false, error: mapQoderException(error) };
+    }
 
     this.#sessions.add(session);
     return { ok: true, value: session };

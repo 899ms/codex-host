@@ -732,13 +732,16 @@ describe("Qoder Slash Commands Capability", () => {
         expect(completedEvent.event.outcome.status).toBe("failed");
       }
 
-      // Session is now idle again and can accept new commands
+      // A disconnected Query cannot execute more commands.
       const turn2 = hostTurnIdSchema.parse("turn-compact-retry");
       const retryResult = await session.commands.execute({
         turnId: turn2,
         commandId: "qoder.compact",
       });
-      expect(retryResult.ok).toBe(true);
+      expect(retryResult).toMatchObject({ ok: false, error: { code: "invalidState" } });
+      expect(
+        collector.outputs.filter((o) => o.kind === "event" && o.event.type === "session.faulted"),
+      ).toHaveLength(1);
     });
 
     it("emits contextCompaction items on compact_boundary system message during a regular turn", async () => {
