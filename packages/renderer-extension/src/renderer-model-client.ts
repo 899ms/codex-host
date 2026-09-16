@@ -1,4 +1,10 @@
 import {
+  IDLE_RELEASE_SETTINGS_METHOD,
+  LOADED_SESSIONS_METHOD,
+  loadedSessionsSchema,
+  type LoadedSession,
+  idleReleaseSettingsSchema,
+  type IdleReleaseSettings,
   harnessAccountInspectParamsSchema,
   harnessAccountInspectResultSchema,
   harnessAccountSourceListResultSchema,
@@ -98,6 +104,18 @@ export const THREAD_OWNERSHIP_LIST_METHOD = "codexhost/thread/ownership/list";
 export const THREAD_USAGE_INSPECT_METHOD = "codexhost/thread/usage/inspect";
 export const THREAD_USAGE_UPDATED_METHOD = "codexhost/thread/usage/updated";
 export const THREAD_TOKEN_USAGE_UPDATED_METHOD = "thread/tokenUsage/updated";
+/**
+ * Codex Desktop does not dispatch the custom `codexhost/thread/usage/updated`
+ * notification to renderer callbacks, and the native token-usage carrier is
+ * only projected once Context usage is known. Turn completion is dispatched,
+ * so it is the guaranteed point to re-read account quota after a reply.
+ */
+export const TURN_COMPLETED_METHOD = "turn/completed";
+const THREAD_USAGE_REFRESH_METHODS = [
+  THREAD_TOKEN_USAGE_UPDATED_METHOD,
+  THREAD_USAGE_UPDATED_METHOD,
+  TURN_COMPLETED_METHOD,
+] as const;
 export const UPDATE_CHECK_METHOD = "codexhost/update/check";
 export const UPDATE_START_METHOD = "codexhost/update/start";
 export const UPDATE_STATUS_METHOD = "codexhost/update/status";
@@ -112,8 +130,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function notifiedThreadId(notification: unknown): ThreadUsageInspectionParams["threadId"] | null {
   if (
     !isRecord(notification) ||
-    (notification.method !== THREAD_TOKEN_USAGE_UPDATED_METHOD &&
-      notification.method !== THREAD_USAGE_UPDATED_METHOD)
+    !(THREAD_USAGE_REFRESH_METHODS as readonly unknown[]).includes(notification.method)
   ) {
     return null;
   }
@@ -139,6 +156,8 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
 }
 
 export interface RendererModelClient extends Partial<RendererSessionImportClient> {
+  setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
+  listLoadedSessions?(): Promise<LoadedSession[]>;
   currentHostId?(): string | null;
   listHarnessPlugins?(): Promise<HarnessPluginListResult>;
   clientForHost?(hostId: string): RendererModelClient | null;
@@ -170,22 +189,35 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
 }
 
 export function createThreadUsageSubscriptionRelay(): {
-  connect(client: Pick<RendererModelClient, "subscribeThreadUsage">): void;
+  connect(client: Pick<RendererModelClient, "subscribeThreadUsage"> | null): void;
   subscribe(listener: (update: ThreadUsageInspection) => void): () => void;
   dispose(): void;
 } {
   const listeners = new Set<(update: ThreadUsageInspection) => void>();
   let removeNotificationCallback: (() => void) | null = null;
+  let connectedClient: Pick<RendererModelClient, "subscribeThreadUsage"> | null = null;
+  let generation = 0;
+  const disconnect = (): void => {
+    generation += 1;
+    removeNotificationCallback?.();
+    removeNotificationCallback = null;
+    connectedClient = null;
+  };
   return {
     connect(client) {
-      if (removeNotificationCallback || listeners.size === 0) return;
+      if (client === connectedClient && removeNotificationCallback) return;
+      disconnect();
+      if (!client || listeners.size === 0) return;
+      connectedClient = client;
+      const subscriptionGeneration = generation;
       try {
         removeNotificationCallback =
           client.subscribeThreadUsage?.((update) => {
+            if (subscriptionGeneration !== generation) return;
             for (const listener of listeners) listener(update);
           }) ?? null;
       } catch {
-        removeNotificationCallback = null;
+        disconnect();
       }
     },
     subscribe(listener) {
@@ -193,13 +225,11 @@ export function createThreadUsageSubscriptionRelay(): {
       return () => {
         listeners.delete(listener);
         if (listeners.size > 0) return;
-        removeNotificationCallback?.();
-        removeNotificationCallback = null;
+        disconnect();
       };
     },
     dispose() {
-      removeNotificationCallback?.();
-      removeNotificationCallback = null;
+      disconnect();
       listeners.clear();
     },
   };
@@ -279,6 +309,15 @@ export function createRendererModelClient(
   };
 
   return Object.freeze({
+    async listLoadedSessions(): Promise<LoadedSession[]> {
+      return loadedSessionsSchema.parse(await manager.sendRequest(LOADED_SESSIONS_METHOD, {}));
+    },
+    async setIdleReleaseSettings(settings: IdleReleaseSettings): Promise<IdleReleaseSettings> {
+      const params = idleReleaseSettingsSchema.parse(settings);
+      return idleReleaseSettingsSchema.parse(
+        await manager.sendRequest(IDLE_RELEASE_SETTINGS_METHOD, params),
+      );
+    },
     ...createRendererSessionImportClient(async (method, params) =>
       manager.sendRequest(method, params),
     ),
@@ -356,7 +395,7 @@ export function createRendererModelClient(
       let disposed = false;
       const generations = new Map<ThreadUsageInspectionParams["threadId"], number>();
       const removeNotificationCallback = notifications.addNotificationCallback(
-        [THREAD_TOKEN_USAGE_UPDATED_METHOD, THREAD_USAGE_UPDATED_METHOD],
+        THREAD_USAGE_REFRESH_METHODS,
         (notification) => {
           const threadId = notifiedThreadId(notification);
           if (!threadId) return;
