@@ -798,6 +798,7 @@ describe("Qoder Slash Commands Capability", () => {
           uuid: "assistant-compact-msg",
           message: {
             role: "assistant",
+            stop_reason: "end_turn",
             content: [{ type: "text", text: "Summary text..." }],
           },
         } as SessionMessage,

@@ -170,6 +170,20 @@ export function mapQoderSnapshot(
             m.message !== null &&
             Boolean((m.message as Record<string, unknown>).error))),
     );
+    const lastAssistant = checkpointMessage?.message as Record<string, unknown> | undefined;
+    const hasIncompleteTool = turnMessages.some((message) => {
+      if (message.type !== "assistant") return false;
+      const content = (message.message as Record<string, unknown> | undefined)?.content;
+      return (
+        Array.isArray(content) &&
+        content.some(
+          (block: Record<string, unknown>) =>
+            block?.type === "tool_use" &&
+            typeof block.id === "string" &&
+            !toolResults.has(block.id),
+        )
+      );
+    });
 
     const outcome: HistoricalTurnOutcome = hasError
       ? {
@@ -180,7 +194,9 @@ export function mapQoderSnapshot(
             retryable: false,
           },
         }
-      : { status: "succeeded" };
+      : lastAssistant?.stop_reason === "end_turn" && !hasIncompleteTool
+        ? { status: "succeeded" }
+        : { status: "unknown", reason: "Qoder history has no confirmed Turn completion" };
 
     const firstWord = userText.trim().split(/\s+/)[0] ?? "";
     const isCompactionTurn = isQoderCompactionCommand(firstWord);
@@ -194,7 +210,8 @@ export function mapQoderSnapshot(
       };
       items.push({
         item: compactionItem,
-        outcome: { status: "succeeded" },
+        outcome:
+          outcome.status === "unknown" ? { status: "cancelled", reason: outcome.reason } : outcome,
       });
     } else {
       const hasCompactBoundary = turnMessages.some(
@@ -226,7 +243,8 @@ export function mapQoderSnapshot(
               type: "agentMessage",
               itemId: hostItemIdSchema.parse(`qoder-item-${message.uuid}-0`),
               text: content,
-              phase: isLastAssistant ? "final_answer" : "commentary",
+              phase:
+                isLastAssistant && outcome.status === "succeeded" ? "final_answer" : "commentary",
             },
             outcome: { status: "succeeded" },
           });
@@ -261,7 +279,8 @@ export function mapQoderSnapshot(
             }
 
             if (rawBlock.type === "text" && typeof rawBlock.text === "string") {
-              const isFinalAnswer = isLastAssistant && !hasSubsequentToolUse;
+              const isFinalAnswer =
+                isLastAssistant && !hasSubsequentToolUse && outcome.status === "succeeded";
               items.push({
                 item: {
                   type: "agentMessage",
@@ -282,16 +301,18 @@ export function mapQoderSnapshot(
               const res = toolResults.get(rawBlock.id);
               const isError = res?.isError === true;
               const output = res?.content;
-              const toolOutcome: HostItemOutcome = isError
-                ? {
-                    status: "failed",
-                    error: {
-                      code: "nativeFailure",
-                      message: output || `Tool '${rawBlock.name}' failed`,
-                      retryable: false,
-                    },
-                  }
-                : { status: "succeeded" };
+              const toolOutcome: HostItemOutcome = !res
+                ? { status: "cancelled", reason: "No confirmed Qoder tool result" }
+                : isError
+                  ? {
+                      status: "failed",
+                      error: {
+                        code: "nativeFailure",
+                        message: output || `Tool '${rawBlock.name}' failed`,
+                        retryable: false,
+                      },
+                    }
+                  : { status: "succeeded" };
 
               const itemId = hostItemIdSchema.parse(`qoder-item-${rawBlock.id}`);
 
@@ -307,7 +328,7 @@ export function mapQoderSnapshot(
                     itemId,
                     command: (rawBlock.input as Record<string, unknown>).command as string,
                     ...(output ? { output } : {}),
-                    exitCode: isError ? 1 : 0,
+                    ...(res ? { exitCode: isError ? 1 : 0 } : {}),
                   },
                   outcome: toolOutcome,
                 });

@@ -816,8 +816,8 @@ function turnError(outcome: TurnCompletedEvent["outcome"]): JsonObject | null {
 
 function historicalStatus(outcome: HistoricalTurnOutcome): "completed" | "interrupted" | "failed" {
   if (outcome.status === "failed") return "failed";
-  if (outcome.status === "cancelled") return "interrupted";
-  return "completed";
+  if (outcome.status === "succeeded") return "completed";
+  return "interrupted";
 }
 
 export function projectHistoricalTurn(input: HistoricalTurnProjectionInput): JsonObject {

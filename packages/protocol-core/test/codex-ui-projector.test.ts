@@ -38,6 +38,41 @@ function projector(): CodexTurnProjector {
 }
 
 describe("Codex UI projector", () => {
+  it("projects unconfirmed historical completion as interrupted without inventing an exit code", () => {
+    const snapshot: HostThreadSnapshot["turns"][number] = {
+      nativeTurnRef: nativeTurnRefSchema.parse({
+        harnessId: "qoder",
+        nativeSessionId: "native",
+        nativeTurnKey: "user",
+        formatVersion: 1,
+      }),
+      input: [{ type: "text", text: "Run the command" }],
+      outcome: { status: "unknown", reason: "No confirmed Turn completion" },
+      items: [
+        {
+          item: {
+            type: "commandExecution",
+            itemId: itemId("pending-command"),
+            command: "node long-task.js",
+          },
+          outcome: { status: "cancelled", reason: "No confirmed tool result" },
+        },
+      ],
+    };
+    expect(projectHistoricalTurn({ turnId, cwd: "/workspace", snapshot })).toMatchObject({
+      status: "interrupted",
+      items: [
+        { type: "userMessage" },
+        {
+          type: "commandExecution",
+          status: "failed",
+          exitCode: null,
+          aggregatedOutput: null,
+        },
+      ],
+    });
+  });
+
   it("does not invent historical duration from invalid native timing", () => {
     const snapshot: HostThreadSnapshot["turns"][number] = {
       nativeTurnRef: nativeTurnRefSchema.parse({

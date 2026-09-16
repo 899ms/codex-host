@@ -122,6 +122,8 @@ Context 包含环境变量快照、平台、是否为受管远程 Host，以及�
 
 ## 公共查询和路由
 
+恢复历史时，只有确认完成的 Turn 才投影为 `completed`；`HistoricalTurnOutcome.unknown` 投影为 `interrupted`，不把缺失终态当作成功。Qoder 以末条 Assistant 的原生 `stop_reason: end_turn` 且所有工具调用都有结果作为成功依据；没有工具结果时沿用 `cancelled` Item 和原因说明，并省略 Bash 退出码。这表示完成结果未确认，不代表已观测到非零退出码。
+
 目录请求在被请求的 Host 连接内处理，不接受客户端提供文件系统路径：
 
 ```json

@@ -457,6 +457,7 @@ describe("QoderAdapter", () => {
             id: "resp-1",
             type: "message",
             role: "assistant",
+            stop_reason: "end_turn",
             content: [{ type: "text", text: "Feature built successfully" }],
           },
           parent_tool_use_id: null,
@@ -2160,6 +2161,7 @@ describe("QoderAdapter", () => {
           session_id: "test-sess",
           message: {
             role: "assistant",
+            stop_reason: "end_turn",
             content: [{ type: "text", text: "Working tree is clean." }],
           },
           parent_tool_use_id: null,
