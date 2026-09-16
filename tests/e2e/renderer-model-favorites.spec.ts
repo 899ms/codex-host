@@ -45,6 +45,8 @@ const { outputFiles } = await build({
   platform: "browser",
   write: false,
 });
+const bundle = outputFiles[0]?.text;
+if (!bundle) throw new Error("Model favorites test bundle was not generated");
 
 test("favorites preserve native groups, search visibility and unavailable models", async ({
   page,
@@ -92,9 +94,6 @@ test("favorites preserve native groups, search visibility and unavailable models
   await expect(trigger).toContainText("Performance");
   expect(await page.evaluate(() => Reflect.get(globalThis, "selections"))).toBe(1);
 });
-const bundle = outputFiles[0]?.text;
-if (!bundle) throw new Error("Model favorites test bundle was not generated");
-
 test("favorites persist, reorder immediately, remain searchable and are Harness scoped", async ({
   page,
 }) => {
