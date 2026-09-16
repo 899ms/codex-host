@@ -37,6 +37,7 @@ export function ensureModelOptionStyle(ownerDocument: Document): void {
       cursor: pointer;
     }
     [data-codexhost-model-row] > button[data-favorite-model-id]:hover {
+      background: var(--color-token-list-hover-background, rgba(127, 127, 127, .09));
       color: var(--color-token-text-secondary, #85858f);
     }
     [data-codexhost-model-row] > button[data-favorite-model-id][aria-pressed="true"] {
