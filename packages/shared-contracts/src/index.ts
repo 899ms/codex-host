@@ -6,6 +6,11 @@ export {
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,
 } from "./idle-release.js";
+export {
+  LOADED_SESSIONS_METHOD,
+  loadedSessionsSchema,
+  type LoadedSession,
+} from "./loaded-sessions.js";
 
 export {
   harnessAccountSnapshotSchema,

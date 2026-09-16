@@ -63,16 +63,32 @@ test("General groups appearance and idle release controls without dialogs or lon
   await setup(page);
   await expect(page.getByRole("button", { name: "通用", exact: true })).toBeVisible();
   await expect(page.getByRole("switch", { name: "换行显示思考文本" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "资源管理" }).getByText("已加载会话", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "已加载会话", exact: true })).toHaveCount(0);
   const enabled = page.getByRole("switch", { name: "自动释放空闲会话" });
   const minutes = page.getByRole("spinbutton", { name: "空闲超时" });
   await expect(enabled).not.toBeChecked();
-  await expect(minutes).toHaveValue("30");
+  // The timeout has no effect while release is off, so it is not shown.
+  await expect(minutes).toBeHidden();
 
   const tooltip = page.getByRole("tooltip");
   await expect(tooltip).toBeHidden();
   await page.getByRole("button", { name: "自动释放空闲会话说明" }).hover();
   await expect(tooltip).toBeVisible();
   await expect(tooltip).toContainText("一并停止");
+
+  // Enabling applies immediately; Playwright would auto-dismiss any unexpected dialog.
+  await enabled.click();
+  await expect(enabled).toBeChecked();
+  await expect(minutes).toBeVisible();
+  await expect(minutes).toHaveValue("30");
+  await expect
+    .poll(() =>
+      page.evaluate(() => Reflect.get(globalThis, "idleFixture").calls.at(-1)?.params.enabled),
+    )
+    .toBe(true);
 
   await minutes.fill("9");
   await minutes.press("Tab");
@@ -91,28 +107,27 @@ test("General groups appearance and idle release controls without dialogs or lon
   // Successful sync is silent; the scope badge is no longer shown.
   await expect(page.getByText("同步中…")).toBeHidden();
   await expect(page.getByText("仅本地 Host", { exact: true })).toHaveCount(0);
-
-  // Enabling applies immediately; Playwright would auto-dismiss any unexpected dialog.
-  await enabled.click();
-  await expect(enabled).toBeChecked();
-  await expect
-    .poll(() =>
-      page.evaluate(() => Reflect.get(globalThis, "idleFixture").calls.at(-1)?.params.enabled),
-    )
-    .toBe(true);
-  await expect(page.getByText("同步中…")).toBeHidden();
   expect(
     await page.evaluate(() =>
       JSON.parse(localStorage.getItem("codexhost.idle-release.v1") ?? "null"),
     ),
   ).toEqual({ enabled: true, timeoutMinutes: 10 });
+
+  // Turning release off hides the timeout but keeps the saved value; an invalid draft is dropped.
+  await minutes.fill("5");
   await enabled.click();
   await expect(enabled).not.toBeChecked();
+  await expect(minutes).toBeHidden();
+  await enabled.click();
   await expect(minutes).toHaveValue("10");
+  await expect(minutes).toHaveAttribute("aria-invalid", "false");
+  await enabled.click();
   await page.reload();
   await page.addScriptTag({ content: bundle });
   await page.evaluate(() => Reflect.get(globalThis, "setupIdleRelease")());
   await expect(enabled).not.toBeChecked();
+  await expect(minutes).toBeHidden();
+  await enabled.click();
   await expect(minutes).toHaveValue("10");
 });
 
@@ -139,5 +154,5 @@ test("another window's change updates both the UI and the Host without stale cac
 
 test("unsupported Host is visible rather than reported as applied", async ({ page }) => {
   await setup(page, true);
-  await expect(page.getByRole("status")).toContainText("当前 Host 不支持");
+  await expect(page.getByRole("status").filter({ hasText: "当前 Host 不支持" })).toBeVisible();
 });

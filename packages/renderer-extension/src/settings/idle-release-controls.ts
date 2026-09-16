@@ -8,6 +8,8 @@ import {
   type IdleReleaseSyncStatus,
 } from "../renderer-idle-release-preference.js";
 import type { RendererSettingsMessages } from "./localization.js";
+import type { RendererSettingsPageMountContext } from "./core.js";
+import { mountLoadedSessionsTable, type LoadedSessionsClient } from "./loaded-sessions-table.js";
 import {
   createNumberField,
   createPreferenceGroup,
@@ -17,9 +19,11 @@ import {
 } from "./preference-ui.js";
 
 export function mountIdleReleaseControls(
-  content: HTMLElement,
+  context: RendererSettingsPageMountContext,
   messages: RendererSettingsMessages,
+  getLoadedSessionsClient: () => LoadedSessionsClient | null,
 ): () => void {
+  const { content } = context;
   const document = content.ownerDocument;
   const owner = document.defaultView;
   if (!owner) return () => undefined;
@@ -61,8 +65,15 @@ export function mountIdleReleaseControls(
     max: 1440,
   });
   timeout.item.append(field);
+  timeout.item.id = preferenceId("idle-release-timeout");
+  enabled.setAttribute("aria-controls", timeout.item.id);
   card.append(toggle.item, timeout.item);
   content.append(group);
+  const disposeTable = mountLoadedSessionsTable(
+    { ...context, content: card },
+    messages,
+    getLoadedSessionsClient,
+  );
 
   const statusMessages: Record<Exclude<IdleReleaseSyncStatus, "applied">, string> = {
     pending: messages.idleReleasePending,
@@ -87,7 +98,10 @@ export function mountIdleReleaseControls(
   const sync = (): void => {
     const settings = readIdleReleasePreference(owner);
     enabled.checked = settings.enabled;
-    // Keep an invalid draft visible until the user corrects it.
+    // The timeout only matters while release is enabled; hiding it discards an invalid draft.
+    timeout.item.hidden = !settings.enabled;
+    if (!settings.enabled && minutes.getAttribute("aria-invalid") === "true") setInvalid(false);
+    // Otherwise keep an invalid draft visible until the user corrects it.
     if (minutes.getAttribute("aria-invalid") !== "true") {
       minutes.value = String(settings.timeoutMinutes);
     }
@@ -125,6 +139,7 @@ export function mountIdleReleaseControls(
   // Ask the installed connection synchronizer to report whether the saved setting was applied.
   owner.dispatchEvent(new Event(IDLE_RELEASE_CHANGE_EVENT));
   return () => {
+    disposeTable();
     owner.removeEventListener(IDLE_RELEASE_CHANGE_EVENT, sync);
     owner.removeEventListener(IDLE_RELEASE_STATUS_EVENT, onStatus);
     owner.removeEventListener("storage", storage);

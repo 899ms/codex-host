@@ -2,6 +2,7 @@ import {
   DEFAULT_IDLE_RELEASE_SETTINGS,
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,
+  type LoadedSession,
 } from "@codexhost/shared-contracts";
 import type { ExternalThread } from "./external-thread-runtime.js";
 import type { DesktopRequestQueue } from "./desktop-request-queue.js";
@@ -113,6 +114,54 @@ export class ExternalThreadIdleRelease {
       });
     if (drain) this.#pending.add(task);
     return task;
+  }
+
+  /** Read only: never resolve a Session or touch its activity clock. */
+  list(): LoadedSession[] {
+    const now = Date.now();
+    return this.options.threads().map((thread) => {
+      const activity = this.#activity.get(thread);
+      const inactiveMs = Math.max(0, now - (activity?.lastActivity ?? now));
+      let state: LoadedSession["state"] = "idle";
+      let reason: LoadedSession["reason"] = "none";
+      if (activity?.closeFailed) {
+        state = "failed";
+        reason = "closeFailed";
+      } else if (this.#closing.has(thread.id)) {
+        state = "closing";
+      } else if (thread.running || thread.activeTurnId) {
+        state = "running";
+        reason = "operation";
+      } else if (thread.persistenceError || activity?.outputFailed) {
+        state = "blocked";
+        reason = "persistence";
+      } else if (
+        thread.record.subagent ||
+        thread.record.state !== "ready" ||
+        !thread.record.nativeSessionRef
+      ) {
+        state = "blocked";
+        reason = "identity";
+      } else if (this.#operations.has(thread.id)) {
+        state = "busy";
+        reason = "operation";
+      } else if (!this.options.canRelease(thread)) {
+        state = "busy";
+        reason = "background";
+      } else if (!this.#settings.enabled) {
+        reason = "disabled";
+      } else if (inactiveMs < this.#settings.timeoutMinutes * 60_000) {
+        reason = "timeout";
+      }
+      return {
+        threadId: thread.id,
+        title: thread.record.title ?? thread.id,
+        harnessId: thread.harnessId,
+        state,
+        reason,
+        inactiveMs,
+      };
+    });
   }
 
   #eligible(thread: ExternalThread): boolean {

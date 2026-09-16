@@ -27,6 +27,28 @@ export interface RendererSettingsMessages {
   readonly otherSection: string;
   readonly appearanceDescription: string;
   readonly appearanceGroup: string;
+  readonly loadedSessions: {
+    title: string;
+    description: string;
+    columns: readonly string[];
+    empty: string;
+    failed: string;
+    unavailable: string;
+    loading: string;
+    minutes: string;
+    states: Record<"idle" | "running" | "busy" | "closing" | "failed" | "blocked", string>;
+    reasons: Record<
+      | "none"
+      | "disabled"
+      | "timeout"
+      | "operation"
+      | "background"
+      | "identity"
+      | "persistence"
+      | "closeFailed",
+      string
+    >;
+  };
   readonly idleReleaseSection: string;
   readonly idleReleaseTitle: string;
   readonly idleReleaseDescription: string;
@@ -214,6 +236,35 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   otherSection: "Other",
   appearanceDescription: "Conversation display and local resource management.",
   appearanceGroup: "Appearance",
+  loadedSessions: {
+    title: "Loaded sessions",
+    description:
+      "Local external Harnesses only. Refreshes every 10 seconds without waking sessions or resetting activity. Released sessions disappear from this list.",
+    columns: ["Session", "Harness", "State", "Since last activity", "Release constraint"],
+    empty: "No loaded external sessions.",
+    failed: "Could not load session status.",
+    unavailable: "Local Host does not support session status or is unavailable.",
+    loading: "Loading session status…",
+    minutes: "{minutes} min",
+    states: {
+      idle: "Idle",
+      running: "Running",
+      busy: "Busy",
+      closing: "Releasing",
+      failed: "Release failed",
+      blocked: "Blocked",
+    },
+    reasons: {
+      none: "—",
+      disabled: "Automatic release is off",
+      timeout: "Timeout not reached",
+      operation: "Turn or Host operation in progress",
+      background: "Subagent, steering, command or interaction pending",
+      identity: "Session identity unavailable or snapshot-only session",
+      persistence: "Persistence or output error",
+      closeFailed: "Restart Desktop before retrying",
+    },
+  },
   idleReleaseSection: "Resource management",
   idleReleaseTitle: "Release idle sessions",
   idleReleaseDescription:
@@ -435,6 +486,35 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   otherSection: "其他",
   appearanceDescription: "会话显示与本地资源管理。",
   appearanceGroup: "外观",
+  loadedSessions: {
+    title: "已加载会话",
+    description:
+      "仅显示本地外部 Harness。每 10 秒刷新，不唤醒会话、不重置活动时间。释放后的会话从列表移除。",
+    columns: ["会话", "Harness", "状态", "距最后活动", "暂不能释放的原因"],
+    empty: "暂无已加载的外部会话。",
+    failed: "无法加载会话状态。",
+    unavailable: "本地 Host 不支持会话状态查询或当前不可用。",
+    loading: "正在加载会话状态…",
+    minutes: "{minutes} 分钟",
+    states: {
+      idle: "空闲",
+      running: "执行中",
+      busy: "忙碌",
+      closing: "释放中",
+      failed: "释放失败",
+      blocked: "不可释放",
+    },
+    reasons: {
+      none: "—",
+      disabled: "自动释放已关闭",
+      timeout: "尚未达到超时",
+      operation: "任务或 Host 操作尚未结束",
+      background: "存在子任务、转向、命令或待处理交互",
+      identity: "缺少可恢复身份或仅有快照",
+      persistence: "持久化或输出异常",
+      closeFailed: "需重启 Desktop 后重试",
+    },
+  },
   idleReleaseSection: "资源管理",
   idleReleaseTitle: "自动释放空闲会话",
   idleReleaseDescription: "空闲超时后关闭后台实例，再次使用时自动恢复。",

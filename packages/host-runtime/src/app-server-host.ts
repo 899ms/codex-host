@@ -1,5 +1,6 @@
 import {
   IDLE_RELEASE_SETTINGS_METHOD,
+  LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
 } from "@codexhost/shared-contracts";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
@@ -923,6 +924,12 @@ export class AppServerHost {
     frame: Buffer<ArrayBufferLike>,
   ): Promise<void> {
     if (this.#closeRequested) return;
+    if (request.method === LOADED_SESSIONS_METHOD) {
+      await this.#writer.json(
+        rpcEnvelope(request, { result: this.#externalRuntime.idleRelease.list() }),
+      );
+      return;
+    }
     if (request.method === IDLE_RELEASE_SETTINGS_METHOD) {
       const parsed = idleReleaseSettingsSchema.safeParse(request.params);
       if (!parsed.success) {

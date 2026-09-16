@@ -102,6 +102,37 @@ describe("external Thread idle release", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("lists loaded status without refreshing activity or restoring released sessions", async () => {
+    const f = await fixture();
+    expect(f.idle.list()[0]).toMatchObject({
+      threadId: f.id,
+      state: "idle",
+      reason: "disabled",
+      inactiveMs: 0,
+    });
+    f.idle.configure({ enabled: true, timeoutMinutes: 10 });
+    await vi.advanceTimersByTimeAsync(9 * MINUTE);
+    expect(f.idle.list()[0]).toMatchObject({
+      state: "idle",
+      reason: "timeout",
+      inactiveMs: 9 * MINUTE,
+    });
+    f.thread.running = true;
+    expect(f.idle.list()[0]).toMatchObject({ state: "running", reason: "operation" });
+    f.thread.running = false;
+    f.canRelease.mockReturnValue(false);
+    expect(f.idle.list()[0]).toMatchObject({ state: "busy", reason: "background" });
+    f.canRelease.mockReturnValue(true);
+    f.thread.persistenceError = new Error("Store failed");
+    expect(f.idle.list()[0]).toMatchObject({ state: "blocked", reason: "persistence" });
+    f.thread.persistenceError = null;
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    expect(f.close).toHaveBeenCalledTimes(1);
+    expect(f.idle.list()).toEqual([]);
+    expect(f.open).not.toHaveBeenCalled();
+    f.idle.stop();
+  });
+
   it("closes only at the configured threshold, then resumes the same identity once", async () => {
     const f = await fixture();
     f.idle.configure({ enabled: true, timeoutMinutes: 30 });
@@ -205,6 +236,7 @@ describe("external Thread idle release", () => {
     f.thread.outputTask = drain.promise;
     f.idle.configure({ enabled: true, timeoutMinutes: 10 });
     await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(f.idle.list()[0]).toMatchObject({ state: "closing" });
     const admitted = vi.fn(async () => f.runtime.resolve(f.id));
     const request = f.idle.runOperation(f.id, admitted);
     await Promise.resolve();
@@ -239,6 +271,7 @@ describe("external Thread idle release", () => {
       await vi.advanceTimersByTimeAsync(11 * MINUTE);
       const result = await f.runtime.resolve(f.id);
       expect(result).toMatchObject({ kind: "error", error: { code: -32075 } });
+      expect(f.idle.list()[0]).toMatchObject({ state: "failed", reason: "closeFailed" });
       expect(f.runtime.get(f.id)).toBe(f.thread);
       expect(f.open).not.toHaveBeenCalled();
       expect(f.diagnose).toHaveBeenCalled();

@@ -535,8 +535,27 @@ describe("AppServerHost idle resource release", () => {
         params: { enabled: true, timeoutMinutes: 10 },
       });
       await fixture.collector.waitFor((message) => requestId(message, 900));
-      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      writeRequest(fixture.desktopInput, {
+        id: 910,
+        method: "codexhost/sessions/loaded/list",
+        params: {},
+      });
+      const listing = await fixture.collector.waitFor((message) => requestId(message, 910));
+      expect(listing).toMatchObject({
+        result: [{ threadId, state: "idle", reason: "timeout", inactiveMs: 9 * 60_000 }],
+      });
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
       expect(close).toHaveBeenCalledTimes(1);
+      writeRequest(fixture.desktopInput, {
+        id: 911,
+        method: "codexhost/sessions/loaded/list",
+        params: {},
+      });
+      expect(await fixture.collector.waitFor((message) => requestId(message, 911))).toMatchObject({
+        result: [],
+      });
+      expect(open).not.toHaveBeenCalled();
       expect(fixture.collector.messages.some((message) => method(message, "thread/closed"))).toBe(
         false,
       );

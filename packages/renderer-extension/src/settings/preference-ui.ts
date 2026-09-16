@@ -21,8 +21,7 @@ export function createPreferenceGroup(
   heading.textContent = title;
   header.append(heading);
   const card = document.createElement("div");
-  card.className =
-    "divide-y divide-settings-divider rounded-[10px] border border-settings-border bg-settings-panel";
+  card.className = "rounded-[10px] border border-settings-border bg-settings-panel";
   group.setAttribute("aria-labelledby", heading.id);
   group.append(header, card);
   return { group, header, card };
@@ -38,7 +37,9 @@ export function createPreferenceItem(
   },
 ): { item: HTMLElement; description: HTMLElement } {
   const item = document.createElement("div");
-  item.className = "flex min-h-[60px] items-center justify-between gap-6 px-4 py-3";
+  // Rows own their divider so a hidden row never leaves a stray border behind.
+  item.className =
+    "flex min-h-[60px] items-center justify-between gap-6 border-t border-settings-divider px-4 py-3 first:border-t-0";
   const copy = document.createElement("div");
   copy.className = "flex min-w-0 flex-col gap-0.5";
   const heading = document.createElement("div");
