@@ -71,50 +71,62 @@ afterEach(async () => {
 });
 
 describe("Harness plugin discovery and loading", () => {
-  it("loads the relocated CodeBuddy bundle without workspace dependencies and isolates factories", async () => {
-    const directory = await root(["codebuddy"]);
-    await cp(
-      path.resolve("packages/host-runtime/dist/plugins/codebuddy"),
-      path.join(directory, "codebuddy"),
-      { recursive: true },
-    );
-    const options = {
-      roots: [directory],
-      context: {
-        ...context,
-        environment: { CODEXHOST_CODEBUDDY_COMMAND: path.join(directory, "missing-codebuddy") },
-      },
-      warmup: false,
-    };
-    const first = await loadHarnessPlugins(options),
-      second = await loadHarnessPlugins(options);
-    try {
-      expect(first.list()).toMatchObject([{ id: "codebuddy", name: "CodeBuddy" }]);
-      const adapter = [...first.adapters.values()][0],
-        independent = [...second.adapters.values()][0];
-      expect(adapter).not.toBe(independent);
-      expect(await adapter?.inspect()).toMatchObject({ status: "notInstalled" });
-      await first.close();
-      expect(await independent?.inspect()).toMatchObject({ status: "notInstalled" });
-    } finally {
-      await first.close();
-      await second.close();
-    }
-  });
-
-  it.each(["pi", "claude-code", "deepseek-harness", "opencode", "grok", "omp", "antigravity"])(
-    "ships a valid %s manifest and resolvable compiled resources",
-    async (id) => {
-      const location = path.resolve("packages/adapters", id);
-      const manifest = harnessPluginManifestSchema.parse(
-        JSON.parse(await readFile(path.join(location, "manifest.json"), "utf8")),
-      );
-      expect(manifest.id).toBe(id);
-      await expect(pluginResourcePath(location, manifest.entry)).resolves.toMatch(/\.js$/u);
-      if (manifest.icon)
-        await expect(readPluginIcon(location, manifest.icon)).resolves.toMatch(/^data:image\//u);
+  it.each([
+    ["codebuddy", "CodeBuddy", "CODEXHOST_CODEBUDDY_COMMAND"],
+    ["qoder", "Qoder", "CODEXHOST_QODER_COMMAND"],
+    ["qoder-cn", "Qoder CN", "CODEXHOST_QODERCN_COMMAND"],
+  ])(
+    "loads the relocated %s bundle without workspace dependencies and isolates factories",
+    async (id, name, commandVariable) => {
+      const directory = await root([id]);
+      await cp(path.resolve("packages/host-runtime/dist/plugins", id), path.join(directory, id), {
+        recursive: true,
+      });
+      const options = {
+        roots: [directory],
+        context: {
+          ...context,
+          environment: { [commandVariable]: path.join(directory, `missing-${id}`) },
+        },
+        warmup: false,
+      };
+      const first = await loadHarnessPlugins(options),
+        second = await loadHarnessPlugins(options);
+      try {
+        expect(first.list()).toMatchObject([{ id, name }]);
+        const adapter = [...first.adapters.values()][0],
+          independent = [...second.adapters.values()][0];
+        expect(adapter).not.toBe(independent);
+        expect(await adapter?.inspect()).toMatchObject({ status: "notInstalled" });
+        await first.close();
+        expect(await independent?.inspect()).toMatchObject({ status: "notInstalled" });
+      } finally {
+        await first.close();
+        await second.close();
+      }
     },
   );
+
+  it.each([
+    "pi",
+    "claude-code",
+    "deepseek-harness",
+    "opencode",
+    "grok",
+    "omp",
+    "antigravity",
+    "qoder",
+    "qoder-cn",
+  ])("ships a valid %s manifest and resolvable compiled resources", async (id) => {
+    const location = path.resolve("packages/adapters", id);
+    const manifest = harnessPluginManifestSchema.parse(
+      JSON.parse(await readFile(path.join(location, "manifest.json"), "utf8")),
+    );
+    expect(manifest.id).toBe(id);
+    await expect(pluginResourcePath(location, manifest.entry)).resolves.toMatch(/\.js$/u);
+    if (manifest.icon)
+      await expect(readPluginIcon(location, manifest.icon)).resolves.toMatch(/^data:image\//u);
+  });
   it.each([
     "pi",
     "claude-code",
@@ -421,7 +433,7 @@ describe("Harness plugin discovery and loading", () => {
         code: `
       import { FakeHarnessAdapter } from ${JSON.stringify(fakeModule)};
       export async function createHarnessAdapter() {
-        await new Promise((resolve) => setTimeout(resolve, 80));
+        await new Promise((resolve) => setTimeout(resolve, 800));
         return new FakeHarnessAdapter(${JSON.stringify(id)});
       }
     `,
@@ -431,7 +443,8 @@ describe("Harness plugin discovery and loading", () => {
     const registry = await loadHarnessPlugins({
       roots: [directory],
       context,
-      loadTimeoutMs: 130,
+      // Leave room for CI imports; two worker waves still exceed a shared 1300ms budget.
+      loadTimeoutMs: 1_300,
       diagnose,
     });
     try {
