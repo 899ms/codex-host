@@ -152,6 +152,7 @@ describe("installed Harness composition", () => {
     ["cursor-cli", "CODEXHOST_CURSOR_COMMAND"],
     ["hermes", "CODEXHOST_HERMES_COMMAND"],
     ["qoder", "CODEXHOST_QODER_COMMAND"],
+    ["qoder-cn", "CODEXHOST_QODERCN_COMMAND"],
   ])(
     "preserves the explicit %s command rather than finding another local installation",
     async (id, commandVariable) => {
