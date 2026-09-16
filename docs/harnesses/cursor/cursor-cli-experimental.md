@@ -75,7 +75,9 @@ contract investigation before release acceptance.
   extensions are not all implemented.
 - Model inspection opens one empty native ACP session per cache refresh because
   the catalog is returned by `session/new`. It submits no model prompt. Both
-  successful and failed inspection results are cached for five minutes on demand.
+  successful and failed inspection results are cached per working directory without
+  time-based expiry, until explicit refresh or Adapter shutdown. Concurrent checks,
+  including refresh requests, reuse an in-flight inspection.
 - The native history format and operating-system authentication behavior require
   platform/version acceptance before formal product support is claimed.
 
@@ -196,7 +198,7 @@ before/after history reads, and changed inputs or missing Tasks fail closed.
 ## macOS SSH and Remote Control
 
 Direct SSH startup can report a locked login keychain despite native GUI login.
-Managed remote plugin construction selects the [native Aqua broker](native-aqua-broker.md)
+Managed remote plugin construction selects the [native Aqua broker](../../platforms/macos/native-aqua-broker.md)
 and preserves that login session:
 
 ```sh

@@ -19,6 +19,9 @@ import {
   TRIGGER_CHIP_CLASS,
 } from "./renderer-trigger-chip-style.js";
 
+import { readModelFavorites, writeModelFavorites } from "./renderer-model-favorites.js";
+import { createModelFavoriteIcon, ensureModelOptionStyle } from "./renderer-model-option-style.js";
+
 const MENU_CLASSES =
   "fixed z-50 overflow-hidden rounded-xl bg-token-dropdown-background/90 text-token-foreground shadow-lg backdrop-blur-xl";
 
@@ -52,6 +55,9 @@ export interface RendererModelPickerPresentation {
 }
 
 interface ModelOptionControl {
+  row: HTMLElement;
+  favorite: HTMLButtonElement;
+  label: string;
   button: HTMLButtonElement;
   check: HTMLElement;
   searchText: string;
@@ -75,6 +81,8 @@ export interface RendererModelPickerControl {
   searchInput: HTMLInputElement;
   searchHeader: HTMLElement;
   searchEmpty: HTMLElement;
+  harnessId: string;
+  favorites: Set<string>;
   options: Map<string, ModelOptionControl>;
   thinkingOptions: Map<string, ThinkingOptionControl>;
   close(): void;
@@ -325,18 +333,42 @@ function applyModelSearchFilter(control: RendererModelPickerControl): void {
   const visibleGroups = new Map<HTMLElement, boolean>();
   for (const option of control.options.values()) {
     const matches = query.length === 0 || option.searchText.includes(query);
-    option.button.hidden = !matches;
+    option.row.hidden = !matches;
+    option.row.style.display = matches ? "flex" : "none";
     if (matches) visibleCount += 1;
     if (option.groupHeading && matches) visibleGroups.set(option.groupHeading, true);
   }
   for (const option of control.options.values()) {
-    if (option.groupHeading && !visibleGroups.has(option.groupHeading)) {
-      option.groupHeading.hidden = true;
-    } else if (option.groupHeading) {
-      option.groupHeading.hidden = false;
+    if (option.groupHeading) {
+      const visible = visibleGroups.has(option.groupHeading);
+      option.groupHeading.hidden = !visible;
+      option.groupHeading.style.display = visible ? "flex" : "none";
     }
   }
   control.searchEmpty.hidden = query.length === 0 || visibleCount > 0;
+}
+
+function syncFavorite(option: ModelOptionControl, favorite: boolean): void {
+  option.favorite.setAttribute("aria-pressed", String(favorite));
+  const label = `${favorite ? "Unfavorite" : "Favorite"} ${option.label}`;
+  option.favorite.setAttribute("aria-label", label);
+  option.favorite.title = label;
+}
+
+function orderModelFavorites(control: RendererModelPickerControl): void {
+  // Keep native groups intact and preserve catalog order within each partition.
+  const groups = new Set([...control.options.values()].map((option) => option.groupHeading));
+  for (const heading of groups) {
+    if (heading) control.modelMenu.append(heading);
+    for (const favorite of [true, false]) {
+      for (const [id, option] of control.options) {
+        if (option.groupHeading !== heading) continue;
+        const isFavorite = control.favorites.has(id);
+        syncFavorite(option, isFavorite);
+        if (isFavorite === favorite) control.modelMenu.append(option.row);
+      }
+    }
+  }
 }
 
 export function mountRendererModelPicker(
@@ -345,6 +377,7 @@ export function mountRendererModelPicker(
   onSelectThinking: (thinkingOptionId: string) => void,
 ): RendererModelPickerControl {
   ensureRendererTriggerChipStyle(document);
+  ensureModelOptionStyle(document);
 
   const root = document.createElement("div");
   root.setAttribute("data-codexhost-model-control", composerId);
@@ -479,7 +512,14 @@ export function mountRendererModelPicker(
           active.closest('textarea, [contenteditable="true"], [role="textbox"]') !== null));
     if (!movedToComposer) return;
     requestAnimationFrame(() => {
-      if (popoverOpen(modelMenu) && searchInput.isConnected) searchInput.focus();
+      // A legitimate move to a model/favorite button may complete after blur.
+      // Do not steal focus back from that control on the next animation frame.
+      if (
+        popoverOpen(modelMenu) &&
+        searchInput.isConnected &&
+        !modelMenu.contains(document.activeElement)
+      )
+        searchInput.focus();
     });
   };
   searchInput.addEventListener("blur", onSearchBlur);
@@ -498,6 +538,9 @@ export function mountRendererModelPicker(
   };
   const openModelMenu = (standalone = false): void => {
     if ((!standalone && !popoverOpen(menu)) || popoverOpen(modelMenu)) return;
+    control.favorites = readModelFavorites(control.harnessId);
+    orderModelFavorites(control);
+    modelMenu.scrollTop = 0;
     modelMenu.showPopover();
     positionModelMenu(control, standalone);
     modelButton.setAttribute("aria-expanded", "true");
@@ -542,6 +585,27 @@ export function mountRendererModelPicker(
     }
   };
   const onModelMenuClick = (event: MouseEvent): void => {
+    const favoriteButton =
+      event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>("button[data-favorite-model-id]")
+        : null;
+    const favoriteId = favoriteButton?.dataset.favoriteModelId;
+    if (favoriteId) {
+      event.stopPropagation();
+      control.favorites = readModelFavorites(control.harnessId);
+      if (control.favorites.has(favoriteId)) control.favorites.delete(favoriteId);
+      else control.favorites.add(favoriteId);
+      writeModelFavorites(control.harnessId, control.favorites);
+      const focused = document.activeElement;
+      orderModelFavorites(control);
+      // Moving a row can blur its button. Preserve keyboard operation without
+      // scrolling back down to an unfavorited row.
+      if (focused instanceof HTMLElement && modelMenu.contains(focused)) {
+        focused.focus({ preventScroll: true });
+      }
+      modelMenu.scrollTop = 0;
+      return;
+    }
     const target =
       event.target instanceof Element
         ? event.target.closest<HTMLButtonElement>("button[data-model-id]")
@@ -602,6 +666,8 @@ export function mountRendererModelPicker(
     searchInput,
     searchHeader,
     searchEmpty,
+    harnessId: "",
+    favorites: new Set(),
     options,
     thinkingOptions,
     close,
@@ -691,14 +757,27 @@ function rebuildOptions(control: RendererModelPickerControl, view: RendererModel
     text.title = model.label;
     const check = createCheck();
     button.append(text, check);
+    const row = document.createElement("div");
+    row.setAttribute("role", "presentation");
+    row.dataset.codexhostModelRow = "true";
+    button.style.minWidth = "0";
+    button.style.flex = "1";
+    const favorite = document.createElement("button");
+    favorite.type = "button";
+    favorite.dataset.favoriteModelId = model.ref.id;
+    favorite.append(createModelFavoriteIcon(document));
+    row.append(button, favorite);
     control.options.set(model.ref.id, {
+      row,
+      favorite,
+      label: model.label,
       button,
       check,
       searchText: `${model.label} ${model.ref.id}`.toLowerCase(),
       ...(typeof model.selectable === "boolean" ? { selectable: model.selectable } : {}),
       ...(groupHeading ? { groupHeading } : {}),
     });
-    control.modelMenu.append(button);
+    control.modelMenu.append(row);
   };
   if (groups.length > 0) {
     for (const group of groups) {
@@ -709,6 +788,7 @@ function rebuildOptions(control: RendererModelPickerControl, view: RendererModel
   } else {
     for (const model of models) appendModel(model);
   }
+  orderModelFavorites(control);
   applyModelSearchFilter(control);
   // rebuildOptions replaced the submenu children above, which moves the focused
   // search input out and back in and therefore drops focus; restore it while
@@ -720,7 +800,14 @@ export function renderRendererModelPicker(
   control: RendererModelPickerControl,
   view: RendererModelControlView,
   visible: boolean,
+  harnessId = "",
 ): void {
+  if (control.harnessId !== harnessId) {
+    control.close();
+    control.harnessId = harnessId;
+    control.favorites = readModelFavorites(harnessId);
+    delete control.root.dataset.catalogSignature;
+  }
   control.root.style.display = visible ? "inline-flex" : "none";
   control.root.style.alignItems = "center";
   control.root.style.alignSelf = "center";

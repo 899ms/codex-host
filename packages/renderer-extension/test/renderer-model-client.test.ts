@@ -27,6 +27,7 @@ import {
   THREAD_TOKEN_USAGE_UPDATED_METHOD,
   THREAD_USAGE_INSPECT_METHOD,
   THREAD_USAGE_UPDATED_METHOD,
+  TURN_COMPLETED_METHOD,
   UPDATE_CHECK_METHOD,
   UPDATE_START_METHOD,
   UPDATE_STATUS_METHOD,
@@ -312,6 +313,7 @@ describe("Renderer fixed Model request client", () => {
       "listHarnessAccounts",
       "listHarnessPlugins",
       "listHarnessSessions",
+      "listLoadedSessions",
       "listSessionImportSources",
       "listThreadOwnership",
       "openHarnessWebUi",
@@ -320,6 +322,7 @@ describe("Renderer fixed Model request client", () => {
       "selectThreadModel",
       "selectThreadPermissionMode",
       "selectThreadThinking",
+      "setIdleReleaseSettings",
       "startUpdate",
       "subscribeCodexAccounts",
       "subscribeThreadUsage",
@@ -415,7 +418,7 @@ describe("Renderer fixed Model request client", () => {
     const onUsage = vi.fn();
     const unsubscribe = client.subscribeThreadUsage?.(onUsage);
     expect(addNotificationCallback).toHaveBeenCalledWith(
-      [THREAD_TOKEN_USAGE_UPDATED_METHOD, THREAD_USAGE_UPDATED_METHOD],
+      [THREAD_TOKEN_USAGE_UPDATED_METHOD, THREAD_USAGE_UPDATED_METHOD, TURN_COMPLETED_METHOD],
       expect.any(Function),
     );
     usageNotification?.({
@@ -584,6 +587,40 @@ describe("Renderer fixed Model request client", () => {
     expect(sendRequest).toHaveBeenCalledOnce();
   });
 
+  it("re-reads account quota when a Turn completes without a dispatched Usage notification", async () => {
+    // Codex Desktop drops `codexhost/thread/usage/updated` before renderer
+    // callbacks, and `thread/tokenUsage/updated` needs Context usage, so a
+    // completed reply must still refresh the quota pill on its own.
+    let notify: ((notification: unknown) => void) | undefined;
+    const addNotificationCallback = vi.fn(
+      (_method: string | readonly string[], callback: (notification: unknown) => void) => {
+        notify = callback;
+        return () => undefined;
+      },
+    );
+    const accountCredits = { usedPercent: 81, periodType: "five_hour" as const };
+    const sendRequest = vi.fn().mockResolvedValue({
+      threadId: "thread-1",
+      usage: null,
+      accountCredits,
+    });
+    const client = createRendererModelClient([{ addNotificationCallback, sendRequest }]);
+    const onUsage = vi.fn();
+    const unsubscribe = client?.subscribeThreadUsage?.(onUsage);
+
+    notify?.({ method: TURN_COMPLETED_METHOD, params: { threadId: "", turn: {} } });
+    notify?.({
+      method: TURN_COMPLETED_METHOD,
+      params: { threadId: "thread-1", turn: { id: "turn-1" } },
+    });
+
+    await vi.waitFor(() => expect(onUsage).toHaveBeenCalledOnce());
+    expect(sendRequest).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(THREAD_USAGE_INSPECT_METHOD, { threadId: "thread-1" });
+    expect(onUsage).toHaveBeenCalledWith({ threadId: "thread-1", usage: null, accountCredits });
+    unsubscribe?.();
+  });
+
   it("defers Usage notification registration until a request manager is available", () => {
     const relay = createThreadUsageSubscriptionRelay();
     const listener = vi.fn();
@@ -609,6 +646,60 @@ describe("Renderer fixed Model request client", () => {
     unsubscribe();
     expect(removeNotification).toHaveBeenCalledOnce();
     relay.dispose();
+  });
+
+  it("rebinds Usage to the current connection and ignores retired callbacks", () => {
+    const relay = createThreadUsageSubscriptionRelay();
+    const listener = vi.fn();
+    const unsubscribe = relay.subscribe(listener);
+    const connection = () => {
+      let notify: ((update: ThreadUsageInspection) => void) | undefined;
+      const remove = vi.fn();
+      return {
+        remove,
+        subscribeThreadUsage: vi.fn((callback: (update: ThreadUsageInspection) => void) => {
+          notify = callback;
+          return remove;
+        }),
+        push(usedPercent: number) {
+          notify?.({
+            threadId: hostThreadIdSchema.parse("thread-1"),
+            usage: null,
+            accountCredits: { usedPercent, periodType: "five_hour" },
+          });
+        },
+      };
+    };
+    const previous = connection();
+    const current = connection();
+    relay.connect(previous);
+    previous.push(16);
+    relay.connect(current);
+    relay.connect(current);
+    current.push(20);
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountCredits: { usedPercent: 20, periodType: "five_hour" },
+      }),
+    );
+    expect(previous.remove).toHaveBeenCalledOnce();
+    expect(current.subscribeThreadUsage).toHaveBeenCalledOnce();
+    previous.push(17);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    relay.connect(null);
+    current.push(21);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(current.remove).toHaveBeenCalledOnce();
+    relay.connect(current);
+    current.push(22);
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(current.subscribeThreadUsage).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    current.push(23);
+    expect(listener).toHaveBeenCalledTimes(3);
+    relay.dispose();
+    expect(current.remove).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed when request manager ownership is absent or ambiguous", () => {
