@@ -134,8 +134,7 @@ class OutputCollector {
 
 describe("QoderAdapter", () => {
   describe("inspect()", () => {
-    it("retries an expired synchronous discovery failure", async () => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    it("retries a synchronous discovery failure without waiting for expiry", async () => {
       const resolveExecutable = vi
         .fn()
         .mockImplementationOnce(() => {
@@ -145,14 +144,65 @@ describe("QoderAdapter", () => {
       const adapter = new QoderAdapter({ resolveExecutable, getAvailableModels: async () => [] });
       try {
         expect((await adapter.inspect()).status).toBe("notInstalled");
-        now.mockReturnValue(5001);
         expect((await adapter.inspect()).status).toBe("ready");
         expect(resolveExecutable).toHaveBeenCalledTimes(2);
       } finally {
-        now.mockRestore();
         await adapter.close();
       }
     });
+
+    it.each(["global", "cn"] as const)(
+      "keeps the %s catalog until explicit refresh, scoped by cwd",
+      async (variant) => {
+        const now = vi.spyOn(Date, "now").mockReturnValue(0);
+        const getAvailableModels = vi.fn(async () => []);
+        const adapter = new QoderAdapter({
+          variant,
+          resolveExecutable: () => "qodercli",
+          getAvailableModels,
+        });
+        try {
+          const first = await adapter.inspect({ cwd: "D:/project" });
+          expect(first.status).toBe("ready");
+          now.mockReturnValue(365 * 24 * 60 * 60 * 1000);
+          expect(await adapter.inspect({ cwd: "D:/project" })).toBe(first);
+          expect(getAvailableModels).toHaveBeenCalledTimes(1);
+          expect((await adapter.inspect({ cwd: "D:/project", refresh: true })).status).toBe(
+            "ready",
+          );
+          expect(getAvailableModels).toHaveBeenCalledTimes(2);
+          expect((await adapter.inspect({ cwd: "D:/other" })).status).toBe("ready");
+          expect(getAvailableModels).toHaveBeenCalledTimes(3);
+        } finally {
+          now.mockRestore();
+          await adapter.close();
+        }
+      },
+    );
+
+    it.each(["global", "cn"] as const)(
+      "does not cache %s model probe failures",
+      async (variant) => {
+        const queryFactory = vi
+          .fn<QoderQueryFactory>()
+          .mockImplementationOnce(() => {
+            throw new Error("authentication required");
+          })
+          .mockReturnValue(new FakeQoderQuery());
+        const adapter = new QoderAdapter({
+          variant,
+          resolveExecutable: () => "qodercli",
+          queryFactory,
+        });
+        try {
+          expect((await adapter.inspect()).status).toBe("unavailable");
+          expect((await adapter.inspect()).status).toBe("ready");
+          expect(queryFactory).toHaveBeenCalledTimes(2);
+        } finally {
+          await adapter.close();
+        }
+      },
+    );
 
     it("returns notInstalled when executable is not found", async () => {
       const adapter = new QoderAdapter({

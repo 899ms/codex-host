@@ -7,13 +7,15 @@ import {
   type HarnessDiscoverySpec,
 } from "@codexhost/harness-discovery";
 
+import type { QoderVariant } from "./qoder-runtime.js";
+
 export class QoderExecutableError extends Error {
   readonly code = "QODER_NOT_FOUND";
 }
 
 export const CODEXHOST_QODER_COMMAND = "CODEXHOST_QODER_COMMAND";
+export const CODEXHOST_QODERCN_COMMAND = "CODEXHOST_QODERCN_COMMAND";
 export const QODER_SDK_CUSTOM_BASE_URL_BYOK = "QODER_SDK_CUSTOM_BASE_URL_BYOK";
-const QODER_NPM_CLI_ENTRYPOINT = "node_modules/@qoder-ai/qodercli/bundle/qodercli.js";
 
 export function qoderEnvironment(
   environment?: Record<string, string | undefined>,
@@ -24,38 +26,51 @@ export function qoderEnvironment(
   };
 }
 
-export const qoderDiscoverySpec: HarnessDiscoverySpec = {
-  id: "qoder",
-  command: "qodercli",
-  commandEnvironmentVariable: CODEXHOST_QODER_COMMAND,
-  installRoots: {
-    posix: [
-      "~/.local/bin",
-      "~/.qoder/bin",
-      VERSION_MANAGER_ROOTS,
-      "/usr/local/bin",
-      "/opt/homebrew/bin",
-    ],
-    windows: [
-      "${LOCALAPPDATA}/Programs/Qoder",
-      "${LOCALAPPDATA}/Qoder",
-      "~/.qoder/bin",
-      "${APPDATA}/npm",
-      VERSION_MANAGER_ROOTS,
-    ],
-  },
-  runnableCandidate: (candidate, { platform, isExecutable }) => {
-    const pathFlavor = targetPath(platform);
-    if (platform !== "win32" || pathFlavor.extname(candidate).toLowerCase() !== ".cmd") {
-      return candidate;
-    }
-    const entrypoint = pathFlavor.join(
-      pathFlavor.dirname(candidate),
-      ...QODER_NPM_CLI_ENTRYPOINT.split("/"),
-    );
-    return isExecutable(entrypoint) ? entrypoint : undefined;
-  },
-};
+function discoverySpec(variant: QoderVariant): HarnessDiscoverySpec {
+  const cn = variant === "cn";
+  const configDirectory = cn ? ".qoder-cn" : ".qoder";
+  const productName = cn ? "QoderCN" : "Qoder";
+  const command = cn ? "qoderclicn" : "qodercli";
+  const npmPackage = cn ? "@qodercn-ai/qoderclicn" : "@qoder-ai/qodercli";
+  return {
+    id: cn ? "qoder-cn" : "qoder",
+    command,
+    commandEnvironmentVariable: cn ? CODEXHOST_QODERCN_COMMAND : CODEXHOST_QODER_COMMAND,
+    installRoots: {
+      posix: [
+        "~/.local/bin",
+        `~/${configDirectory}/bin`,
+        VERSION_MANAGER_ROOTS,
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+      ],
+      windows: [
+        `\${LOCALAPPDATA}/Programs/${productName}`,
+        `\${LOCALAPPDATA}/${productName}`,
+        `~/${configDirectory}/bin`,
+        "${APPDATA}/npm",
+        VERSION_MANAGER_ROOTS,
+      ],
+    },
+    runnableCandidate: (candidate, { platform, isExecutable }) => {
+      const pathFlavor = targetPath(platform);
+      if (platform !== "win32" || pathFlavor.extname(candidate).toLowerCase() !== ".cmd") {
+        return candidate;
+      }
+      const entrypoint = pathFlavor.join(
+        pathFlavor.dirname(candidate),
+        "node_modules",
+        ...npmPackage.split("/"),
+        "bundle",
+        `${command}.js`,
+      );
+      return isExecutable(entrypoint) ? entrypoint : undefined;
+    },
+  };
+}
+
+export const qoderDiscoverySpec = discoverySpec("global");
+export const qoderCnDiscoverySpec = discoverySpec("cn");
 
 export const qoderFallbackSpec: HarnessDiscoverySpec = {
   ...qoderDiscoverySpec,
@@ -64,6 +79,7 @@ export const qoderFallbackSpec: HarnessDiscoverySpec = {
 
 export function resolveQoderExecutable(
   input: {
+    variant?: QoderVariant;
     command?: string;
     environment?: NodeJS.ProcessEnv;
     homeDirectory?: string;
@@ -72,9 +88,11 @@ export function resolveQoderExecutable(
   dependencies: HarnessDiscoveryDependencies = {},
 ): string {
   const platform = input.platform ?? process.platform;
+  const cn = input.variant === "cn";
+  const spec = cn ? qoderCnDiscoverySpec : qoderDiscoverySpec;
   const resolution =
     resolveHarnessExecutable(
-      qoderDiscoverySpec,
+      spec,
       {
         ...(input.command ? { command: input.command } : {}),
         environment: input.environment ?? process.env,
@@ -86,7 +104,7 @@ export function resolveQoderExecutable(
     (input.command !== undefined
       ? undefined
       : resolveHarnessExecutable(
-          qoderFallbackSpec,
+          cn ? { ...spec, command: "qodercn" } : qoderFallbackSpec,
           {
             environment: input.environment ?? process.env,
             ...(input.homeDirectory ? { homeDirectory: input.homeDirectory } : {}),

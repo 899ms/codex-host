@@ -154,6 +154,7 @@ describe("production Desktop Controller", () => {
         "codebuddy",
         "cursor-cli",
         "qoder",
+        "qoder-cn",
         "hermes",
       ],
       timeoutMs: 90_000,

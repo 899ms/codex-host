@@ -108,6 +108,7 @@ describe("Renderer Agent icons", () => {
     ["codebuddy", codeBuddyAgentIconUrl],
     ["cursor-cli", cursorAgentIconUrl],
     ["qoder", qoderAgentIconUrl],
+    ["qoder-cn", qoderAgentIconUrl],
   ] as const)("renders %s with the bundled SVG asset", (agent, assetUrl) => {
     const image = {
       src: "",

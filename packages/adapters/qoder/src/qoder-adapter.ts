@@ -15,20 +15,7 @@ import {
   nativeSessionRefSchema,
   type HarnessId,
 } from "@codexhost/shared-contracts";
-import {
-  accessTokenFromEnv,
-  forkSession as defaultForkSession,
-  getSessionInfo as defaultGetSessionInfo,
-  getSessionMessages as defaultGetSessionMessages,
-  qodercliAuth,
-  query as sdkQuery,
-} from "@qoder-ai/qoder-agent-sdk";
-
-import {
-  CODEXHOST_QODER_COMMAND,
-  qoderEnvironment,
-  resolveQoderExecutable,
-} from "./qoder-command.js";
+import { qoderEnvironment, resolveQoderExecutable } from "./qoder-command.js";
 import { mapQoderException } from "./qoder-errors.js";
 import { mapQoderSnapshot } from "./qoder-history.js";
 import { decodeQoderModelRef, parseQoderModelCatalog } from "./qoder-models.js";
@@ -49,13 +36,10 @@ import type {
 } from "./qoder-sdk-types.js";
 import { QoderSession } from "./qoder-sdk-transport.js";
 
-const defaultQueryFactory: QoderQueryFactory = (input) => sdkQuery(input);
-
-function qoderAuthForEnvironment(environment: Record<string, string | undefined>) {
-  return environment.QODER_PERSONAL_ACCESS_TOKEN ? accessTokenFromEnv() : qodercliAuth();
-}
+import { QODER_RUNTIMES, qoderAuthForEnvironment, type QoderVariant } from "./qoder-runtime.js";
 
 export interface QoderAdapterOptions {
+  variant?: QoderVariant;
   commandOverride?: string;
   environment?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
@@ -74,7 +58,8 @@ export interface QoderAdapterOptions {
 }
 
 export class QoderAdapter implements HarnessAdapter {
-  readonly harnessId: HarnessId = harnessIdSchema.parse("qoder");
+  readonly harnessId: HarnessId;
+  readonly #variant: QoderVariant;
   readonly commandCatalog = QODER_FALLBACK_COMMAND_CATALOG;
 
   readonly #commandOverride: string | undefined;
@@ -97,34 +82,37 @@ export class QoderAdapter implements HarnessAdapter {
   readonly #resolveExecutable: typeof resolveQoderExecutable;
 
   readonly #sessions = new Set<HarnessSession>();
-  readonly #inspections = new Map<string, { result: HarnessInspection; refreshAfter: number }>();
+  readonly #inspections = new Map<string, Extract<HarnessInspection, { status: "ready" }>>();
   readonly #inFlightInspections = new Map<string, Promise<HarnessInspection>>();
 
   constructor(options: QoderAdapterOptions = {}) {
+    this.#variant = options.variant ?? "global";
+    const runtime = QODER_RUNTIMES[this.#variant];
+    this.harnessId = harnessIdSchema.parse(runtime.harnessId);
     this.#commandOverride =
-      options.commandOverride ?? options.environment?.[CODEXHOST_QODER_COMMAND];
+      options.commandOverride ?? options.environment?.[runtime.commandEnvironmentVariable];
     this.#environment = qoderEnvironment(options.environment);
     this.#platform = options.platform ?? process.platform;
-    this.#queryFactory = options.queryFactory ?? defaultQueryFactory;
-    this.#forkSession = options.forkSession ?? defaultForkSession;
-    this.#getSessionMessages = options.getSessionMessages ?? defaultGetSessionMessages;
-    this.#getSessionInfo = options.getSessionInfo ?? defaultGetSessionInfo;
+    this.#queryFactory = options.queryFactory ?? ((input) => runtime.sdk.query(input));
+    this.#forkSession = options.forkSession ?? runtime.sdk.forkSession;
+    this.#getSessionMessages = options.getSessionMessages ?? runtime.sdk.getSessionMessages;
+    this.#getSessionInfo = options.getSessionInfo ?? runtime.sdk.getSessionInfo;
     this.#getAvailableModels = options.getAvailableModels;
-    this.#resolveExecutable = options.resolveExecutable ?? resolveQoderExecutable;
+    this.#resolveExecutable =
+      options.resolveExecutable ??
+      ((input, dependencies) =>
+        resolveQoderExecutable({ ...input, variant: this.#variant }, dependencies));
   }
 
   async inspect(input?: InspectHarnessInput): Promise<HarnessInspection> {
     const cacheKey = input?.cwd ?? "";
-    const now = Date.now();
 
     if (input?.refresh) {
       this.#inspections.delete(cacheKey);
       this.#inFlightInspections.delete(cacheKey);
     } else {
       const cached = this.#inspections.get(cacheKey);
-      if (cached && cached.refreshAfter > now) {
-        return cached.result;
-      }
+      if (cached) return cached;
 
       const inFlight = this.#inFlightInspections.get(cacheKey);
       if (inFlight) return inFlight;
@@ -153,7 +141,7 @@ export class QoderAdapter implements HarnessAdapter {
                 cwd: input?.cwd ?? process.cwd(),
                 pathToQoderCLIExecutable: executable,
                 ...(this.#environment ? { env: this.#environment } : {}),
-                auth: qoderAuthForEnvironment(this.#environment),
+                auth: qoderAuthForEnvironment(this.#variant, this.#environment),
               },
             });
             try {
@@ -172,7 +160,6 @@ export class QoderAdapter implements HarnessAdapter {
               status: "unavailable",
               error: mapQoderException(error),
             };
-            this.#inspections.set(cacheKey, { result, refreshAfter: now + 5_000 });
             return result;
           }
         }
@@ -197,7 +184,7 @@ export class QoderAdapter implements HarnessAdapter {
           },
         };
 
-        this.#inspections.set(cacheKey, { result, refreshAfter: now + 30_000 });
+        this.#inspections.set(cacheKey, result);
         return result;
       } catch {
         const errorResult: HarnessInspection = {
@@ -208,7 +195,6 @@ export class QoderAdapter implements HarnessAdapter {
             retryable: false,
           },
         };
-        this.#inspections.set(cacheKey, { result: errorResult, refreshAfter: now + 5_000 });
         return errorResult;
       } finally {
         if (this.#inFlightInspections.get(cacheKey) === task) {
@@ -274,12 +260,12 @@ export class QoderAdapter implements HarnessAdapter {
       sessionId = randomUUID();
     } else if (input.kind === "resume") {
       const id = input.nativeRef?.nativeSessionId;
-      if (!id || typeof id !== "string") {
+      if (!id || typeof id !== "string" || input.nativeRef.harnessId !== this.harnessId) {
         return {
           ok: false,
           error: {
             code: "invalidRequest",
-            message: "Native session ref missing nativeSessionId",
+            message: "Native session ref missing nativeSessionId or belongs to another Harness",
             retryable: false,
           },
         };
@@ -378,7 +364,11 @@ export class QoderAdapter implements HarnessAdapter {
         };
       }
 
-      const snapshot = mapQoderSnapshot(sourceMessages, sourceRef.data.nativeSessionId);
+      const snapshot = mapQoderSnapshot(
+        sourceMessages,
+        sourceRef.data.nativeSessionId,
+        this.harnessId,
+      );
       if (snapshot.turns.length === 0) {
         return {
           ok: false,
@@ -444,16 +434,13 @@ export class QoderAdapter implements HarnessAdapter {
       };
     }
 
-    const cachedInspection =
-      this.#inspections.get(input.cwd)?.result ?? [...this.#inspections.values()][0]?.result;
-    const catalog =
-      cachedInspection && cachedInspection.status === "ready"
-        ? cachedInspection.catalog
-        : undefined;
+    const cachedInspection = this.#inspections.get(input.cwd) ?? [...this.#inspections.values()][0];
+    const catalog = cachedInspection?.catalog;
 
     let session: QoderSession;
     try {
       session = new QoderSession({
+        variant: this.#variant,
         sessionId,
         cwd: input.cwd,
         environment,

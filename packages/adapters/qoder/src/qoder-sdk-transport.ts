@@ -66,11 +66,7 @@ import {
   type NativeTurnRef,
 } from "@codexhost/shared-contracts";
 
-import {
-  accessTokenFromEnv,
-  getSessionMessages as defaultGetSessionMessages,
-  qodercliAuth,
-} from "@qoder-ai/qoder-agent-sdk";
+import { QODER_RUNTIMES, qoderAuthForEnvironment, type QoderVariant } from "./qoder-runtime.js";
 
 import { mapQoderException, mapQoderResultError } from "./qoder-errors.js";
 import { qoderEnvironment } from "./qoder-command.js";
@@ -166,6 +162,7 @@ interface PendingInteraction {
 }
 
 export interface QoderSessionOptions {
+  variant?: QoderVariant;
   sessionId: string;
   cwd: string;
   environment?: Record<string, string | undefined>;
@@ -184,7 +181,7 @@ export interface QoderSessionOptions {
 }
 
 export class QoderSession implements HarnessSession {
-  readonly harnessId: HarnessId = harnessIdSchema.parse("qoder");
+  readonly harnessId: HarnessId;
   readonly capabilities: HarnessSessionCapabilities;
   readonly commands: HarnessCommandCapability;
   readonly initialState: HarnessSessionState;
@@ -213,6 +210,9 @@ export class QoderSession implements HarnessSession {
   #consumerLoopDone: Promise<void>;
 
   constructor(options: QoderSessionOptions) {
+    const variant = options.variant ?? "global";
+    const runtime = QODER_RUNTIMES[variant];
+    this.harnessId = harnessIdSchema.parse(runtime.harnessId);
     this.outputs = this.#channel.outputs;
     this.commands = {
       list: async () => ({ ok: true, value: this.#commandCatalog }),
@@ -221,11 +221,11 @@ export class QoderSession implements HarnessSession {
     this.#sessionId = options.sessionId;
     this.#cwd = options.cwd;
     this.#catalog = options.catalog;
-    this.#getSessionMessages = options.getSessionMessages ?? defaultGetSessionMessages;
+    this.#getSessionMessages = options.getSessionMessages ?? runtime.sdk.getSessionMessages;
     this.#onClosed = options.onClosed;
 
     const nativeRef: NativeSessionRef = nativeSessionRefSchema.parse({
-      harnessId: "qoder",
+      harnessId: this.harnessId,
       nativeSessionId: options.sessionId,
       formatVersion: 1,
     });
@@ -285,7 +285,7 @@ export class QoderSession implements HarnessSession {
     const permissionMode = mapToQoderPermissionMode(options.permissionModeId);
 
     const environment = qoderEnvironment(options.environment);
-    const auth = environment.QODER_PERSONAL_ACCESS_TOKEN ? accessTokenFromEnv() : qodercliAuth();
+    const auth = qoderAuthForEnvironment(variant, environment);
 
     const extraArgs: Record<string, string | null> = {};
     if (effectiveThinkingOptionId) {
@@ -344,7 +344,7 @@ export class QoderSession implements HarnessSession {
 
   #createNativeTurnRef(nativeTurnKey: string): NativeTurnRef {
     return nativeTurnRefSchema.parse({
-      harnessId: "qoder",
+      harnessId: this.harnessId,
       nativeSessionId: this.#state.nativeRef?.nativeSessionId ?? this.#sessionId,
       nativeTurnKey,
       formatVersion: 1,
@@ -398,7 +398,7 @@ export class QoderSession implements HarnessSession {
         this.#state = {
           ...this.#state,
           nativeRef: nativeSessionRefSchema.parse({
-            harnessId: "qoder",
+            harnessId: this.harnessId,
             nativeSessionId: message.session_id,
             formatVersion: 1,
           }),
@@ -914,7 +914,7 @@ export class QoderSession implements HarnessSession {
     const nativeTurnRef = this.#createNativeTurnRef(userMessageUuid);
     const checkpoint: NativeCheckpointRef | undefined = lastAssistantMessageUuid
       ? nativeCheckpointRefSchema.parse({
-          harnessId: "qoder",
+          harnessId: this.harnessId,
           nativeSessionId: this.#state.nativeRef?.nativeSessionId ?? this.#sessionId,
           checkpointId: lastAssistantMessageUuid,
           formatVersion: 1,
@@ -1138,7 +1138,7 @@ export class QoderSession implements HarnessSession {
         dir: this.#cwd,
         view: "historical",
       });
-      const snapshot = mapQoderSnapshot(messages, this.#sessionId);
+      const snapshot = mapQoderSnapshot(messages, this.#sessionId, this.harnessId);
       return { ok: true, value: snapshot };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

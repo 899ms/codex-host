@@ -120,6 +120,7 @@ function collectToolResults(messages: readonly SessionMessage[]): Map<string, To
 export function mapQoderSnapshot(
   messages: readonly SessionMessage[],
   sessionId: string,
+  harnessId: HarnessId = qoderHarnessId,
 ): HostThreadSnapshot {
   const turns: HostTurnSnapshot[] = [];
 
@@ -145,7 +146,7 @@ export function mapQoderSnapshot(
     const checkpointMessage = turnMessages.findLast((m) => m.type === "assistant");
     const checkpoint = checkpointMessage
       ? nativeCheckpointRefSchema.parse({
-          harnessId: qoderHarnessId,
+          harnessId,
           nativeSessionId: sessionId,
           checkpointId: checkpointMessage.uuid,
           formatVersion: 1,
@@ -153,7 +154,7 @@ export function mapQoderSnapshot(
       : undefined;
 
     const nativeTurnRef = nativeTurnRefSchema.parse({
-      harnessId: qoderHarnessId,
+      harnessId,
       nativeSessionId: sessionId,
       nativeTurnKey: user.uuid,
       formatVersion: 1,

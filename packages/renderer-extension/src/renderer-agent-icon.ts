@@ -24,6 +24,7 @@ export const RENDERER_AGENT_LABELS: Record<RendererAgent, string> = {
   "cursor-cli": "Cursor CLI (Experimental)",
   hermes: "Hermes",
   qoder: "Qoder",
+  "qoder-cn": "Qoder CN",
 };
 
 const PI_PATHS = [
@@ -157,7 +158,7 @@ export function createRendererAgentIcon(
     image.style.flex = "none";
     return image;
   }
-  if (agent === "qoder") {
+  if (agent === "qoder" || agent === "qoder-cn") {
     const image = ownerDocument.createElement("img");
     image.src = qoderAgentIconUrl;
     image.alt = "";
