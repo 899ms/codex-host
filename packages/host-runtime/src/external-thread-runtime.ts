@@ -195,6 +195,7 @@ export class ExternalThreadRuntime {
   readonly #environment: NodeJS.ProcessEnv;
   readonly #repository: ExternalThreadRepository;
   readonly #restores = new Map<string, Promise<ExternalThread>>();
+  readonly #subagentRunning: (threadId: string) => boolean;
   readonly #threads = new Map<string, ExternalThread>();
 
   constructor(input: {
@@ -203,6 +204,7 @@ export class ExternalThreadRuntime {
     repository: ExternalThreadRepository;
     consumeOutputs(thread: ExternalThread): Promise<void>;
     diagnose(error: unknown): void;
+    subagentRunning?(threadId: string): boolean;
     idleRelease?: {
       queue: DesktopRequestQueue;
       canRelease(thread: ExternalThread): boolean;
@@ -214,6 +216,7 @@ export class ExternalThreadRuntime {
     this.#repository = input.repository;
     this.#consumeOutputs = input.consumeOutputs;
     this.#diagnose = input.diagnose;
+    this.#subagentRunning = input.subagentRunning ?? (() => false);
     this.idleRelease = new ExternalThreadIdleRelease({
       threads: () => this.values(),
       get: (id) => this.get(id),
@@ -270,6 +273,10 @@ export class ExternalThreadRuntime {
       ...(effectiveThinkingOptionId ? { effectiveThinkingOptionId } : {}),
       ...(effectivePermissionModeId ? { effectivePermissionModeId } : {}),
     };
+    // A Subagent Thread can be opened while its Subagent is still running. Its
+    // live status lives in the Host, not in the stored record, so seed it here
+    // instead of publishing a Thread that claims to be idle.
+    const running = this.#subagentRunning(input.record.hostThreadId);
     const externalThread: ExternalThread = {
       id: input.record.hostThreadId,
       cwd: input.record.cwd,
@@ -286,11 +293,13 @@ export class ExternalThreadRuntime {
       record: input.record,
       sessionId: input.sessionId,
       stateObserver: new SessionStateObserver(observerState),
-      thread: input.thread,
+      thread: running
+        ? { ...input.thread, status: { type: "active", activeFlags: [] } }
+        : input.thread,
       transportModelId: input.transportModelId ?? input.record.transportModelId,
       turns: input.turns,
       historyHydrated: true,
-      running: false,
+      running,
       activeTurnId: null,
       latestUsage: input.session.initialUsage,
       usageTurnId: null,
