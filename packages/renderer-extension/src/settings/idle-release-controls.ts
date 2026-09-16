@@ -1,4 +1,9 @@
-import { idleReleaseSettingsSchema, type IdleReleaseSettings } from "@codexhost/shared-contracts";
+import {
+  IDLE_RELEASE_TIMEOUT_MINUTES_MAX,
+  IDLE_RELEASE_TIMEOUT_MINUTES_MIN,
+  idleReleaseSettingsSchema,
+  type IdleReleaseSettings,
+} from "@codexhost/shared-contracts";
 import {
   IDLE_RELEASE_CHANGE_EVENT,
   IDLE_RELEASE_STATUS_EVENT,
@@ -61,8 +66,8 @@ export function mountIdleReleaseControls(
     id: minutesId,
     describedBy: timeout.description.id,
     unit: messages.idleReleaseMinutes,
-    min: 10,
-    max: 1440,
+    min: IDLE_RELEASE_TIMEOUT_MINUTES_MIN,
+    max: IDLE_RELEASE_TIMEOUT_MINUTES_MAX,
   });
   timeout.item.append(field);
   timeout.item.id = preferenceId("idle-release-timeout");

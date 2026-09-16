@@ -35,10 +35,10 @@ describe("idle release preference", () => {
   it("defaults off, preserves saved minutes while disabled, and rejects invalid settings", () => {
     const f = fixture();
     expect(readIdleReleasePreference(f.owner)).toEqual({ enabled: false, timeoutMinutes: 30 });
-    expect(writeIdleReleasePreference(f.owner, { enabled: true, timeoutMinutes: 10 })).toBe(true);
-    expect(writeIdleReleasePreference(f.owner, { enabled: false, timeoutMinutes: 10 })).toBe(true);
-    expect(readIdleReleasePreference(f.owner)).toEqual({ enabled: false, timeoutMinutes: 10 });
-    for (const timeoutMinutes of [9, 1441, 30.5, NaN, Infinity]) {
+    expect(writeIdleReleasePreference(f.owner, { enabled: true, timeoutMinutes: 5 })).toBe(true);
+    expect(writeIdleReleasePreference(f.owner, { enabled: false, timeoutMinutes: 5 })).toBe(true);
+    expect(readIdleReleasePreference(f.owner)).toEqual({ enabled: false, timeoutMinutes: 5 });
+    for (const timeoutMinutes of [4, 1441, 30.5, NaN, Infinity]) {
       expect(writeIdleReleasePreference(f.owner, { enabled: true, timeoutMinutes })).toBe(false);
     }
     expect(readIdleReleasePreference(f.owner).enabled).toBe(false);
@@ -148,7 +148,7 @@ describe("idle release preference", () => {
     const f = fixture();
     if (!f.client.setIdleReleaseSettings) throw new Error("Missing settings method");
     await expect(
-      f.client.setIdleReleaseSettings({ enabled: true, timeoutMinutes: 9 }),
+      f.client.setIdleReleaseSettings({ enabled: true, timeoutMinutes: 4 }),
     ).rejects.toThrow();
     expect(f.send).not.toHaveBeenCalled();
   });

@@ -2,6 +2,8 @@ import { z } from "zod";
 import { WORKSPACE_CONTRACT_VERSION } from "./version.js";
 export {
   IDLE_RELEASE_SETTINGS_METHOD,
+  IDLE_RELEASE_TIMEOUT_MINUTES_MAX,
+  IDLE_RELEASE_TIMEOUT_MINUTES_MIN,
   DEFAULT_IDLE_RELEASE_SETTINGS,
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,

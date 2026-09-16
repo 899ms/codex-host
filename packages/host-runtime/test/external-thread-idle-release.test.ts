@@ -96,7 +96,7 @@ describe("external Thread idle release", () => {
     f.idle.check();
     await f.queue.drain();
     expect(f.close).not.toHaveBeenCalled();
-    for (const timeoutMinutes of [0, 9, 1441, 10.5, NaN, Infinity]) {
+    for (const timeoutMinutes of [0, 4, 1441, 10.5, NaN, Infinity]) {
       expect(() => f.idle.configure({ enabled: true, timeoutMinutes })).toThrow();
     }
     expect(vi.getTimerCount()).toBe(0);

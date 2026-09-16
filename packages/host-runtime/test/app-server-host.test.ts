@@ -486,7 +486,7 @@ describe("AppServerHost idle resource release", () => {
       writeRequest(fixture.desktopInput, {
         id: 900,
         method: "codexhost/settings/idle-release/set",
-        params: { enabled: true, timeoutMinutes: 9 },
+        params: { enabled: true, timeoutMinutes: 4 },
       });
       expect(await fixture.collector.waitFor((message) => requestId(message, 900))).toMatchObject({
         error: { code: -32602 },

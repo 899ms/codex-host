@@ -77,7 +77,8 @@ test("General groups appearance and idle release controls without dialogs or lon
   await expect(tooltip).toBeHidden();
   await page.getByRole("button", { name: "自动释放空闲会话说明" }).hover();
   await expect(tooltip).toBeVisible();
-  await expect(tooltip).toContainText("一并停止");
+  await expect(tooltip).toContainText("后台进程可能仍在运行并占用内存");
+  await expect(tooltip).toContainText("聊天记录不会删除");
 
   // Enabling applies immediately; Playwright would auto-dismiss any unexpected dialog.
   await enabled.click();
@@ -90,11 +91,14 @@ test("General groups appearance and idle release controls without dialogs or lon
     )
     .toBe(true);
 
-  await minutes.fill("9");
+  await expect(minutes).toHaveAttribute("min", "5");
+  await expect(minutes).toHaveAttribute("max", "1440");
+  await expect(minutes).toHaveAttribute("step", "1");
+  await minutes.fill("4");
   await minutes.press("Tab");
   await expect(minutes).toHaveAttribute("aria-invalid", "true");
-  await expect(page.getByText("请输入 10～1440 之间的整数。")).toBeVisible();
-  await minutes.fill("10");
+  await expect(page.getByText("请输入 5～1440 之间的整数。")).toBeVisible();
+  await minutes.fill("5");
   await minutes.press("Tab");
   await expect(minutes).toHaveAttribute("aria-invalid", "false");
   await expect
@@ -103,7 +107,18 @@ test("General groups appearance and idle release controls without dialogs or lon
         () => Reflect.get(globalThis, "idleFixture").calls.at(-1)?.params.timeoutMinutes,
       ),
     )
-    .toBe(10);
+    .toBe(5);
+  await minutes.focus();
+  await minutes.press("ArrowUp");
+  await minutes.press("Tab");
+  await expect(minutes).toHaveValue("6");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Reflect.get(globalThis, "idleFixture").calls.at(-1)?.params.timeoutMinutes,
+      ),
+    )
+    .toBe(6);
   // Successful sync is silent; the scope badge is no longer shown.
   await expect(page.getByText("同步中…")).toBeHidden();
   await expect(page.getByText("仅本地 Host", { exact: true })).toHaveCount(0);
@@ -111,15 +126,15 @@ test("General groups appearance and idle release controls without dialogs or lon
     await page.evaluate(() =>
       JSON.parse(localStorage.getItem("codexhost.idle-release.v1") ?? "null"),
     ),
-  ).toEqual({ enabled: true, timeoutMinutes: 10 });
+  ).toEqual({ enabled: true, timeoutMinutes: 6 });
 
   // Turning release off hides the timeout but keeps the saved value; an invalid draft is dropped.
-  await minutes.fill("5");
+  await minutes.fill("4");
   await enabled.click();
   await expect(enabled).not.toBeChecked();
   await expect(minutes).toBeHidden();
   await enabled.click();
-  await expect(minutes).toHaveValue("10");
+  await expect(minutes).toHaveValue("6");
   await expect(minutes).toHaveAttribute("aria-invalid", "false");
   await enabled.click();
   await page.reload();
@@ -128,7 +143,7 @@ test("General groups appearance and idle release controls without dialogs or lon
   await expect(enabled).not.toBeChecked();
   await expect(minutes).toBeHidden();
   await enabled.click();
-  await expect(minutes).toHaveValue("10");
+  await expect(minutes).toHaveValue("6");
 });
 
 test("another window's change updates both the UI and the Host without stale cached settings", async ({

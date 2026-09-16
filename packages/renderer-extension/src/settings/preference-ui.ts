@@ -125,7 +125,7 @@ export function createNumberField(
   control.step = "1";
   control.setAttribute("aria-describedby", input.describedBy);
   control.className =
-    "w-12 [appearance:textfield] border-0 bg-transparent p-0 text-right text-[13px] leading-5 text-settings-text tabular-nums outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
+    "w-14 border-0 bg-transparent p-0 text-right text-[13px] leading-5 text-settings-text tabular-nums outline-none";
   const unit = document.createElement("span");
   unit.className = "text-xs text-settings-muted";
   unit.setAttribute("aria-hidden", "true");
