@@ -25,6 +25,7 @@ jobs:
   prepare:
     name: Resolve release metadata
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     permissions:
       contents: read
       actions: read
@@ -64,6 +65,7 @@ jobs:
               github, repo: context.repo, root: process.cwd(),
               tag: process.env.SOURCE_TAG,
               expectedRefSha: context.eventName === 'push' ? context.payload.after : undefined,
+              waitForCi: true,
             });
             for (const [name, value] of Object.entries({
               tag: result.tag, version: result.version, prerelease: result.prerelease,

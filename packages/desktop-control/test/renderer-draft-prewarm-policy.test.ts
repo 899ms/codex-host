@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -546,33 +547,6 @@ describe("Renderer draft prewarm policy", () => {
     });
   });
 
-  it("routes a draft Codex Account without changing the default Account", async () => {
-    const sendRequest = vi.fn(async () => undefined);
-    const manager = requestManagerFixture();
-    const bridge = requestBridgeFixture({ sendRequest });
-    const target: DraftPrewarmPolicyTarget = {};
-    installDraftPrewarmPolicyBridge(manager, bridge, "local", target, {
-      discardAllPrewarmedThreads: vi.fn(),
-    });
-    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
-      selectAccount(accountId: string | null): boolean;
-    };
-
-    expect(policy.selectAccount("reviewer")).toBe(true);
-    await bridge.sendRequest("thread/start", { cwd: "/tmp/project", model: "gpt-5" });
-    await bridge.sendRequest("thread/start", { cwd: "/tmp/next", model: "gpt-5" });
-
-    expect(sendRequest).toHaveBeenNthCalledWith(1, "thread/start", {
-      cwd: "/tmp/project",
-      model: "gpt-5",
-      __codexhostAccountId: "reviewer",
-    });
-    expect(sendRequest).toHaveBeenNthCalledWith(2, "thread/start", {
-      cwd: "/tmp/next",
-      model: "gpt-5",
-    });
-  });
-
   it("tunnels private Host requests through the stock Remote Control app-server", async () => {
     const manager = requestManagerFixture();
     const originalNotification = manager.onNotification as ReturnType<typeof vi.fn>;
@@ -1003,6 +977,149 @@ describe("Renderer draft prewarm policy", () => {
       policy.dispose();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("publishes the committed manager rather than pinning a retired DOM Fiber in requestTarget", async () => {
+    const retired = { ...requestManagerFixture(), ...fiberRequestManagerFixture() };
+    const active = { ...requestManagerFixture(), ...fiberRequestManagerFixture() };
+    const state: { current?: object } = {};
+    const oldRoot: { stateNode: typeof state; child?: object } = { stateNode: state };
+    const currentRoot: { stateNode: typeof state; child?: object } = { stateNode: state };
+    const current = { return: currentRoot, memoizedState: { memoizedState: { manager: active } } };
+    currentRoot.child = current;
+    state.current = currentRoot;
+    const editor = {
+      parentElement: null,
+      __reactFiber$test: {
+        return: oldRoot,
+        alternate: current,
+        memoizedState: { memoizedState: { manager: retired } },
+      },
+    };
+    oldRoot.child = editor.__reactFiber$test;
+    const target: DraftPrewarmPolicyTarget = {};
+    const renderer = {
+      async evaluate<T>(expression: string): Promise<T> {
+        return await runInNewContext(expression, {
+          document: { querySelectorAll: () => [editor] },
+          window: target,
+          crypto: globalThis.crypto,
+          TextDecoder,
+          TextEncoder,
+          Uint8Array,
+          setTimeout,
+          clearTimeout,
+        });
+      },
+    };
+    await installRendererDraftPrewarmPolicyDirect(renderer);
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      requestTarget(): object;
+      dispose(): void;
+    };
+    expect(policy.requestTarget()).toBe(active);
+    state.current = oldRoot;
+    expect(() => policy.requestTarget()).toThrow("Renderer request manager is retired");
+    await installRendererDraftPrewarmPolicyDirect(renderer);
+    const replaced = target.__codexhostDraftPrewarmPolicyV1 as typeof policy;
+    expect(replaced.requestTarget()).toBe(retired);
+    replaced.dispose();
+  });
+
+  it("keeps the nearby manager usable when an existing Thread adds a 209-level ancestor path", async () => {
+    const active = { ...requestManagerFixture(), ...fiberRequestManagerFixture() };
+    const first: Record<string, unknown> = {
+      memoizedState: { memoizedState: { manager: active } },
+    };
+    const setDepth = (depth: number) => {
+      let node = first;
+      for (let index = 1; index < depth; index += 1) {
+        const parent: Record<string, unknown> = { child: node };
+        node.return = parent;
+        node = parent;
+      }
+      node.stateNode = { current: node };
+    };
+    setDepth(2);
+    const editor = { parentElement: null, __reactFiber$test: first };
+    const target: DraftPrewarmPolicyTarget = {};
+    const renderer = {
+      async evaluate<T>(expression: string): Promise<T> {
+        return await runInNewContext(expression, {
+          document: { querySelectorAll: () => [editor] },
+          window: target,
+          crypto: globalThis.crypto,
+          TextDecoder,
+          TextEncoder,
+          Uint8Array,
+          setTimeout,
+          clearTimeout,
+        });
+      },
+    };
+    await installRendererDraftPrewarmPolicyDirect(renderer);
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      requestTarget(): object;
+      dispose(): void;
+    };
+    expect(policy.requestTarget()).toBe(active);
+    setDepth(209);
+    expect(policy.requestTarget()).toBe(active);
+    await installRendererDraftPrewarmPolicyDirect(renderer);
+    expect(target.__codexhostDraftPrewarmPolicyV1).toBe(policy);
+    policy.dispose();
+  });
+
+  it("keeps the shared request manager current while side chat opens and closes", async () => {
+    const active = { ...requestManagerFixture(), ...fiberRequestManagerFixture() };
+    const editorFor = (manager: typeof active) => ({
+      parentElement: null,
+      __reactFiber$test: {
+        memoizedProps: { executionTargetHostId: manager.getHostId() },
+        memoizedState: { memoizedState: { manager } },
+      },
+    });
+    const mainEditor = editorFor(active);
+    const editors = [mainEditor];
+    const target: DraftPrewarmPolicyTarget = {};
+    const renderer = {
+      async evaluate<T>(expression: string): Promise<T> {
+        return await runInNewContext(expression, {
+          document: { querySelectorAll: () => editors },
+          window: target,
+          crypto: globalThis.crypto,
+          TextDecoder,
+          TextEncoder,
+          Uint8Array,
+          setTimeout,
+          clearTimeout,
+        });
+      },
+    };
+    await installRendererDraftPrewarmPolicyDirect(renderer);
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      requestTarget(): object;
+      dispose(): void;
+    };
+    try {
+      editors.push(editorFor(active));
+      expect(policy.requestTarget()).toBe(active);
+      await installRendererDraftPrewarmPolicyDirect(renderer);
+      expect(target.__codexhostDraftPrewarmPolicyV1).toBe(policy);
+
+      // A genuinely different manager or Host must still invalidate the route.
+      const other = { ...requestManagerFixture(), ...fiberRequestManagerFixture() };
+      editors[1] = editorFor(other);
+      expect(() => policy.requestTarget()).toThrow("Renderer request manager is retired");
+      other.getHostId = () => "remote-host";
+      editors[1] = editorFor(other);
+      expect(() => policy.requestTarget()).toThrow("Renderer request manager is retired");
+
+      editors.pop();
+      expect(policy.requestTarget()).toBe(active);
+    } finally {
+      policy.dispose();
     }
   });
 

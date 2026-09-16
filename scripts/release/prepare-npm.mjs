@@ -81,6 +81,12 @@ const runtimeLicenses = [
   },
   { packageName: "diff", license: "BSD-3-Clause", source: "LICENSE", output: "diff-LICENSE.txt" },
   { packageName: "lucide", license: "ISC", source: "LICENSE", output: "lucide-LICENSE.txt" },
+  {
+    packageName: "tailwindcss",
+    license: "MIT",
+    source: "LICENSE",
+    output: "tailwindcss-LICENSE.txt",
+  },
   { packageName: "ws", license: "MIT", source: "LICENSE", output: "ws-LICENSE.txt" },
   { packageName: "zod", license: "MIT", source: "LICENSE", output: "zod-LICENSE.txt" },
 ];
@@ -215,8 +221,10 @@ export function expectedNpmPackagePaths(target) {
     "licenses/Claude-Agent-SDK-LICENSE.md",
     "licenses/MCP-SDK-LICENSE.txt",
     "licenses/OpenCode-SDK-LICENSE.txt",
+    "licenses/opencodex-LICENSE.txt",
     "licenses/diff-LICENSE.txt",
     "licenses/lucide-LICENSE.txt",
+    "licenses/tailwindcss-LICENSE.txt",
     "licenses/ws-LICENSE.txt",
     "licenses/zod-LICENSE.txt",
     "THIRD_PARTY_NOTICES.txt",
@@ -776,6 +784,17 @@ export async function writeThirdPartyNotices(root, packageRoot) {
       "",
     );
   }
+  await copyReleaseFile(
+    path.join(root, "third-party", "opencodex.LICENSE"),
+    path.join(licensesDirectory, "opencodex-LICENSE.txt"),
+    "opencodex native profile license",
+  );
+  notices.push(
+    "opencodex native profiles (2d4d7a22381a2e497c2442902104619e25f937c7)",
+    "License: MIT",
+    "License text: licenses/opencodex-LICENSE.txt",
+    "",
+  );
   await writeFile(
     path.join(packageRoot, "THIRD_PARTY_NOTICES.txt"),
     `${notices.join("\n").trimEnd()}\n`,
