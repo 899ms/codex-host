@@ -52,7 +52,6 @@ export interface RendererSettingsMessages {
   readonly sessionImportUpdatedAt: string;
   readonly sessionImportSessionId: string;
   readonly sessionImportRunning: string;
-  readonly sessionImportRunningUnknown: string;
   readonly sessionImportRunningHint: string;
   readonly sessionImportAction: string;
   readonly sessionImportImporting: string;
@@ -231,7 +230,6 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   sessionImportUpdatedAt: "Updated",
   sessionImportSessionId: "Session ID",
   sessionImportRunning: "Running",
-  sessionImportRunningUnknown: "Activity unknown",
   sessionImportRunningHint:
     "Close this session in its native client before importing, then refresh.",
   sessionImportAction: "Import and open",
@@ -431,7 +429,6 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   sessionImportUpdatedAt: "更新时间",
   sessionImportSessionId: "会话 ID",
   sessionImportRunning: "运行中",
-  sessionImportRunningUnknown: "运行状态未知",
   sessionImportRunningHint: "请先在原生客户端关闭该会话，再刷新并导入。",
   sessionImportAction: "导入并打开",
   sessionImportImporting: "正在导入……",
