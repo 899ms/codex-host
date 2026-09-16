@@ -17,6 +17,8 @@ export const KNOWN_RENDERER_AGENTS = [
   "codebuddy",
   "cursor-cli",
   "hermes",
+  "qoder",
+  "qoder-cn",
 ] as const;
 export const DEFAULT_RENDERER_AGENTS = KNOWN_RENDERER_AGENTS;
 export type RendererAgent = (typeof KNOWN_RENDERER_AGENTS)[number];
@@ -48,6 +50,10 @@ export interface DraftComposerState {
   codeBuddyThinkingOptionId?: HarnessThinkingOptionId;
   cursorCliModel?: HarnessModelRef;
   hermesModel?: HarnessModelRef;
+  qoderModel?: HarnessModelRef;
+  qoderThinkingOptionId?: HarnessThinkingOptionId;
+  qoderCnModel?: HarnessModelRef;
+  qoderCnThinkingOptionId?: HarnessThinkingOptionId;
   permissionModeByAgent?: Partial<Record<ExternalRendererAgent, HarnessPermissionModeId>>;
 }
 
@@ -227,6 +233,10 @@ export class DraftAgentController<Composer extends object> {
     else if (agent === "cursor-cli") delete state.cursorCliModel;
     if (agent === "hermes" && model) state.hermesModel = model;
     else if (agent === "hermes") delete state.hermesModel;
+    if (agent === "qoder" && model) state.qoderModel = model;
+    else if (agent === "qoder") delete state.qoderModel;
+    if (agent === "qoder-cn" && model) state.qoderCnModel = model;
+    else if (agent === "qoder-cn") delete state.qoderCnModel;
     if (agent === "pi" && thinkingOptionId) state.piThinkingOptionId = thinkingOptionId;
     else if (agent === "pi") delete state.piThinkingOptionId;
     if (agent === "claude-code" && thinkingOptionId) {
@@ -248,6 +258,12 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "codebuddy" && thinkingOptionId) {
       state.codeBuddyThinkingOptionId = thinkingOptionId;
     } else if (agent === "codebuddy") delete state.codeBuddyThinkingOptionId;
+    if (agent === "qoder" && thinkingOptionId) {
+      state.qoderThinkingOptionId = thinkingOptionId;
+    } else if (agent === "qoder") delete state.qoderThinkingOptionId;
+    if (agent === "qoder-cn" && thinkingOptionId) {
+      state.qoderCnThinkingOptionId = thinkingOptionId;
+    } else if (agent === "qoder-cn") delete state.qoderCnThinkingOptionId;
     if (agent !== "codex") {
       const permissionModeByAgent: NonNullable<DraftComposerState["permissionModeByAgent"]> = {};
       for (const candidate of [
@@ -262,6 +278,8 @@ export class DraftAgentController<Composer extends object> {
         "codebuddy",
         "cursor-cli",
         "hermes",
+        "qoder",
+        "qoder-cn",
       ] as const) {
         const current = state.permissionModeByAgent?.[candidate];
         if (candidate !== agent && current) permissionModeByAgent[candidate] = current;
@@ -289,6 +307,8 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "codebuddy") return state.codeBuddyModel;
     if (agent === "cursor-cli") return state.cursorCliModel;
     if (agent === "hermes") return state.hermesModel;
+    if (agent === "qoder") return state.qoderModel;
+    if (agent === "qoder-cn") return state.qoderCnModel;
     return undefined;
   }
 
@@ -305,6 +325,8 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "antigravity") return state.antigravityThinkingOptionId;
     if (agent === "kiro-cli") return state.kiroCliThinkingOptionId;
     if (agent === "codebuddy") return state.codeBuddyThinkingOptionId;
+    if (agent === "qoder") return state.qoderThinkingOptionId;
+    if (agent === "qoder-cn") return state.qoderCnThinkingOptionId;
     return undefined;
   }
 
@@ -345,6 +367,8 @@ export class DraftAgentController<Composer extends object> {
     else if (agent === "codebuddy") state.codeBuddyModel = model;
     else if (agent === "cursor-cli") state.cursorCliModel = model;
     else if (agent === "hermes") state.hermesModel = model;
+    else if (agent === "qoder") state.qoderModel = model;
+    else if (agent === "qoder-cn") state.qoderCnModel = model;
     else state.antigravityModel = model;
     return state;
   }
@@ -401,6 +425,14 @@ export class DraftAgentController<Composer extends object> {
       state.codeBuddyThinkingOptionId = thinkingOptionId;
     } else if (agent === "codebuddy") {
       delete state.codeBuddyThinkingOptionId;
+    } else if (agent === "qoder" && thinkingOptionId) {
+      state.qoderThinkingOptionId = thinkingOptionId;
+    } else if (agent === "qoder") {
+      delete state.qoderThinkingOptionId;
+    } else if (agent === "qoder-cn" && thinkingOptionId) {
+      state.qoderCnThinkingOptionId = thinkingOptionId;
+    } else if (agent === "qoder-cn") {
+      delete state.qoderCnThinkingOptionId;
     }
     return state;
   }

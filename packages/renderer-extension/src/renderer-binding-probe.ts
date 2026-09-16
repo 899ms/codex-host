@@ -99,6 +99,8 @@ const externalHarnessIds = {
   codebuddy: harnessIdSchema.parse("codebuddy"),
   "cursor-cli": harnessIdSchema.parse("cursor-cli"),
   hermes: harnessIdSchema.parse("hermes"),
+  qoder: harnessIdSchema.parse("qoder"),
+  "qoder-cn": harnessIdSchema.parse("qoder-cn"),
 } as const;
 
 const externalAgents: readonly ExternalRendererAgent[] = [
@@ -113,6 +115,8 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "codebuddy",
   "cursor-cli",
   "hermes",
+  "qoder",
+  "qoder-cn",
 ];
 type HarnessAvailability = Partial<Record<ExternalRendererAgent, RendererAgentAvailability>>;
 type HarnessAvailabilityErrors = Partial<Record<ExternalRendererAgent, CodexhostError | undefined>>;
@@ -498,6 +502,24 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
         : {}),
     };
   }
+  if (inspection.harnessId === "qoder" || inspection.harnessId === "qoder-cn") {
+    const route = decodeHarnessPluginRoute(inspection.transportModelId);
+    if (!route || route.harnessId !== inspection.harnessId) {
+      throw new Error("Qoder Thread reported an incompatible transport Model");
+    }
+    const model = inspection.effectiveModel ?? route.model;
+    const thinkingOptionId =
+      inspection.availableThinkingOptions !== undefined
+        ? selectableThinkingOptionId(inspection)
+        : (inspection.effectiveThinkingOptionId ?? route.thinkingOptionId);
+    const permissionModeId = inspection.effectivePermissionModeId ?? route.permissionModeId;
+    return {
+      agent: inspection.harnessId,
+      ...(model ? { model } : {}),
+      ...(thinkingOptionId ? { thinkingOptionId } : {}),
+      ...(permissionModeId ? { permissionModeId } : {}),
+    };
+  }
   throw new Error("Thread owner is not a Renderer Agent");
 }
 
@@ -733,6 +755,8 @@ export function installRendererBindingProbe(
       codebuddy: undefined,
       "cursor-cli": undefined,
       hermes: undefined,
+      qoder: undefined,
+      "qoder-cn": undefined,
     },
     webUi: Object.fromEntries(
       externalAgents.map((agent) => [agent, false]),
