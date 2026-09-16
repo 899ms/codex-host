@@ -82,7 +82,7 @@ Host 不承诺在 resolver 与 resume 之间锁住外部客户端；当前没有
 - 默认扫描 `~/.claude/projects/<encoded-cwd>/*.jsonl`；`CLAUDE_CONFIG_DIR` 可替换 `.claude` 根目录。只展开一层项目目录，不进入 Session 子目录或 Subagent Transcript，也不跟随枚举到的符号链接。
 - CLI 创建的会话与 Agent SDK 创建的会话使用同一原生 JSONL 结构，因此都会成为候选；`entrypoint` 仅影响 Claude CLI 自己的 picker 展示，不改变 codexhost 的导入或 resume 身份。
 - Session ID 必须是与文件名一致的 UUID；主会话至少包含一条非 sidechain 的用户或 Assistant 记录，并提供绝对 cwd。项目路径解析为真实且仍存在的目录，失效或身份不一致的文件跳过。
-- 标题依次使用最新的 `custom-title`、AI/summary 标题和首条用户文本，忽略 Tool Result 等非文本块并截取至公共标题上限；更新时间使用文件修改时间。
+- 标题依次使用最新的 `custom-title`、AI/summary 标题和首条用户文本，忽略 Tool Result、`<local-command-…>` / `<command-…>` 等内部记录，折叠为空白分隔的单行并截取至 120 个字符；更新时间使用文件修改时间。
 - 原生引用只保存 Harness 和 Session ID，不增加 locator；Claude Adapter 已用该 ID 和 cwd 执行 `resume`，而 locator 在现有实现中专属于尚未启动的 codexhost Pending Session。
 - Claude Code 没有可靠的跨进程运行标记，因此候选为 `running: null`。导入前应在 CLI 或其他客户端关闭该会话，避免同时追加同一 Transcript。
 - 扫描只读、流式解析，不启动 Claude、不发送 Turn、不改写 JSONL。读取前后检查设备、inode、大小、mtime 和 ctime；活动写入的文件暂时跳过，导入提交前重新读取所选会话。

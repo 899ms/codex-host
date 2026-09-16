@@ -6,11 +6,13 @@ import { createInterface } from "node:readline";
 
 import type { HarnessSessionImportSource } from "@codexhost/harness-adapter";
 import {
-  HARNESS_SESSION_IMPORT_TITLE_MAX_LENGTH,
   harnessSessionImportCandidateSchema,
   nativeSessionRefSchema,
 } from "@codexhost/shared-contracts";
 import { z } from "zod";
+
+const CLAUDE_SESSION_IMPORT_TITLE_MAX_LENGTH = 120;
+const CLAUDE_INTERNAL_USER_TEXT = /^<(?:local-command-|command-)/u;
 
 class ClaudeSessionChangedError extends Error {
   constructor() {
@@ -38,22 +40,34 @@ function sameFile(left: Stats, right: Stats): boolean {
 
 function cleanText(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  return (
-    value.replaceAll("\0", "").trim().slice(0, HARNESS_SESSION_IMPORT_TITLE_MAX_LENGTH) || null
-  );
+  const normalized = value.replaceAll("\0", "").replaceAll(/\s+/gu, " ").trim();
+  if (!normalized) return null;
+  const characters = [...normalized];
+  if (characters.length <= CLAUDE_SESSION_IMPORT_TITLE_MAX_LENGTH) return normalized;
+  return `${characters
+    .slice(0, CLAUDE_SESSION_IMPORT_TITLE_MAX_LENGTH - 1)
+    .join("")
+    .trimEnd()}…`;
 }
 
 function userText(message: unknown): string | null {
   if (!isRecord(message) || message.role !== "user") return null;
   const { content } = message;
-  if (typeof content === "string") return cleanText(content);
-  if (!Array.isArray(content)) return null;
-  return cleanText(
-    content
-      .filter((block) => isRecord(block) && block.type === "text" && typeof block.text === "string")
-      .map((block) => String(block.text))
-      .join(" "),
-  );
+  const text =
+    typeof content === "string"
+      ? cleanText(content)
+      : Array.isArray(content)
+        ? cleanText(
+            content
+              .filter(
+                (block) =>
+                  isRecord(block) && block.type === "text" && typeof block.text === "string",
+              )
+              .map((block) => String(block.text))
+              .join(" "),
+          )
+        : null;
+  return text && !CLAUDE_INTERNAL_USER_TEXT.test(text) ? text : null;
 }
 
 export function claudeProjectsDirectory(environment: NodeJS.ProcessEnv): string {
