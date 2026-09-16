@@ -105,7 +105,7 @@ function writeRequest(input: PassThrough, request: JsonObject): void {
 }
 
 describe("AppServerHost hermetic Claude projection", () => {
-  it("keeps a successful Claude Turn mapped and rereads its Native history", async () => {
+  it("keeps a successful live Claude Turn mapped without inventing history completion", async () => {
     const mappingStoreDirectory = await fs.mkdtemp(
       path.join(tmpdir(), "codexhost-host-claude-hermetic-"),
     );
@@ -260,13 +260,15 @@ describe("AppServerHost hermetic Claude projection", () => {
         method: "thread/read",
         params: { threadId, includeTurns: true },
       });
+      // Claude history omits the Result terminal, so its unknown outcome cannot
+      // confirm the live success again when projected from persisted history.
       await expect(collector.waitFor((message) => requestId(message, 3))).resolves.toMatchObject({
         result: {
           thread: {
             id: threadId,
             turns: [
               {
-                status: "completed",
+                status: "interrupted",
                 items: [
                   { type: "userMessage", content: [{ type: "text", text: "hermetic prompt" }] },
                   { type: "agentMessage", text: "hermetic response" },
