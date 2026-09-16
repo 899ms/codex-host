@@ -1,4 +1,6 @@
 import type { CdpClient } from "./cdp-client.js";
+import { committedReactAncestors } from "./renderer-react-ownership.js";
+import { retainRendererHostResponses } from "./renderer-host-response-ownership.js";
 import {
   installDraftPrewarmPolicyBridge,
   installDraftPrewarmPolicyInRenderer,
@@ -100,45 +102,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const FIND_REQUEST_MANAGER_EXPRESSION = `(() => {
   const requestManagerFromHookState = ${requestManagerFromHookState.toString()};
+  const committedReactAncestors = ${committedReactAncestors.toString()};
   const editors = [...document.querySelectorAll(
     '[data-codex-composer], [contenteditable="true"][role="textbox"]',
   )];
-  if (editors.length !== 1) {
-    return { candidateCount: 0, hostId: null, sendRequest: null };
+  if (editors.length === 0) {
+    return { candidateCount: 0, editorCount: editors.length, hostId: null, sendRequest: null };
   }
-  let element = editors[0];
-  let fiber = null;
-  while (element != null && fiber == null) {
-    const key = Object.getOwnPropertyNames(element).find((name) =>
-      name.startsWith('__reactFiber$'),
-    );
-    if (key != null) fiber = element[key];
-    element = element.parentElement;
-  }
-  const composerFiber = fiber;
+  // Main and side chat can expose multiple editors backed by the same manager.
+  // Resolve their combined Host ownership before consulting any Host registry.
+  const composerAncestors = new Set();
   const activeHostIds = new Set();
-  for (
-    let currentFiber = composerFiber, depth = 0;
-    currentFiber != null && depth < 200;
-    depth += 1, currentFiber = currentFiber.return
-  ) {
-    const props = currentFiber.memoizedProps;
-    if (props != null && typeof props === 'object') {
-      for (const name of ['executionTargetHostId', 'permissionsHostId']) {
-        const value = props[name];
-        if (typeof value === 'string' && value.length > 0) activeHostIds.add(value);
+  for (const editor of editors) {
+    let element = editor;
+    let fiber = null;
+    while (element != null && fiber == null) {
+      const key = Object.getOwnPropertyNames(element).find((name) =>
+        name.startsWith('__reactFiber$'),
+      );
+      if (key != null) fiber = element[key];
+      element = element.parentElement;
+    }
+    for (const current of committedReactAncestors(fiber)) {
+      composerAncestors.add(current);
+      const props = current.memoizedProps;
+      if (props != null && typeof props === 'object') {
+        for (const name of ['executionTargetHostId', 'permissionsHostId']) {
+          const value = props[name];
+          if (typeof value === 'string' && value.length > 0) activeHostIds.add(value);
+        }
       }
     }
   }
   const activeHostId =
     activeHostIds.size === 1 ? activeHostIds.values().next().value : undefined;
   const managers = new Set();
-  for (
-    let currentFiber = composerFiber, depth = 0;
-    currentFiber != null && depth < 200;
-    depth += 1, currentFiber = currentFiber.return
-  ) {
-    let hook = currentFiber.memoizedState;
+  for (const fiber of composerAncestors) {
+    let hook = fiber.memoizedState;
     for (let index = 0; hook != null && index < 120; index += 1, hook = hook.next) {
       const manager = requestManagerFromHookState(hook.memoizedState, activeHostId);
       if (manager != null) managers.add(manager);
@@ -161,12 +161,23 @@ const FIND_REQUEST_MANAGER_EXPRESSION = `(() => {
   const selected = (${selectRendererRequestManager.toString()})(candidates, [...activeHostIds]);
   return {
     candidateCount: selected == null ? candidates.length : 1,
+    editorCount: editors.length,
     hostId: selected?.hostId ?? null,
     manager: selected?.manager ?? null,
     requestClient: selected?.requestClient ?? null,
     prewarmedThreadManager: selected?.prewarmedThreadManager ?? null,
   };
 })()`;
+
+// Validate the pinned owner between Controller polls. An old manager can still
+// send requests after retirement, but Desktop delivers replies to its replacement.
+const IS_CURRENT_REQUEST_MANAGER = `function(manager, requestClient, hostId, prewarmedThreadManager) {
+  const current = ${FIND_REQUEST_MANAGER_EXPRESSION};
+  return current.editorCount === 0 || (
+    current.manager === manager && current.requestClient === requestClient &&
+    current.hostId === hostId && current.prewarmedThreadManager === prewarmedThreadManager
+  );
+}`;
 
 const INSTALL_RENDERER_POLICY_FUNCTION = `function(requestClient, hostId, prewarmedThreadManager) {
   return (${installDraftPrewarmPolicyBridge.toString()})(
@@ -175,6 +186,8 @@ const INSTALL_RENDERER_POLICY_FUNCTION = `function(requestClient, hostId, prewar
     hostId,
     window,
     prewarmedThreadManager,
+    () => (${IS_CURRENT_REQUEST_MANAGER})(this, requestClient, hostId, prewarmedThreadManager),
+    (${retainRendererHostResponses.toString()}),
   );
 }`;
 const REQUEST_MANAGER_WAIT_TIMEOUT_MS = 60_000;
@@ -201,6 +214,10 @@ function directRendererInstaller(): string {
       selected.hostId,
       window,
       selected.prewarmedThreadManager,
+      () => (${IS_CURRENT_REQUEST_MANAGER})(
+        selected.manager, selected.requestClient, selected.hostId, selected.prewarmedThreadManager,
+      ),
+      (${retainRendererHostResponses.toString()}),
     );
   })()`;
 }
