@@ -30,7 +30,7 @@
   <a href="https://www.codebuddy.cn/home/"><img alt="CodeBuddy" src="docs/imgs/badge-codebuddy.svg" /></a>
   <a href="https://cursor.com/docs/cli/overview"><img alt="Cursor" src="docs/imgs/badge-cursor.svg" /></a>
   <a href="https://hermes-agent.nousresearch.com/docs"><img alt="Hermes" src="docs/imgs/badge-hermes.svg" /></a>
-  <a href="https://qoder.com/cli"><img alt="" src="packages/adapters/qoder/assets/icon.svg" width="20" height="20" /><img alt="Qoder" src="https://img.shields.io/badge/Qoder-0f0d0c" /></a>
+  <a href="https://qoder.com/cli"><img alt="Qoder" src="docs/imgs/badge-qoder.svg" /></a>
 </p>
 
 <p align="center">
