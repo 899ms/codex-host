@@ -37,10 +37,10 @@ describe("Qoder historical completion evidence", () => {
     ["token limit", [user, message("assistant", "truncated", "Partial", "max_tokens")]],
     ["tool result without a final answer", [user, bash, result]],
   ] as const)("keeps %s unknown", (_name, messages) => {
-    const turn = mapQoderSnapshot(messages, "history-test").turns[0]!;
-    expect(turn.outcome.status).toBe("unknown");
+    const turn = mapQoderSnapshot(messages, "history-test").turns[0];
+    expect(turn?.outcome.status).toBe("unknown");
     expect(
-      turn.items.some(({ item }) => item.type === "agentMessage" && item.phase === "final_answer"),
+      turn?.items.some(({ item }) => item.type === "agentMessage" && item.phase === "final_answer"),
     ).toBe(false);
   });
 
@@ -48,14 +48,14 @@ describe("Qoder historical completion evidence", () => {
     "does not invent Bash success when result is missing (final=%s)",
     (hasFinal) => {
       const turn = mapQoderSnapshot([user, bash, ...(hasFinal ? [final] : [])], "history-test")
-        .turns[0]!;
-      expect(turn.outcome.status).toBe("unknown");
-      expect(turn.items[0]).toMatchObject({
+        .turns[0];
+      expect(turn?.outcome.status).toBe("unknown");
+      expect(turn?.items[0]).toMatchObject({
         item: { type: "commandExecution", command: "node long-task.js" },
         outcome: { status: "cancelled", reason: "No confirmed Qoder tool result" },
       });
-      expect(turn.items[0]!.item).not.toHaveProperty("exitCode");
-      expect(turn.items[0]!.item).not.toHaveProperty("output");
+      expect(turn?.items[0]?.item).not.toHaveProperty("exitCode");
+      expect(turn?.items[0]?.item).not.toHaveProperty("output");
     },
   );
 
@@ -73,30 +73,30 @@ describe("Qoder historical completion evidence", () => {
       ],
       "tool_use",
     );
-    const turn = mapQoderSnapshot([user, tool], "history-test").turns[0]!;
-    expect(turn.outcome.status).toBe("unknown");
-    expect(turn.items[0]).toMatchObject({
+    const turn = mapQoderSnapshot([user, tool], "history-test").turns[0];
+    expect(turn?.outcome.status).toBe("unknown");
+    expect(turn?.items[0]).toMatchObject({
       item: { type: "toolExecution", toolName: "Write" },
       outcome: { status: "cancelled" },
     });
   });
 
   it("preserves confirmed success, including an empty tool result", () => {
-    const turn = mapQoderSnapshot([user, bash, result, final], "history-test").turns[0]!;
-    expect(turn.outcome.status).toBe("succeeded");
-    expect(turn.items[0]).toMatchObject({
+    const turn = mapQoderSnapshot([user, bash, result, final], "history-test").turns[0];
+    expect(turn?.outcome.status).toBe("succeeded");
+    expect(turn?.items[0]).toMatchObject({
       item: { type: "commandExecution", exitCode: 0 },
       outcome: { status: "succeeded" },
     });
-    expect(turn.items[1]!.item).toMatchObject({ type: "agentMessage", phase: "final_answer" });
+    expect(turn?.items[1]?.item).toMatchObject({ type: "agentMessage", phase: "final_answer" });
   });
 
   it("preserves a recorded tool failure", () => {
     const failure = message("user", "result-1", [
       { type: "tool_result", tool_use_id: "bash-1", content: "Command failed", is_error: true },
     ]);
-    const turn = mapQoderSnapshot([user, bash, failure, final], "history-test").turns[0]!;
-    expect(turn.items[0]).toMatchObject({
+    const turn = mapQoderSnapshot([user, bash, failure, final], "history-test").turns[0];
+    expect(turn?.items[0]).toMatchObject({
       item: { type: "commandExecution", exitCode: 1 },
       outcome: { status: "failed", error: { message: "Command failed" } },
     });
@@ -107,16 +107,16 @@ describe("Qoder historical completion evidence", () => {
       ...message("assistant", "error-1", "API failed"),
       isApiErrorMessage: true as const,
     };
-    expect(mapQoderSnapshot([user, failure], "history-test").turns[0]!.outcome.status).toBe(
+    expect(mapQoderSnapshot([user, failure], "history-test").turns[0]?.outcome.status).toBe(
       "failed",
     );
   });
 
   it("does not mark an uncompleted compact command successful", () => {
     const turn = mapQoderSnapshot([message("user", "compact-1", "/compact")], "history-test")
-      .turns[0]!;
-    expect(turn.outcome.status).toBe("unknown");
-    expect(turn.items[0]).toMatchObject({
+      .turns[0];
+    expect(turn?.outcome.status).toBe("unknown");
+    expect(turn?.items[0]).toMatchObject({
       item: { type: "contextCompaction" },
       outcome: { status: "cancelled" },
     });
