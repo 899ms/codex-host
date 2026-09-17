@@ -75,7 +75,7 @@ PR 维护只做两件事：**明确标题自动标签、CI 结束后更新一条
 
 其余测试继续保留文件系统、进程、路径、锁、SQLite、插件加载及发行产物的跨平台回归覆盖，Linux ARM64 不以安装包 smoke 替代这些测试。各平台的 TypeScript 构建仍会检查生产代码类型；Rust 格式只在 Linux x64 的 `format:check` 中检查一次，各平台继续执行完整 Clippy 和 Rust 测试。
 
-CI 通过 `CARGO_PROFILE_DEV_DEBUG=0` 和 `CARGO_PROFILE_TEST_DEBUG=0` 关闭 Rust dev/test 编译的调试符号，减少编译、链接和产物开销；默认调试断言和溢出检查保持开启，但堆栈的源码定位信息会减少。不修改本地 Cargo 配置或 release profile，也不改变发布工作流。固定版本 npm 的安装和 `npm ci` 使用 `--prefer-offline` 优先利用现有 npm 缓存，缓存缺失时仍联网获取；不改变锁文件约束，也不关闭依赖审计。
+CI 使用全新 runner，且不持久化 Cargo `target` 目录，因此设置 `CARGO_INCREMENTAL=0`，不生成跨次编译使用的增量状态；Cargo 在同一 job 内仍可复用已构建且未变化的依赖产物。通过 `CARGO_PROFILE_DEV_DEBUG=0` 和 `CARGO_PROFILE_TEST_DEBUG=0` 关闭 Rust dev/test 编译的调试符号，减少编译、链接和产物开销；默认调试断言和溢出检查保持开启，但堆栈的源码定位信息会减少。不修改本地 Cargo 配置或 release profile，也不改变发布工作流。固定版本 npm 的安装和 `npm ci` 使用 `--prefer-offline` 优先利用现有 npm 缓存，缓存缺失时仍联网获取；不改变锁文件约束，也不关闭依赖审计。
 
 同一 PR 有新提交时取消旧 CI；每个 `main push` 使用独立并发组，不因后续提交取消，保留确切发布 SHA 的成功证据。不启用测试重试，也不全局放宽超时。
 
