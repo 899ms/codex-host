@@ -24,8 +24,14 @@ integration. [CLI ACP](https://cursor.com/docs/cli/acp) is the selected interfac
 - Native create, text prompt, streaming text/reasoning, tool progress and cancellation.
 - Structured Edit Diff for successful tools carrying native ACP diff content,
   including new files and updates, in live output and native history replay.
-- Dynamic native model catalog. Full bracketed model variants are encoded into
-  transport-safe Host refs without losing native model parameters.
+- Dynamic native parameterized model catalog and Thinking selection. Native
+  `thought_level` parameters become complete selectable combinations (for example,
+  thinking on/off plus effort); unrelated context/fast parameters stay in Model refs.
+- Native advertised slash commands and skills through ACP `available_commands_update`.
+  Custom commands keep normal Turn identity; `/copy-request-id` can complete without
+  creating a native user Turn.
+- Outbound cross-Harness delegation through a session-local native MCP server,
+  enabled only when the Host supplies all four delegation environment variables.
 - Native Agent, Plan and Ask configuration, confirmed by the ACP response before
   changing Host state. These are execution modes, not fabricated approval levels.
 - Native tool approvals and Cursor's blocking question/plan extensions, with
@@ -67,8 +73,8 @@ contract investigation before release acceptance.
 - The Desktop Agent Picker is still based on a static Harness list. This integration
   adds Cursor explicitly and uses the shared plugin carrier. Its independent model
   and mode preferences do not inherit another Harness's Thinking selection.
-- Fork, rollback, independent thinking selection, usage/account reporting, native
-  session import, unattended full access and internal subagent transcript browsing are not
+- Fork, rollback, context compaction, usage/account reporting, native session import,
+  unattended inbound delegation and internal subagent transcript browsing are not
   advertised. Image/audio prompt inputs are outside the current Host text contract.
 - Edit Diff is partial: it requires native ACP diff content. Delete/rename semantics,
   shell edits and missing historical diffs are not inferred. Other Cursor notification
@@ -80,6 +86,86 @@ contract investigation before release acceptance.
   including refresh requests, reuse an in-flight inspection.
 - The native history format and operating-system authentication behavior require
   platform/version acceptance before formal product support is claimed.
+
+## Capability audit and native configuration
+
+The capability audit used macOS arm64 Cursor CLI `2026.09.10-fd3934a` and the
+[official ACP documentation](https://cursor.com/docs/cli/acp). The installed CLI's
+`src/acp/cursor-acp-agent.ts` and `src/acp/agent-session.ts` establish the additional
+parameterized configuration and command behavior below; these are version-sensitive
+native extensions, not fabricated RPC methods.
+
+| Gap | Native interface and current result |
+| --- | --- |
+| Thinking | `initialize.clientCapabilities._meta.parameterizedModelPicker = true`, `cursor/list_available_models`, and `session/set_config_option`; implemented. |
+| Slash commands | `available_commands_update` plus native `session/prompt` slash parsing; implemented for advertised commands only. |
+| Cross-Harness collaboration | Native HTTP MCP passed to `session/new` / `session/load`; outbound tools implemented. Inbound unattended execution remains unsupported. |
+| Usage | The native ACP agent emits neither usage updates nor prompt usage; remains unknown. Shared SDK schemas alone are not evidence that Cursor emits these fields. |
+| Fork / edit previous message | The native ACP implementation provides create/load/list, but no Fork or rollback operation. Native stores remain read-only. |
+| Context compaction | The interactive CLI command is not part of the ACP slash-command handler; no native ACP compaction operation is implemented. Sending `/compact` as plain model text is not compaction. |
+
+The model catalog comes from native configuration, including each model's own
+Thinking parameter choices. Multiple `thought_level` parameters remain a complete
+combination instead of silently dropping the thinking toggle when effort also
+exists. Selecting a combination writes only those native parameters, confirms each
+response, and publishes the actual state after each write. A later rejected write
+leaves the already confirmed state visible. Model changes clear stale Thinking
+when the new model lacks it; selecting Thinking remains permitted during an active
+Turn, with native acceptance determining the result.
+
+Opaque Model refs retain non-Thinking parameters such as `context` and `fast`, so
+Host restart/reopen can restore them independently of Cursor's account-wide model
+preferences. Earlier full bracketed refs are accepted only when every supplied
+parameter/value remains selectable in native metadata. Unavailable/fixed parameters
+that the current native catalog no longer exposes fail explicitly instead of being
+discarded. Older CLI releases that ignore parameterized-picker negotiation keep
+native variant selection and advertise no unsupported Thinking options.
+
+Commands are accepted only from the native Session's latest advertised catalog.
+The adapter forwards the original slash text and arguments to Cursor. It does not
+reimplement command templates or pretend that interactive-only CLI commands exist
+in ACP. The local `/copy-request-id` command can produce a successful terminal
+without a `nativeTurnRef` when native history is unchanged; all ordinary command
+turns still require the verified native user-turn identity.
+
+## Outbound delegation MCP bridge
+
+The Cursor plugin uses the official MCP SDK to expose a loopback-only HTTP server
+with a fresh bearer token for each writable Session. Native `mcpServers` injection
+makes its descriptions and tools available to Cursor without changing the user's
+project rules, global MCP settings, or prompts. The bridge is omitted from
+inspection and history/subagent replay. It is recreated with the current Session
+environment on resume and closed with the owning native transport.
+
+The tools are `harness_list`, `harness_inspect`, `delegate_start`, `thread_send`,
+`thread_read`, `thread_wait`, and `thread_cancel`. They invoke the exact absolute
+`CODEXHOST_CLI_PATH` without a shell, preserve `CODEXHOST_RUNTIME_ENDPOINT`,
+`CODEXHOST_RUNTIME_TOKEN`, and `CODEXHOST_THREAD_ID`, and use the Session cwd.
+Native MCP approvals still apply. Tool schemas restrict CLI operations; waits are
+limited to 60 seconds, CLI processes to 65 seconds, and captured output to 1 MiB.
+Closing a Session terminates its owned CLI requests and removes its listener.
+No bridge token or Host credential is persisted in a user configuration file.
+
+This makes a normal Cursor Thread able to delegate outward and observe/follow up
+on other Harnesses. It does not make Cursor a supported unattended destination.
+The native `--force` ACP path checks team policy and silently falls back to an
+allowlist when Run Everything is disabled; ACP reports only Agent/Plan/Ask and
+provides no confirmation of the effective approval policy. Therefore
+`unattended-full-access` still returns typed `unsupported` before creating a Session,
+rather than claiming the policy succeeded or inventing approval answers.
+
+Real native acceptance on the tested CLI confirmed Thinking selection and an
+administrative slash command without a model request. A separate native Turn
+called the injected MCP `harness_list` tool against a synthetic Host CLI, preserved
+the supplied parent Thread ID, and completed with a durable native Turn ID.
+A fresh native process also restored a non-default `fast` value from its saved
+Model ref after account-wide preferences were changed; native Turn identities
+remained equal. Native model preferences modified for validation were restored.
+Automated tests additionally cover tool discovery, argument safety, authentication,
+Session isolation, bounded waits, shutdown, partial configuration failure, and
+restoring non-Thinking parameters from saved Model refs. These are plugin/native
+checks, not a claim of visual Desktop acceptance or an end-to-end delegated task
+against another live Harness.
 
 ## Native Edit Diff
 
