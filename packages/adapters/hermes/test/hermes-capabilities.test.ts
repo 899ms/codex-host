@@ -385,3 +385,26 @@ describe("Hermes native commands", () => {
     },
   );
 });
+
+describe("Hermes ACP native command grammar", () => {
+  it.each(["/context extra", "//context", " /CoNtExT "])(
+    "keeps ACP-dispatched %j outside chat history",
+    async (text) => {
+      const { session } = makeSession(async () => ({ stopReason: "end_turn" }));
+      const completed = collect(session.outputs);
+      await session.execute({
+        type: "turn.start",
+        turnId: hostTurnIdSchema.parse("acp-command"),
+        input: [{ type: "text", text }],
+      });
+      const terminal = (await completed).find(
+        (output) => output.kind === "event" && output.event.type === "turn.completed",
+      );
+      if (terminal?.kind !== "event" || terminal.event.type !== "turn.completed")
+        throw new Error("Missing completion");
+      expect(terminal.event.nativeTurnRef).toBeUndefined();
+      expect(await session.readSnapshot()).toMatchObject({ ok: true, value: { turns: [] } });
+      await session.close();
+    },
+  );
+});

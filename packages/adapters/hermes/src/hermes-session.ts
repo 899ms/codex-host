@@ -787,10 +787,16 @@ export class HermesSession implements HarnessSession {
       return err("invalidRequest", "turn.start requires non-empty text input");
     }
     const turnKey = randomUUID();
-    const nativeCommand = text.trim().split(/\s/u)[0]?.replace(/^\/+/u, "").toLowerCase();
-    const isNativeCommand =
-      text.trimStart().startsWith("/") &&
-      (this.#transport.availableCommands ?? []).some((entry) => entry.name === nativeCommand);
+    const firstToken = text.trim().split(/\s/u)[0]?.replace(/^\/+/u, "").toLowerCase();
+    // ACP strips repeated slashes and dispatches advertised names with trailing
+    // arguments. Other transports must classify with the same parser they dispatch.
+    const nativeCommand = this.#transport.nativeCommandName
+      ? this.#transport.nativeCommandName(text)
+      : text.trimStart().startsWith("/") &&
+          (this.#transport.availableCommands ?? []).some((entry) => entry.name === firstToken)
+        ? firstToken
+        : null;
+    const isNativeCommand = nativeCommand != null;
     const active = new ActiveTurn(
       command.turnId,
       turnKey,

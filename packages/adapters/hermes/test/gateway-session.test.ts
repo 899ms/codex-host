@@ -203,6 +203,74 @@ describe("Hermes gateway native interactions", () => {
 });
 
 describe("Hermes gateway native turn projection", () => {
+  it.each(["/help extra", "//help", "/compressx", "//compress", "/context\nextra"])(
+    "preserves native history identity for ordinary slash prompt %j",
+    async (text) => {
+      const f = fixture();
+      const session = makeSession(f);
+      const nativeTurnRef = {
+        harnessId: session.harnessId,
+        nativeSessionId: "native",
+        nativeTurnKey: "persisted",
+        formatVersion: 1 as const,
+      };
+      vi.mocked(f.bridge.readNativeSnapshot)
+        .mockResolvedValueOnce({ turns: [] })
+        .mockResolvedValueOnce({
+          turns: [
+            {
+              nativeTurnRef,
+              input: [{ type: "text", text }],
+              items: [],
+              outcome: { status: "succeeded" },
+            },
+          ],
+        });
+      const completed = outputsUntilComplete(session);
+      await session.execute({
+        type: "turn.start",
+        turnId: hostTurnIdSchema.parse("slash-prompt"),
+        input: [{ type: "text", text }],
+      });
+      await pause();
+      expect(f.request).toHaveBeenCalledWith("prompt.submit", { session_id: "runtime", text });
+      f.emit("message.complete", { status: "complete", text: "reply" });
+      const outputs = await completed;
+      expect(
+        outputs.find((o) => o.kind === "event" && o.event.type === "turn.completed"),
+      ).toMatchObject({ event: { nativeTurnRef, outcome: { status: "succeeded" } } });
+      expect(
+        outputs.some(
+          (o) =>
+            o.kind === "event" &&
+            o.event.type === "item.started" &&
+            o.event.item.type === "contextCompaction",
+        ),
+      ).toBe(false);
+      await session.close();
+    },
+  );
+  it.each(["/help", " /HELP ", "/tools", "/context", "/version", "/compress focus"])(
+    "keeps dispatched native command %j outside chat history",
+    async (text) => {
+      const f = fixture();
+      const session = makeSession(f);
+      const completed = outputsUntilComplete(session);
+      await session.execute({
+        type: "turn.start",
+        turnId: hostTurnIdSchema.parse("slash-command"),
+        input: [{ type: "text", text }],
+      });
+      const outputs = await completed;
+      const terminal = outputs.find((o) => o.kind === "event" && o.event.type === "turn.completed");
+      expect(terminal).toMatchObject({ event: { outcome: { status: "succeeded" } } });
+      if (terminal?.kind === "event" && terminal.event.type === "turn.completed")
+        expect(terminal.event.nativeTurnRef).toBeUndefined();
+      expect(f.request.mock.calls.some(([method]) => method === "prompt.submit")).toBe(false);
+      expect(f.bridge.readNativeSnapshot).not.toHaveBeenCalled();
+      await session.close();
+    },
+  );
   it("preserves complete tool output, native rendered diff and terminal reasoning/usage", async () => {
     const f = fixture();
     const events: HermesTransportEvent[] = [];

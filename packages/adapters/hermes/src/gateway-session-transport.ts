@@ -251,6 +251,11 @@ export class HermesGatewaySessionTransport implements HermesSessionTransport {
         "Hermes effective approval policy differs from the requested mode; check native global approvals policy",
       );
   }
+  nativeCommandName(text: string): string | null {
+    const commandText = text.trim();
+    if (/^\/compress(?:\s|$)/iu.test(commandText)) return "compress";
+    return /^\/(help|tools|context|version)$/iu.exec(commandText)?.[1]?.toLowerCase() ?? null;
+  }
   async runTurn(
     text: string,
     emit: Active["emit"],
@@ -277,8 +282,9 @@ export class HermesGatewaySessionTransport implements HermesSessionTransport {
     };
     this.#active = active;
     const commandText = text.trim();
+    const nativeCommand = this.nativeCommandName(text);
     try {
-      if (/^\/compress(?:\s|$)/iu.test(commandText)) {
+      if (nativeCommand === "compress") {
         const compact = await this.transport.request(
           "session.compress",
           { session_id: this.sessionId, focus_topic: commandText.slice(9).trim() },
@@ -320,10 +326,10 @@ export class HermesGatewaySessionTransport implements HermesSessionTransport {
                 ? { status: "succeeded" }
                 : { status: "cancelled", reason: explanation || "Hermes did not compact context" },
         });
-      } else if (/^\/(help|tools|context|version)$/iu.test(commandText)) {
+      } else if (nativeCommand) {
         const response = await this.transport.request("slash.exec", {
           session_id: this.sessionId,
-          command: commandText.toLowerCase(),
+          command: `/${nativeCommand}`,
         });
         emit({ type: "agent.text", text: gatewayString(response.output) });
         active.resolve({ stopReason: "end_turn" });

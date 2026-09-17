@@ -117,6 +117,8 @@ export type HermesPromptResponse = PromptResponse & { compactionOutcome?: HostIt
 export interface HermesSessionTransport {
   onFault: (error: HermesTransportError) => void;
   readonly availableCommands: readonly AvailableCommand[];
+  /** Transport-specific dispatch grammar; ACP uses its advertised first-token grammar. */
+  nativeCommandName?(text: string): string | null;
   runTurn(
     text: string,
     onEvent: (event: HermesTransportEvent) => void,
