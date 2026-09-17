@@ -6,6 +6,7 @@ import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
+  type AvailableCommand,
   type Client,
   type InitializeResponse,
   type PromptResponse,
@@ -258,6 +259,11 @@ export class HermesAcpTransport {
   #replay: HermesTransportEvent[] | null = null;
   #sessionId: string | null = null;
   #stderrTail = "";
+  #availableCommands: AvailableCommand[] = [];
+
+  get availableCommands(): readonly AvailableCommand[] {
+    return this.#availableCommands;
+  }
 
   /** Late binding: the Session registers its fault consumer on construction. */
   onFault: (error: HermesTransportError) => void = () => undefined;
@@ -492,6 +498,10 @@ export class HermesAcpTransport {
 
   #handleUpdate(notification: { sessionId: string; update: SessionUpdate }): void {
     if (this.#sessionId && notification.sessionId !== this.#sessionId) return;
+    if (notification.update.sessionUpdate === "available_commands_update") {
+      this.#availableCommands = notification.update.availableCommands;
+      return;
+    }
     const event = transportEvent(notification.update);
     if (!event) return;
     if (this.#replay) this.#replay.push(event);

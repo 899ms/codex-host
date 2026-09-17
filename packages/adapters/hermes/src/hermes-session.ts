@@ -8,6 +8,10 @@ import type {
 import {
   HarnessOutputChannel,
   validateHostApprovalResponse,
+  type HarnessCommandCapability,
+  type HostFileChange,
+  type HostFileChangeItem,
+  type HostContextCompactionItem,
   type HarnessError,
   type HarnessOutput,
   type HarnessResult,
@@ -65,6 +69,13 @@ import {
   isHermesModeId,
   projectHermesModelState,
 } from "./hermes-models.js";
+
+import {
+  hermesFileChanges,
+  hermesToolOutput as toolOutputFromUpdate,
+} from "./hermes-file-changes.js";
+import { hermesCommandCatalog, hermesCommandText } from "./hermes-commands.js";
+import { hermesCompactionOutcome } from "./hermes-compaction.js";
 
 const HOST_ERROR_CODES: Record<string, HarnessError["code"]> = {
   notInstalled: "notInstalled",
@@ -167,6 +178,9 @@ class ActiveTurn {
   readonly turnId: ReturnType<typeof hostTurnIdSchema.parse>;
   readonly turnKey: string;
   readonly input: TurnStartCommand["input"];
+  readonly persistsHistory: boolean;
+  readonly compactionItem: HostContextCompactionItem | null;
+  compactionText = "";
   #currentText: {
     kind: "reasoning" | "agentMessage";
     item: HostReasoningItem | HostAgentMessageItem;
@@ -176,12 +190,48 @@ class ActiveTurn {
     { item: HostToolExecutionItem; startedAt: number; output?: HostToolOutput }
   >();
   #finishedItems: HostItemSnapshot[] = [];
+  #toolChanges = new Map<string, HostFileChange[]>();
   #emittedTerminalItemIds = new Set<string>();
 
-  constructor(turnId: string, turnKey: string, input: TurnStartCommand["input"]) {
+  rememberFileChanges(toolCallId: string, update: ToolCallUpdate): void {
+    const changes = hermesFileChanges(update);
+    if (update.content?.some((block) => block.type === "diff"))
+      this.#toolChanges.set(toolCallId, changes);
+  }
+
+  completeFileChanges(
+    toolCallId: string,
+    sourceItemId: HostToolExecutionItem["itemId"],
+  ): HostItemSnapshot | null {
+    const changes = this.#toolChanges.get(toolCallId);
+    this.#toolChanges.delete(toolCallId);
+    if (!changes?.length) return null;
+    const item: HostFileChangeItem = {
+      type: "fileChange",
+      itemId: hostItemIdSchema.parse(randomUUID()),
+      changes,
+      sourceItemIds: [sourceItemId],
+    };
+    const snapshot: HostItemSnapshot = { item, outcome: { status: "succeeded" } };
+    this.#finishedItems.push(snapshot);
+    this.#emittedTerminalItemIds.add(item.itemId);
+    return snapshot;
+  }
+
+  constructor(
+    turnId: string,
+    turnKey: string,
+    input: TurnStartCommand["input"],
+    persistsHistory: boolean,
+    compaction: boolean,
+  ) {
     this.turnId = hostTurnIdSchema.parse(turnId);
     this.turnKey = turnKey;
     this.input = input;
+    this.persistsHistory = persistsHistory;
+    this.compactionItem = compaction
+      ? { type: "contextCompaction", itemId: hostItemIdSchema.parse(randomUUID()) }
+      : null;
   }
 
   appendText(
@@ -276,6 +326,13 @@ class ActiveTurn {
     this.#toolItems.clear();
   }
 
+  finishCompaction(outcome: TurnOutcome): HostItemOutcome | null {
+    if (!this.compactionItem) return null;
+    const itemOutcome = hermesCompactionOutcome(outcome, this.compactionText);
+    this.#finishedItems.push({ item: this.compactionItem, outcome: itemOutcome });
+    return itemOutcome;
+  }
+
   drainPendingItems(): HostItemSnapshot[] {
     const pending = this.#finishedItems.filter(
       (snapshot) => !this.#emittedTerminalItemIds.has(snapshot.item.itemId),
@@ -303,26 +360,6 @@ function isPlainObjectOrArray(value: unknown): boolean {
   return typeof value === "object" && value !== null;
 }
 
-function toolOutputFromUpdate(update: ToolCallUpdate): HostToolOutput | null {
-  const content: HostToolOutput["content"] = [];
-  if (Array.isArray(update.content)) {
-    for (const block of update.content) {
-      const candidate = block as unknown as { type?: string; text?: unknown };
-      if (
-        candidate?.type === "text" &&
-        typeof candidate.text === "string" &&
-        candidate.text.length > 0
-      ) {
-        content.push({ type: "text", text: candidate.text });
-      }
-    }
-  }
-  if (content.length === 0 && typeof update.rawOutput === "string" && update.rawOutput.length > 0) {
-    content.push({ type: "text", text: update.rawOutput });
-  }
-  return content.length > 0 ? { content } : null;
-}
-
 function historyTurnsFromReplay(
   replay: HermesTransportEvent[],
   nativeRef: NativeSessionRef,
@@ -335,6 +372,29 @@ function historyTurnsFromReplay(
     turnKey: string;
   } | null = null;
   let toolItemIndexes = new Map<string, number>();
+  const toolChanges = new Map<string, HostFileChange[]>();
+  const appendFileChanges = (
+    toolCallId: string,
+    update: ToolCallUpdate,
+    sourceItemId: HostToolExecutionItem["itemId"],
+  ) => {
+    const changes = hermesFileChanges(update);
+    if (update.content?.some((block) => block.type === "diff"))
+      toolChanges.set(toolCallId, changes);
+    const confirmedChanges = toolChanges.get(toolCallId);
+    if (current && update.status === "completed" && confirmedChanges?.length) {
+      current.items.push({
+        item: {
+          type: "fileChange",
+          itemId: hostItemIdSchema.parse(randomUUID()),
+          changes: confirmedChanges,
+          sourceItemIds: [sourceItemId],
+        },
+        outcome: { status: "succeeded" },
+      });
+    }
+    if (update.status === "completed" || update.status === "failed") toolChanges.delete(toolCallId);
+  };
 
   const closeTurn = () => {
     if (!current || current.items.length === 0) {
@@ -363,6 +423,7 @@ function historyTurnsFromReplay(
     });
     current = null;
     toolItemIndexes = new Map();
+    toolChanges.clear();
   };
 
   const pushText = (kind: "reasoning" | "agentMessage", text: string) => {
@@ -433,6 +494,8 @@ function historyTurnsFromReplay(
                 : { status: "cancelled", reason: "Turn ended before terminal tool update" },
         });
         toolItemIndexes.set(event.toolCallId, current.items.length - 1);
+        const sourceItemId = current.items.at(-1)?.item.itemId;
+        if (sourceItemId) appendFileChanges(event.toolCallId, update, sourceItemId);
         break;
       }
       case "tool.update": {
@@ -455,6 +518,7 @@ function historyTurnsFromReplay(
                   }
                 : prior.outcome,
         };
+        appendFileChanges(event.toolCallId, update, prior.item.itemId);
         break;
       }
       default:
@@ -505,6 +569,7 @@ export class HermesSession implements HarnessSession {
   readonly initialUsage: HostUsage | null;
 
   readonly outputs: AsyncIterable<HarnessOutput>;
+  readonly commands: HarnessCommandCapability;
 
   #channel = new HarnessOutputChannel<HarnessOutput>();
   #transport: HermesAcpTransport;
@@ -525,6 +590,24 @@ export class HermesSession implements HarnessSession {
 
   constructor(options: HermesSessionOptions) {
     this.#transport = options.transport;
+    this.commands = {
+      list: async () =>
+        this.#closed || this.#faulted
+          ? err("invalidState", "Hermes Session is unavailable")
+          : ok(hermesCommandCatalog(this.#transport.availableCommands ?? [])),
+      execute: async (command) => {
+        const text = hermesCommandText(
+          command,
+          hermesCommandCatalog(this.#transport.availableCommands ?? []),
+        );
+        if (!text.ok) return text;
+        return this.execute({
+          type: "turn.start",
+          turnId: command.turnId,
+          input: [{ type: "text", text: text.value }],
+        });
+      },
+    };
     this.#nativeRef = options.nativeRef;
     this.#onSettle = options.onSettle;
     const projected = projectHermesModelState(options.open.session.models);
@@ -611,8 +694,8 @@ export class HermesSession implements HarnessSession {
     if (this.#closed) return;
     this.#closed = true;
     this.#cancelApprovalWaiters();
-    this.#activeTurn = null;
-    this.#activeTurnId = null;
+    if (this.#activeTurn)
+      this.#completeActiveTurn(this.#activeTurn, { status: "cancelled", reason: "Session closed" });
     await this.#transport.close().catch(() => undefined);
     this.#channel.end();
     this.#onSettle(this);
@@ -660,7 +743,17 @@ export class HermesSession implements HarnessSession {
       return err("invalidRequest", "turn.start requires non-empty text input");
     }
     const turnKey = randomUUID();
-    const active = new ActiveTurn(command.turnId, turnKey, command.input);
+    const nativeCommand = text.trim().split(/\s/u)[0]?.replace(/^\/+/u, "").toLowerCase();
+    const isNativeCommand =
+      text.trimStart().startsWith("/") &&
+      (this.#transport.availableCommands ?? []).some((entry) => entry.name === nativeCommand);
+    const active = new ActiveTurn(
+      command.turnId,
+      turnKey,
+      command.input,
+      !isNativeCommand,
+      isNativeCommand && nativeCommand === "compress",
+    );
     this.#activeTurn = active;
     this.#activeTurnId = active.turnId;
     void this.#runTurn(active, text);
@@ -669,6 +762,8 @@ export class HermesSession implements HarnessSession {
 
   async #runTurn(active: ActiveTurn, text: string): Promise<void> {
     this.#emit({ type: "turn.started", turnId: active.turnId });
+    if (active.compactionItem)
+      this.#emit({ type: "item.started", turnId: active.turnId, item: active.compactionItem });
     let promptResponse: PromptResponse | null = null;
     let failure: HarnessError | null = null;
     try {
@@ -718,6 +813,10 @@ export class HermesSession implements HarnessSession {
     this.#activeTurn = null;
     this.#activeTurnId = null;
     active.finish();
+    const compactionOutcome = active.finishCompaction(outcome);
+    if (outcome.status === "succeeded" && compactionOutcome?.status === "failed") {
+      outcome = { status: "failed", error: compactionOutcome.error };
+    }
     const nativeTurnRef = nativeTurnRefSchema.parse({
       harnessId: this.#nativeRef.harnessId,
       nativeSessionId: this.#nativeRef.nativeSessionId,
@@ -731,11 +830,17 @@ export class HermesSession implements HarnessSession {
     if (usage) {
       this.#emit({ type: "session.usage.changed", usage, observedForTurnId: active.turnId });
     }
-    this.#emit({ type: "turn.completed", turnId: active.turnId, nativeTurnRef, outcome });
-    this.#completedTurns.push(turnSnapshot);
+    this.#emit({
+      type: "turn.completed",
+      turnId: active.turnId,
+      ...(active.persistsHistory ? { nativeTurnRef } : {}),
+      outcome,
+    });
+    if (active.persistsHistory) this.#completedTurns.push(turnSnapshot);
   }
 
   #handleTransportEvent(active: ActiveTurn, event: HermesTransportEvent): void {
+    if (this.#activeTurn !== active) return;
     switch (event.type) {
       case "usage": {
         const usage = usageFromContext(event.used, event.size);
@@ -752,6 +857,7 @@ export class HermesSession implements HarnessSession {
         this.#appendTextItem(active, "reasoning", event.text);
         return;
       case "agent.text":
+        if (active.compactionItem) active.compactionText += event.text;
         this.#appendTextItem(active, "agentMessage", event.text);
         return;
       case "tool.call": {
@@ -820,6 +926,7 @@ export class HermesSession implements HarnessSession {
   #updateToolItem(active: ActiveTurn, update: ToolCallUpdate): void {
     const entry = active.getToolItem(update.toolCallId);
     if (!entry) return;
+    active.rememberFileChanges(update.toolCallId, update);
     const output = toolOutputFromUpdate(update);
     if (output && output.content.length > 0) {
       active.updateToolOutput(update.toolCallId, output);
@@ -838,6 +945,13 @@ export class HermesSession implements HarnessSession {
       );
       if (completed) {
         this.#emit({ type: "item.completed", turnId: active.turnId, snapshot: completed });
+        if (update.status === "completed") {
+          const fileChange = active.completeFileChanges(update.toolCallId, completed.item.itemId);
+          if (fileChange) {
+            this.#emit({ type: "item.started", turnId: active.turnId, item: fileChange.item });
+            this.#emit({ type: "item.completed", turnId: active.turnId, snapshot: fileChange });
+          }
+        }
       }
     }
   }
