@@ -53,13 +53,18 @@
 | [`harnesses/deepseek/dsh-edit-recovery.md`](harnesses/deepseek/dsh-edit-recovery.md) | DSH 原生停止确认、消息修订、Fork 和版本化 checkpoint；修改恢复流程时阅读。 |
 | [`harnesses/deepseek/dsh-015rc1-validation.md`](harnesses/deepseek/dsh-015rc1-validation.md) | DSH 支持版本、真实 CLI 生命周期和协议验证证据；变更版本范围或 Gate 时阅读。 |
 
-### OpenCode、Pi 与 OMP
+### OpenCode 与 Pi
 
 | 文档 | 内容与阅读时机 |
 | --- | --- |
 | [`harnesses/opencode/opencode-harness-integration-analysis.md`](harnesses/opencode/opencode-harness-integration-analysis.md) | OpenCode 官方接口证据、接入设计和实现边界；维护 OpenCode Adapter 时阅读。 |
 | [`harnesses/opencode/opencode-edit-recovery.md`](harnesses/opencode/opencode-edit-recovery.md) | OpenCode 原生 Fork 编辑恢复和取消终态语义；修改编辑或取消时阅读。 |
 | [`harnesses/pi/pi-edit-recovery.md`](harnesses/pi/pi-edit-recovery.md) | Pi 空历史编辑、原生文件发布和生命周期 Gate；修改 Pi 恢复时阅读。 |
+
+### OMP
+
+| 文档 | 内容与阅读时机 |
+| --- | --- |
 | [`harnesses/omp/omp-interactions.md`](harnesses/omp/omp-interactions.md) | OMP 原生提问、审批、选项说明和超时语义；维护 OMP 交互时阅读。 |
 
 ### Grok
