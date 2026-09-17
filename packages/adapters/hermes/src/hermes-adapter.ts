@@ -208,6 +208,7 @@ export class HermesAdapter implements HarnessAdapter {
     // A saved ACP Session always stays ACP, even when a newer gateway is installed.
     if (!nativeRef || isGatewayRef(nativeRef)) {
       const python = await this.#gatewayPython(cwd, gatewayEnvironment);
+      if (this.#closed) return failure("invalidState", "Hermes Adapter is closed");
       if (python) return this.#openGateway(input, python, gatewayEnvironment);
       if (nativeRef)
         return failure(
@@ -357,6 +358,7 @@ export class HermesAdapter implements HarnessAdapter {
     python: string,
     environment: NodeJS.ProcessEnv,
   ): Promise<HarnessResult<HarnessSession>> {
+    if (this.#closed) return failure("invalidState", "Hermes Adapter is closed");
     const ref = input.kind === "resume" ? input.nativeRef : null;
     if (input.kind === "fork" || input.kind === "rollbackLastTurn") {
       const source = [...this.#sessions].find(

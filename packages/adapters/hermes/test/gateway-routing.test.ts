@@ -6,6 +6,29 @@ import { nativeSessionRefSchema } from "@codexhost/shared-contracts";
 
 afterEach(() => vi.restoreAllMocks());
 describe("Hermes persisted transport ownership", () => {
+  it("does not start a Session when the Adapter closes during gateway discovery", async () => {
+    let finishProbe: (python: string | null) => void = () => undefined;
+    const pendingProbe = new Promise<string | null>((resolve) => {
+      finishProbe = resolve;
+    });
+    const probe = vi.spyOn(HermesGatewayTransport, "probe").mockReturnValue(pendingProbe);
+    const prepare = vi
+      .spyOn(HermesGatewayTransport.prototype, "prepareSession")
+      .mockResolvedValue();
+    const start = vi
+      .spyOn(HermesGatewayTransport.prototype, "start")
+      .mockRejectedValue(new Error("Unexpected gateway startup"));
+    const acp = vi.spyOn(HermesAcpTransport.prototype, "open");
+    const adapter = new HermesAdapter({ command: process.execPath });
+    const opening = adapter.open({ kind: "create", cwd: process.cwd() });
+    expect(probe).toHaveBeenCalledOnce();
+    await adapter.close();
+    finishProbe("/supported/python");
+    expect(await opening).toMatchObject({ ok: false, error: { code: "invalidState" } });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    expect(acp).not.toHaveBeenCalled();
+  });
   it("keeps old Native Refs exclusively on ACP even when gateway is available", async () => {
     const probe = vi.spyOn(HermesGatewayTransport, "probe").mockResolvedValue("/supported/python");
     vi.spyOn(HermesAcpTransport.prototype, "open").mockResolvedValue({
