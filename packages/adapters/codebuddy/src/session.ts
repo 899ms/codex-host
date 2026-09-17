@@ -51,7 +51,7 @@ import { historyUsage, readNativeHistory, snapshotFromHistory } from "./history.
 import { CodeBuddyInteractions } from "./interactions.js";
 import { CodeBuddyTurnOutput } from "./projection.js";
 import { CodeBuddySubagents } from "./subagents.js";
-import { commandCatalog, commandPrompt } from "./slash-commands.js";
+import { commandCatalog, commandPrompt, isExcludedInvocation } from "./slash-commands.js";
 
 type SessionInput = Extract<OpenSessionInput, { kind: "create" | "resume" }>;
 export type CodeBuddyHistoryReader = typeof readNativeHistory;
@@ -306,6 +306,8 @@ export class CodeBuddySession implements HarnessSession {
             .trim()
             .split(/\s/u)[0]
         : undefined;
+    if (isExcludedInvocation(invocation))
+      return failure("unsupported", "CodeBuddy command is not available in this Session");
     return this.#execute(
       command,
       this.#commands.commands.some((entry) => entry.invocation === invocation),

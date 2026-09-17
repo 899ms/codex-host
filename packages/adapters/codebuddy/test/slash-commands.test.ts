@@ -50,6 +50,12 @@ describe("CodeBuddy native slash commands", () => {
     if (!opened.ok) throw Error(opened.error.message);
     const session = opened.value,
       outputs: HarnessOutput[] = [];
+    for (const text of ["/clear", " /fork example", "/resume\nold-session", "/background task"]) {
+      expect(
+        await session.execute({ type: "turn.start", turnId, input: [{ type: "text", text }] }),
+      ).toMatchObject({ error: { code: "unsupported" } });
+    }
+    expect(native.history).toEqual([]);
     void (async () => {
       for await (const output of session.outputs) outputs.push(output);
     })();

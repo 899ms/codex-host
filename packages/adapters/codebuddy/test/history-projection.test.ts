@@ -159,28 +159,61 @@ describe("CodeBuddy native history and output projection", () => {
     },
   );
 
-  it("completes compaction only when new native history confirms its summary", () => {
-    const events: HostEvent[] = [];
-    const output = new CodeBuddyTurnOutput(
-      hostTurnIdSchema.parse("compact-confirmed"),
-      process.cwd(),
-      (event) => events.push(event),
-    );
-    output.compact();
-    output.confirmCompaction([
-      {
-        item: { type: "contextCompaction", itemId: hostItemIdSchema.parse("native-summary") },
-        outcome: { status: "succeeded" },
-      },
-    ]);
-    output.finish("succeeded");
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "item.completed",
-        snapshot: expect.objectContaining({ outcome: { status: "succeeded" } }),
-      }),
-    );
-  });
+  it.each(["succeeded", "failed", "cancelled"] as const)(
+    "retains confirmed compaction after a %s Turn",
+    (status) => {
+      const events: HostEvent[] = [];
+      const output = new CodeBuddyTurnOutput(
+        hostTurnIdSchema.parse("compact-confirmed"),
+        process.cwd(),
+        (event) => events.push(event),
+      );
+      output.compact();
+      output.confirmCompaction([
+        {
+          item: { type: "contextCompaction", itemId: hostItemIdSchema.parse("native-summary") },
+          outcome: { status: "succeeded" },
+        },
+      ]);
+      output.finish(status);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "item.completed",
+          snapshot: expect.objectContaining({ outcome: { status: "succeeded" } }),
+        }),
+      );
+    },
+  );
+
+  it.each(["cancelled", "interrupted", "failed", "completed"])(
+    "preserves manual compaction terminal status %s in history",
+    (status) => {
+      const snapshot = snapshotFromHistory(
+        lines([
+          { ...user, providerData: { agent: "compact" } },
+          {
+            ...assistant,
+            status,
+            providerData: {
+              agent: "compact",
+              isCompactInternal: true,
+              isCompacted: false,
+              compactType: "user-command",
+            },
+          },
+        ]),
+        ref,
+        process.cwd(),
+      );
+      const expected = ["cancelled", "interrupted"].includes(status) ? "cancelled" : "failed";
+      expect(snapshot.turns).toHaveLength(1);
+      expect(snapshot.turns[0]).toMatchObject({
+        input: [{ text: "/compact" }],
+        items: [{ item: { type: "contextCompaction" }, outcome: { status: expected } }],
+        outcome: { status: expected },
+      });
+    },
+  );
 
   it("retains every valid diff in one terminal tool result without duplicate items", () => {
     const events: HostEvent[] = [];

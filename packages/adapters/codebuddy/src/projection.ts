@@ -223,6 +223,10 @@ export class CodeBuddyTurnOutput {
 
   finish(status: "succeeded" | "failed" | "cancelled", error?: HarnessError) {
     for (const { item } of this.#items.values()) {
+      if (item.type === "contextCompaction" && this.#compactionConfirmed) {
+        this.#finish(item, { status: "succeeded" });
+        continue;
+      }
       const outcome: HostItemOutcome =
         status === "failed" ||
         (item.type === "contextCompaction" && status === "succeeded" && !this.#compactionConfirmed)

@@ -33,6 +33,10 @@ const excluded = new Set([
   "_compact",
 ]);
 
+export function isExcludedInvocation(invocation: string | undefined): boolean {
+  return invocation?.startsWith("/") === true && excluded.has(invocation.slice(1));
+}
+
 export function commandCatalog(value: unknown): HarnessCommandCatalog {
   const seen = new Set<string>();
   return {

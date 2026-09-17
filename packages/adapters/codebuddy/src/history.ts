@@ -318,27 +318,25 @@ export function snapshotFromHistory(
     if (!current) continue;
     if (data.agent === "compact" || data.isCompactInternal === true) {
       if (row.role === "assistant") {
-        current.items.push({
-          item: {
-            type: "contextCompaction",
-            itemId: hostItemIdSchema.parse(`compact-${text(row.id)}`),
-          },
-          outcome:
-            row.status === "completed" && data.isCompacted === true
-              ? { status: "succeeded" }
+        const outcome: HostItemSnapshot["outcome"] =
+          row.status === "completed" && data.isCompacted === true
+            ? { status: "succeeded" }
+            : row.status === "cancelled" || row.status === "interrupted"
+              ? { status: "cancelled" }
               : {
                   status: "failed",
                   error: nativeError(
                     new CodeBuddyError("nativeFailure", "Native compaction did not complete"),
                   ),
-                },
+                };
+        current.items.push({
+          item: {
+            type: "contextCompaction",
+            itemId: hostItemIdSchema.parse(`compact-${text(row.id)}`),
+          },
+          outcome,
         });
-        if (
-          row.status === "completed" &&
-          data.isCompacted === true &&
-          data.compactType === "user-command"
-        )
-          current.outcome = { status: "succeeded" };
+        if (data.compactType === "user-command") current.outcome = outcome;
       }
       continue;
     }
