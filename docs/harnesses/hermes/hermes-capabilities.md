@@ -1,43 +1,57 @@
 # Hermes 原生能力与接入边界
 
-Hermes 插件仍使用 `hermes acp`，实现只位于 `packages/adapters/hermes/`。公共 Adapter、Host Runtime 和 Renderer 没有 Hermes 专用分支。
+实现只位于 `packages/adapters/hermes/`；公共 Adapter、Host Runtime、Renderer 不包含 Hermes 专用逻辑。
+
+## 原生传输与兼容性
+
+新会话优先使用 Hermes **0.21.3 / desktop backend contract 7** 的正式 `tui_gateway` JSON-RPC stdio。启动先核对版本和 `gateway.capabilities.per_session_exclusive_submit`，使用 Hermes 安装自身的 Python，以 `-I` 隔离工作区模块覆盖。未满足版本检查的新会话保留 ACP 后备路径。已有不带 gateway locator 的 Native Ref 始终使用 `hermes acp`；保存的 gateway Ref 若缺少兼容后端则明确失败，不能交给 ACP 打开。两种协议不混用同一会话。每个 gateway Session 使用独立进程，Adapter 拒绝为同一会话重复创建 owner。
+
+Gateway 区分 runtime ID 与持久化 ID。Host 保存持久化根 ID；恢复时核对原生当前物理 ID，压缩生成 continuation 后仍由 Hermes 官方 lineage 解析读取，保持先前 Turn 身份。工作目录使用真实路径比较；Fork 不支持跨工作目录。Model、Provider、Thinking 使用原生配置及实际确认值；选择不会修改全局配置。YOLO 是原生进程内权限状态，因此确认后的选择保存在 Hermes 自有 Native Ref locator，支持关闭源会话后的派生和恢复。`default` 表示关闭会话 YOLO 并遵循原生全局审批策略；全局策略仍导致 YOLO 时，不能把关闭会话开关误报为恢复审批。ACP 独有的 `accept_edits` 不在 gateway 权限目录中。
+
+## 提问、工具、Thinking 与 Usage
+
+Gateway 的 `clarify` 映射为 Host Question，支持单题、批量题、文本、单选和多选，保留原生选项与自填语义。Host 验证答案后回复原生请求；多选通过原生支持的 JSON 数组编码，选项中的逗号不会被拆开。`request.cancel` 的超时映射为 expired，取消/关闭后不回复迟到答案。审批保留原生 once、session、always、deny，分别映射单次、会话、永久和拒绝。
+
+Thinking 目录直接对应 `hermes_constants.parse_reasoning_effort` 的 none/minimal/low/medium/high/xhigh/max/ultra。选择调用 `config.set(scope=session)` 并回读确认；none 确实关闭 reasoning，而非原生仅用于显示的 hide。实际模型是否接受相应 effort 仍遵循 Hermes 原生模型实现。
+
+工具状态与完整结果来自 `tool.start` / `tool.complete.result`，不把截断的 summary/result_text 当完整结果。专属进程通过原生 `HERMES_TUI_TOOL_PROGRESS=all` 开关启用工具生命周期，不改用户配置。reasoning/text 流式和最终内容去重；Usage 投影原生累计 input/output/reasoning/total 与 context_used/context_max。取消等待原生终态；无法确认独占提交或压缩 pending 时终止会话，避免不确定的原生任务与下一轮重叠。RPC 超时、协议故障、关闭均释放自有进程组，Windows 使用 taskkill 树终止。
 
 ## Edit Diff
 
-工具的 ACP `content: [{ type: "diff", path, oldText, newText }]` 保留为待确认修改，只有原生工具状态为 `completed` 才输出 `fileChange`，并通过 `sourceItemIds` 关联工具。失败、拒绝或取消的工具不会把预览当作已应用修改。原生最后一次 diff 更新覆盖先前预览；历史重放使用相同投影，但仅当原生回放仍包含 diff 块时能展示差异。只有普通工具摘要的旧历史不能重建修改内容。
+ACP 的 diff 内容块和 gateway 的原生 `inline_diff` 都只在工具完成后投影 `fileChange`，通过 `sourceItemIds` 关联工具。失败、拒绝或取消不会把预览当已应用修改。gateway 的 inline_diff 是带 ANSI、文件箭头标题、行数上限的显示片段，按明确 hunk 状态解析；正文中的箭头和 `---`/`+++` 不成为假文件名。
 
-Hermes 的 `skill_manage` 会将 unified diff 的 hunk 转换为 `oldText/newText`，原文件行号已丢失。插件保守标记 `diffScope: "fragment"`、`kind: "update"`，不把缺失 oldText 推断成新建文件，也不把空 newText 推断成删除文件。展示的是原生片段，不用于合并为整文件补丁。每个工具最多保留 32 个片段、1 MiB 文本；超出则不投影 diff，工具输出仍保留。工具文本/图片从 ACP 标准嵌套 `content` 块读取。
+两条路径均保守标记 `diffScope: fragment`、`kind: update`：ACP 的 skill_manage 丢失 hunk 坐标，gateway 的原生显示又可能截断，均不能当整文件补丁。每工具最多 32 个片段、1 MiB。ACP 历史仅在回放仍带 diff 块时可重现差异；gateway 持久化工具结果未保存渲染时的旧文件快照，历史恢复保留完整工具输入/输出，但不重建未知 Edit Diff。
 
-## 斜杠命令和压缩
+## 斜杠与压缩
 
-Session 从原生 `available_commands_update` 动态建立命令目录，支持其实际公布的 `/help`、`/tools`、`/context`、`/compress`、`/version`。不会硬编码宣称旧版本支持命令；未公布或不支持的参数在发送 Prompt 前拒绝。只有原生声明 input 的命令接受文本参数。
+Gateway 支持 `/help`、`/tools`、`/context`、`/version`（原生 `slash.exec`）和 `/compress [focus]`（原生 `session.compress`）。ACP 仅暴露 `available_commands_update` 实际公布的同组命令。命令参数先验证，均遵守单 Turn 排他性；原生命令不进入聊天 Transcript，也不生成虚构 NativeTurnRef。
 
-命令走原生 `session/prompt`，沿用单 Turn 排他、取消、故障和关闭流程。`/compress` 执行 Hermes 的压缩实现，结果及更新后的 Usage 原样投影。原生命令对应 `contextCompaction` Item。仅原生明确返回 `Context compressed: … messages` 及 token 数量确认时成功；`Compression failed:`、`Error executing /compress:` 或不可用结果让 Item 和 Turn 失败。原生可能报告无上下文或其他未确认结果，并仍返回 `end_turn`；此时 Turn 正常结束，Item 以原生文本为原因结束为无操作的 `cancelled`，不声称用户取消或压缩成功。取消请求发给原生，等待真实 Prompt 终态；不能保证原生同步压缩函数立即响应中断。关闭 Session 终结活动 Turn，迟到输出不会污染后续状态。
+压缩生成 `contextCompaction` Item。Gateway 依据结构化状态：实际 compressed 成功，无变化/锁未获得为带原生原因的 no-op，summary generation aborted 为 Item 和 Turn 失败；pending 不是成功，关闭进程释放未完成工作。ACP 依据已核实的原生压缩结果文本：明确成功才成功，明确失败令 Item 和 Turn 失败，无上下文/未确认结果保持 no-op。不会把无变化或原生总结失败描述成用户取消。自动压缩没有完整可观测生命周期，不宣称自动压缩 Item。
 
-原生 ACP 不把这些命令写入会话 Transcript，因此它们不生成虚构 `NativeTurnRef`，也不进入 `readSnapshot()` 的持久化历史。普通聊天仍使用原有历史逻辑。压缩后原生恢复的是压缩后的模型上下文，不保证保留压缩前所有可见 Turn。
+`/model` 使用专门的确认配置接口；`/reset`、原地 undo/rewind、queue/steer 不作为命令暴露，避免破坏 Host 历史或绕过排他 Turn。
 
-`/model` 通过既有模型选择接口处理，确保 Host 得到确认后的配置。目录不暴露 `/reset`（会使 Host 历史失效），也不暴露 `/queue`、`/steer`（需要不同于当前单 Prompt 的并发协议）。用户直接输入文本的行为仍交给 Hermes 原生解释。
+## 精确 Fork 与修订上一条
 
-## 剩余能力和实现路径
+Gateway 原生 `session.branch(count)` 只复制显示文本并丢弃工具关系，因此没有用于实现公共历史契约。插件通过官方 `SessionDB` 只读完整消息/工具行，以真实 row ID 和原生 display_identity 建立稳定 Turn 身份；使用 `user_originated_turn_view` 与 `_history_to_messages` 排除内部续跑、压缩摘要、hidden 行，保留用户原始技能命令显示。
 
-| 能力 | 当前 ACP 原生事实 | 当前结论 |
-| --- | --- | --- |
-| 提问 | ACP 只有 permission 请求；没有安装 TUI gateway 的 `clarify` 回调 | 不伪造问题或自动回答，维持未支持 |
-| Thinking 选择 | `set_config_option` 对非权限键仅存入字典，没有更新 Agent reasoning；也不公布 reasoning 选项 | 不把 RPC 接受误报为设置生效 |
-| Fork | `session/fork` 深拷贝完整会话，参数没有 checkpoint | 无法实现公共契约要求的指定中间 Turn 边界，维持未支持 |
-| 修订上一条 | ACP 无非破坏性截断或 rollback 接口 | 不修改源会话，不用完整复制冒充少一轮历史 |
-| 自动压缩事件 | ACP 提供压缩后的 Usage/摘要，没有对应压缩开始和确认完成事件 | 手动命令可用，不宣称自动压缩生命周期可观测 |
+未压缩且可完整验证的历史产生包含前缀长度与完整消息摘要的 checkpoint。Fork 使用官方事务性 export/import 复制精确前缀；修订上一条导出源会话并只保留最后一个真实用户 Turn 之前的完整原生消息。新会话使用新 ID、父关联及保留的 model_config/profile；复制后逐字段校验工具输入/输出，并确认源消息未变。源会话正在运行时拒绝派生。若后续启动失败，只删除本实例刚派生、父关联与内容摘要均未变的新会话，绝不删除源。
 
-官方 TUI gateway 是另一套正式支持的协议，具有 `clarify`、reasoning、`session.compress`、带消息数量边界的 `session.branch(count)`、`session.undo`、恢复、审批和中断。完整迁移后可以用 branch 加 undo 组合满足源隔离的修订语义，并验证单轮空历史和配置保留。它区分进程内 runtime Session 与持久化 Session，管理自己的 owner 和附着客户端；官方明确不支持独立进程并发写同一会话。它的 rewind 在 `prompt.submit` 上以 `confirm_truncate` 破坏性改写持久化行，且幸存行 ID 会改变。不能为 ACP 会话临时启动 gateway 发几个 RPC，就声称满足独立派生、源会话隔离和稳定历史身份。后续可在 Hermes 插件内部完整迁移传输，并对既有 ACP 会话、身份、审批、取消和历史提供迁移验收；当前不混用这两个会话 owner。
+压缩归档或 continuation 的历史仍可恢复查看，但原生 import 会重新激活消息，不能无损复制当前模型上下文。因此此类 Session 不产生 checkpoint，派生明确返回 unsupported；过期 checkpoint 返回 checkpointNotFound，不做近似复制。
+
+## 跨 Harness 协作发现
+
+Gateway 保留 `CODEXHOST_CLI_PATH`、`CODEXHOST_RUNTIME_ENDPOINT`、`CODEXHOST_RUNTIME_TOKEN`、`CODEXHOST_THREAD_ID`。仅 writable Session 且四者齐全时，在原生解析出的 active home/skills 下原子创建唯一 `codexhost-runtime-*` 临时技能目录，通过正式 `HERMES_TUI_SKILLS` 预加载到 system prompt，保留已有 preload 列表。内容只指导按 CLI --help 发现已授权的 delegate/thread 命令，不包含任何变量值或凭据。正常关闭和启动失败删除本进程独有目录；强制终止整个 Host 进程可能留下该无凭据的临时说明目录。inspection、版本 probe、history reader 不创建技能。
+
+原生 Hermes delegate_task 仍可用。旧 ACP 会话保持原有环境/热进程兼容行为，尚无该 gateway 的跨 Harness CLI 自动发现，不将 ACP 原生子代理与跨 Harness 委派混称。
 
 ## 原生依据与验证范围
 
-源码核查固定于 NousResearch/hermes-agent `1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0`：
+固定依据为 NousResearch/hermes-agent `1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0`（0.21.3）：
 
-- [ACP 命令目录、派发、压缩](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/commands.py)
-- [ACP 工具 diff 和输出块](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/tools.py)
-- [ACP Prompt、取消、配置和 Fork](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/server.py)
-- [ACP 全量深拷贝和 source=acp 持久化](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/session.py)
-- [官方协议对比、gateway owner 和 rewind 语义](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/website/docs/developer-guide/programmatic-integration.md)
+- [正式程序化协议与 owner 约束](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/website/docs/developer-guide/programmatic-integration.md)
+- [Gateway Session 创建、恢复、压缩](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/tui_gateway/methods_session.py)、[实际配置设置](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/tui_gateway/methods_config_set.py)
+- [工具生命周期及原生 diff](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/tui_gateway/tool_progress.py)、[diff 显示片段](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/agent/display.py)
+- [持久化数据库](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/hermes_state.py)、[导入导出](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/hermes_state_portability.py)
+- [ACP 命令](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/commands.py)、[ACP 协议](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/server.py)
 
-聚焦测试覆盖成功/失败 diff、历史一致性、内容边界、命令协商、参数拒绝、压缩 RPC 失败/原生文本失败，以及取消和关闭生命周期。没有安装并认证的 Hermes 可执行程序，因此未进行真实模型压缩或 Desktop 端到端测试；源码核查和模拟协议测试不能替代这些验证。
+协议 fixture 测试覆盖 Question/审批/配置确认、diff 片段、命令与压缩失败/取消、迟到事件、重复回答、进程故障、旧 ACP 路由及 owner。可选原生测试用 `CODEXHOST_HERMES_NATIVE_TEST_PYTHON` 指向已安装的上述 Hermes Python；在隔离 HERMES_HOME 下真实执行 SessionDB 派生/回滚/压缩 lineage，运行本地 OpenAI 模拟服务驱动真实 gateway/clarify/terminal 与恢复，并验证临时技能及 Host CLI 环境。测试不调用付费模型；尚未进行真实外部模型压缩或 Desktop 端到端验收。

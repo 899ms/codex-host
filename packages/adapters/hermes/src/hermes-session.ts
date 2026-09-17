@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { HermesQuestions } from "./hermes-questions.js";
 
 import type {
   PromptResponse,
@@ -8,6 +9,7 @@ import type {
 import {
   HarnessOutputChannel,
   validateHostApprovalResponse,
+  type HostQuestionResponse,
   type HarnessCommandCapability,
   type HostFileChange,
   type HostFileChangeItem,
@@ -47,6 +49,7 @@ import {
 import {
   harnessIdSchema,
   harnessPermissionModeIdSchema,
+  harnessThinkingOptionIdSchema,
   hostInteractionIdSchema,
   hostItemIdSchema,
   hostTurnIdSchema,
@@ -58,7 +61,9 @@ import {
 
 import {
   HermesTransportError,
-  type HermesAcpTransport,
+  type HermesSessionTransport,
+  type HermesQuestionRequest,
+  type HermesPromptResponse,
   type HermesOpenResult,
   type HermesPermissionRequest,
   type HermesTransportEvent,
@@ -143,7 +148,10 @@ interface ApprovalWaiter {
  * Map ACP permission options to Host approval actions. Action ids equal the
  * native optionIds (already transport-safe), so the Host echoes them back.
  */
-function projectPermissionOptions(options: HermesPermissionRequest["options"]): {
+function projectPermissionOptions(
+  options: HermesPermissionRequest["options"],
+  effects?: HermesPermissionRequest["effects"],
+): {
   actions: HostApprovalInteraction["actions"];
   optionIdByAction: ReadonlyMap<string, string>;
 } {
@@ -162,7 +170,7 @@ function projectPermissionOptions(options: HermesPermissionRequest["options"]): 
   const actions: HostApprovalInteraction["actions"] = [];
   const optionIdByAction = new Map<string, string>();
   for (const option of options) {
-    const effect = actionEffects[option.kind];
+    const effect = effects?.[option.optionId] ?? actionEffects[option.kind];
     if (!effect) continue;
     actions.push({
       id: option.optionId,
@@ -181,6 +189,8 @@ class ActiveTurn {
   readonly persistsHistory: boolean;
   readonly compactionItem: HostContextCompactionItem | null;
   compactionText = "";
+  nativeCompactionOutcome: HostItemOutcome | undefined;
+  nativeTurnSnapshot: HostTurnSnapshot | undefined;
   #currentText: {
     kind: "reasoning" | "agentMessage";
     item: HostReasoningItem | HostAgentMessageItem;
@@ -328,7 +338,10 @@ class ActiveTurn {
 
   finishCompaction(outcome: TurnOutcome): HostItemOutcome | null {
     if (!this.compactionItem) return null;
-    const itemOutcome = hermesCompactionOutcome(outcome, this.compactionText);
+    const itemOutcome =
+      outcome.status === "succeeded" && this.nativeCompactionOutcome
+        ? this.nativeCompactionOutcome
+        : hermesCompactionOutcome(outcome, this.compactionText);
     this.#finishedItems.push({ item: this.compactionItem, outcome: itemOutcome });
     return itemOutcome;
   }
@@ -541,9 +554,10 @@ function lastUsageFromReplay(replay: HermesTransportEvent[]): HostUsage | null {
 
 export interface HermesSessionOptions {
   nativeRef: NativeSessionRef;
-  transport: HermesAcpTransport;
+  transport: HermesSessionTransport;
   open: HermesOpenResult;
   knownTurnRefs?: readonly NativeTurnRef[];
+  supportsDerivation?: boolean;
   onSettle: (session: HermesSession) => void;
 }
 
@@ -572,7 +586,7 @@ export class HermesSession implements HarnessSession {
   readonly commands: HarnessCommandCapability;
 
   #channel = new HarnessOutputChannel<HarnessOutput>();
-  #transport: HermesAcpTransport;
+  #transport: HermesSessionTransport;
   #nativeRef: NativeSessionRef;
   #onSettle: (session: HermesSession) => void;
 
@@ -586,10 +600,13 @@ export class HermesSession implements HarnessSession {
   #completedTurns: HostTurnSnapshot[] = [];
   #historyTurns: HostTurnSnapshot[];
   #latestUsage: HostUsage | null;
+  #questions = new HermesQuestions((output) => this.#channel.emit(output));
   #approvalWaiters = new Map<ReturnType<typeof hostInteractionIdSchema.parse>, ApprovalWaiter>();
 
   constructor(options: HermesSessionOptions) {
     this.#transport = options.transport;
+    this.capabilities.history.fork = options.supportsDerivation === true;
+    this.capabilities.history.rollbackLastTurn = options.supportsDerivation === true;
     this.commands = {
       list: async () =>
         this.#closed || this.#faulted
@@ -616,8 +633,19 @@ export class HermesSession implements HarnessSession {
     // re-projected from the same SessionState inventory that seeded this
     // session.
     this.#availableModels = options.open.session.models?.availableModels ?? [];
+    this.capabilities.configuration.selectThinkingOption = !!this.#transport.setThinking;
     this.#state = {
       nativeRef: this.#nativeRef,
+      ...(options.open.session.thinkingOptions
+        ? { availableThinkingOptions: options.open.session.thinkingOptions }
+        : {}),
+      ...(options.open.session.currentThinkingOptionId
+        ? {
+            effectiveThinkingOptionId: harnessThinkingOptionIdSchema.parse(
+              options.open.session.currentThinkingOptionId,
+            ),
+          }
+        : {}),
       ...(projected.effectiveModel ? { effectiveModel: projected.effectiveModel } : {}),
       ...(projected.resolvedModelLabel ? { resolvedModelLabel: projected.resolvedModelLabel } : {}),
       ...(modes
@@ -636,8 +664,19 @@ export class HermesSession implements HarnessSession {
     this.#transport.onFault = (error) => this.#fault(transportErrorToHarness(error));
   }
 
+  get busy(): boolean {
+    return this.#activeTurn !== null;
+  }
+
   async readSnapshot(): Promise<HarnessResult<HostThreadSnapshot>> {
     if (this.#closed) return err("invalidState", "Hermes Session is closed");
+    if (this.#transport.readNativeSnapshot) {
+      try {
+        return ok({ ...(await this.#transport.readNativeSnapshot()), state: { ...this.#state } });
+      } catch (error) {
+        return err("nativeFailure", error instanceof Error ? error.message : String(error));
+      }
+    }
     return ok({
       turns: [...this.#historyTurns, ...this.#completedTurns],
       state: { ...this.#state },
@@ -676,11 +715,15 @@ export class HermesSession implements HarnessSession {
       case "turn.cancel":
         return this.#cancelTurn(command);
       case "interaction.respond":
-        return Promise.resolve(this.#respondToApproval(command));
+        return Promise.resolve(
+          command.response.type === "question"
+            ? this.#questions.respond(command)
+            : this.#respondToApproval(command),
+        );
       case "model.select":
         return this.#selectModel(command);
       case "thinking.select":
-        return err("unsupported", "Hermes does not expose Thinking options");
+        return this.#selectThinking(command);
       case "permissionMode.select":
         return this.#selectPermissionMode(command);
       default: {
@@ -702,6 +745,7 @@ export class HermesSession implements HarnessSession {
   }
 
   #cancelApprovalWaiters(): void {
+    this.#questions.cancel();
     for (const [interactionId, waiter] of this.#approvalWaiters) {
       waiter.resolve({ outcome: { outcome: "cancelled" } });
       this.#emit({
@@ -764,13 +808,18 @@ export class HermesSession implements HarnessSession {
     this.#emit({ type: "turn.started", turnId: active.turnId });
     if (active.compactionItem)
       this.#emit({ type: "item.started", turnId: active.turnId, item: active.compactionItem });
-    let promptResponse: PromptResponse | null = null;
+    let promptResponse: HermesPromptResponse | null = null;
     let failure: HarnessError | null = null;
+    let previousNativeTurnKey: string | undefined;
     try {
+      if (active.persistsHistory && this.#transport.readNativeSnapshot)
+        previousNativeTurnKey = (await this.#transport.readNativeSnapshot()).turns.at(-1)
+          ?.nativeTurnRef.nativeTurnKey;
       promptResponse = await this.#transport.runTurn(
         text,
         (event) => this.#handleTransportEvent(active, event),
         (request) => this.#handlePermissionRequest(active, request),
+        (request) => this.#handleQuestionRequest(active, request),
       );
     } catch (error) {
       failure =
@@ -799,6 +848,22 @@ export class HermesSession implements HarnessSession {
       outcome = { status: "succeeded" };
     }
 
+    active.nativeCompactionOutcome = promptResponse?.compactionOutcome;
+    if (active.persistsHistory && this.#transport.readNativeSnapshot) {
+      try {
+        const latest = (await this.#transport.readNativeSnapshot()).turns.at(-1);
+        if (latest?.nativeTurnRef.nativeTurnKey !== previousNativeTurnKey)
+          active.nativeTurnSnapshot = latest;
+      } catch (error) {
+        outcome = {
+          status: "failed",
+          error: harnessError(
+            "nativeFailure",
+            error instanceof Error ? error.message : String(error),
+          ),
+        };
+      }
+    }
     const terminalUsage = promptResponse ? usageFromPromptResponse(promptResponse.usage) : null;
     const usage = terminalUsage ? this.#mergeUsage(terminalUsage) : null;
     this.#completeActiveTurn(active, outcome, usage);
@@ -810,6 +875,7 @@ export class HermesSession implements HarnessSession {
     usage: HostUsage | null = null,
   ): void {
     if (this.#activeTurn !== active) return;
+    this.#cancelApprovalWaiters();
     this.#activeTurn = null;
     this.#activeTurnId = null;
     active.finish();
@@ -817,12 +883,16 @@ export class HermesSession implements HarnessSession {
     if (outcome.status === "succeeded" && compactionOutcome?.status === "failed") {
       outcome = { status: "failed", error: compactionOutcome.error };
     }
-    const nativeTurnRef = nativeTurnRefSchema.parse({
-      harnessId: this.#nativeRef.harnessId,
-      nativeSessionId: this.#nativeRef.nativeSessionId,
-      nativeTurnKey: active.turnKey,
-      formatVersion: 1,
-    });
+    if (active.nativeTurnSnapshot?.checkpoint)
+      outcome = { ...outcome, checkpoint: active.nativeTurnSnapshot.checkpoint };
+    const nativeTurnRef =
+      active.nativeTurnSnapshot?.nativeTurnRef ??
+      nativeTurnRefSchema.parse({
+        harnessId: this.#nativeRef.harnessId,
+        nativeSessionId: this.#nativeRef.nativeSessionId,
+        nativeTurnKey: active.turnKey,
+        formatVersion: 1,
+      });
     const turnSnapshot = active.toSnapshot(nativeTurnRef, outcome, true);
     for (const pending of active.drainPendingItems()) {
       this.#emit({ type: "item.completed", turnId: active.turnId, snapshot: pending });
@@ -833,7 +903,10 @@ export class HermesSession implements HarnessSession {
     this.#emit({
       type: "turn.completed",
       turnId: active.turnId,
-      ...(active.persistsHistory ? { nativeTurnRef } : {}),
+      ...(active.persistsHistory &&
+      (!this.#transport.readNativeSnapshot || active.nativeTurnSnapshot)
+        ? { nativeTurnRef }
+        : {}),
       outcome,
     });
     if (active.persistsHistory) this.#completedTurns.push(turnSnapshot);
@@ -960,7 +1033,7 @@ export class HermesSession implements HarnessSession {
     active: ActiveTurn,
     request: HermesPermissionRequest,
   ): Promise<RequestPermissionResponse> {
-    const projected = projectPermissionOptions(request.options);
+    const projected = projectPermissionOptions(request.options, request.effects);
     if (projected.actions.length === 0) {
       return Promise.resolve({ outcome: { outcome: "cancelled" } });
     }
@@ -969,19 +1042,34 @@ export class HermesSession implements HarnessSession {
       type: "approval",
       interactionId,
       turnId: active.turnId,
-      title: request.request.options?.[0]?.name?.slice(0, 200) ?? "Hermes 请求批准",
+      title: request.request.toolCall.title?.slice(0, 200) ?? "Hermes 请求批准",
+      ...(request.description ? { description: request.description } : {}),
       subject: { type: "nativeAction" },
       actions: projected.actions,
     };
     this.#emitInteraction(interaction);
-    return new Promise<RequestPermissionResponse>((resolve) => {
+    let abort = () => {};
+    const pending = new Promise<RequestPermissionResponse>((resolve) => {
       this.#approvalWaiters.set(interactionId, {
         interaction,
         turnId: active.turnId,
         optionIdByAction: projected.optionIdByAction,
         resolve,
       });
+      abort = () => {
+        if (!this.#approvalWaiters.delete(interactionId)) return;
+        resolve({ outcome: { outcome: "cancelled" } });
+        this.#emit({
+          type: "interaction.closed",
+          interactionId,
+          turnId: active.turnId,
+          reason: request.signal?.reason === "expired" ? "expired" : "cancelled",
+        });
+      };
+      request.signal?.addEventListener("abort", abort, { once: true });
+      if (request.signal?.aborted) abort();
     });
+    return pending.finally(() => request.signal?.removeEventListener("abort", abort));
   }
 
   #respondToApproval(
@@ -1026,6 +1114,7 @@ export class HermesSession implements HarnessSession {
     }
     try {
       await this.#transport.cancel();
+      this.#questions.cancel(command.turnId);
       for (const [interactionId, waiter] of this.#approvalWaiters) {
         if (waiter.turnId !== command.turnId) continue;
         this.#approvalWaiters.delete(interactionId);
@@ -1044,6 +1133,35 @@ export class HermesSession implements HarnessSession {
           ? transportErrorToHarness(error)
           : harnessError("nativeFailure", error instanceof Error ? error.message : String(error));
       return { ok: false, error: failure };
+    }
+  }
+
+  #handleQuestionRequest(
+    active: ActiveTurn,
+    request: HermesQuestionRequest,
+  ): Promise<HostQuestionResponse> {
+    if (this.#activeTurn !== active)
+      return Promise.resolve({ type: "question", answers: {}, cancelled: true });
+    return this.#questions.open(active.turnId, request);
+  }
+
+  async #selectThinking(
+    command: ThinkingSelectCommand,
+  ): Promise<HarnessResult<ThinkingSelectCompleted>> {
+    if (!this.#transport.setThinking)
+      return err("unsupported", "Hermes does not expose Thinking options");
+    if (!this.#state.availableThinkingOptions?.some(({ id }) => id === command.thinkingOptionId))
+      return err("invalidRequest", "Unknown Hermes Thinking option");
+    try {
+      const selected = await this.#transport.setThinking(command.thinkingOptionId);
+      this.#state = {
+        ...this.#state,
+        effectiveThinkingOptionId: harnessThinkingOptionIdSchema.parse(selected),
+      };
+      this.#emit({ type: "session.state.changed", state: { ...this.#state } });
+      return ok({ completed: true });
+    } catch (error) {
+      return err("nativeFailure", error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -1100,8 +1218,21 @@ export class HermesSession implements HarnessSession {
         error instanceof Error ? error.message : "Hermes rejected Permission Mode selection",
       );
     }
+    const locator = this.#nativeRef.locator;
+    if (
+      locator &&
+      typeof locator === "object" &&
+      !Array.isArray(locator) &&
+      locator.transport === "gateway"
+    ) {
+      this.#nativeRef = {
+        ...this.#nativeRef,
+        locator: { ...locator, permissionModeId: command.permissionModeId },
+      };
+    }
     this.#state = {
       ...this.#state,
+      nativeRef: this.#nativeRef,
       effectivePermissionModeId: harnessPermissionModeIdSchema.parse(command.permissionModeId),
     };
     this.#emit({ type: "session.state.changed", state: { ...this.#state } });

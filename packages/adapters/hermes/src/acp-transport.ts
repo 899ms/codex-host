@@ -1,7 +1,14 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 
-import { sanitizeDiagnosticTail } from "@codexhost/harness-adapter";
+import {
+  sanitizeDiagnosticTail,
+  type HostQuestion,
+  type HostQuestionResponse,
+  type HostItemOutcome,
+  type HostThreadSnapshot,
+} from "@codexhost/harness-adapter";
+import type { HarnessThinkingOption } from "@codexhost/shared-contracts";
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -59,6 +66,8 @@ export interface HermesOpenSession {
   sessionId: string;
   models: HermesModelState | null;
   modes: HermesModeState | null;
+  thinkingOptions?: HarnessThinkingOption[];
+  currentThinkingOptionId?: string;
 }
 
 export type HermesTransportEvent =
@@ -70,6 +79,9 @@ export type HermesTransportEvent =
   | { type: "usage"; used?: number; size?: number };
 
 export interface HermesPermissionRequest {
+  description?: string;
+  effects?: Readonly<Record<string, "allowOnce" | "allowForSession" | "allowAlways" | "deny">>;
+  signal?: AbortSignal;
   request: RequestPermissionRequest;
   options: RequestPermissionRequest["options"];
 }
@@ -94,6 +106,29 @@ export interface HermesOpenResult {
   sessionId: string;
   /** session/load replays the transcript before responding (ACP spec). */
   replay: HermesTransportEvent[];
+}
+
+export interface HermesQuestionRequest {
+  signal?: AbortSignal;
+  title?: string;
+  questions: HostQuestion[];
+}
+export type HermesPromptResponse = PromptResponse & { compactionOutcome?: HostItemOutcome };
+export interface HermesSessionTransport {
+  onFault: (error: HermesTransportError) => void;
+  readonly availableCommands: readonly AvailableCommand[];
+  runTurn(
+    text: string,
+    onEvent: (event: HermesTransportEvent) => void,
+    onPermission: (request: HermesPermissionRequest) => Promise<RequestPermissionResponse>,
+    onQuestion?: (request: HermesQuestionRequest) => Promise<HostQuestionResponse>,
+  ): Promise<HermesPromptResponse>;
+  setModel(modelId: string): Promise<void>;
+  setPermissionMode(modeId: string): Promise<void>;
+  setThinking?(optionId: string): Promise<string>;
+  readNativeSnapshot?(): Promise<HostThreadSnapshot>;
+  cancel(): Promise<void>;
+  close(): Promise<void>;
 }
 
 interface ActivePrompt {
