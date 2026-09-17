@@ -1,15 +1,27 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { copyCodeBuddySession } from "../src/derivation.js";
+import { codeBuddyInvocation } from "../src/command.js";
 vi.mock("../src/command.js", () => ({
-  codeBuddyInvocation: (environment: NodeJS.ProcessEnv, _ephemeral: boolean, args: string[]) => ({
-    command: process.execPath,
-    arguments: [path.resolve("packages/adapters/codebuddy/test/fixtures/copy.mjs"), ...args],
-    environment,
-    windowsVerbatimArguments: false,
-  }),
+  codeBuddyInvocation: vi.fn(
+    (environment: NodeJS.ProcessEnv, _ephemeral: boolean, args: string[]) => ({
+      command: process.execPath,
+      arguments: [path.resolve("packages/adapters/codebuddy/test/fixtures/copy.mjs"), ...args],
+      environment,
+      windowsVerbatimArguments: false,
+    }),
+  ),
 }));
 describe("native EOF history copy process", () => {
+  it("rejects an already cancelled copy before preparing or spawning a process", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    vi.mocked(codeBuddyInvocation).mockClear();
+    await expect(
+      copyCodeBuddySession(process.cwd(), "source", "target", process.env, controller.signal),
+    ).rejects.toMatchObject({ code: "invalidState" });
+    expect(codeBuddyInvocation).not.toHaveBeenCalled();
+  });
   it("closes stdin without sending any prompt and checks the confirmed target identity", async () => {
     await expect(
       copyCodeBuddySession(

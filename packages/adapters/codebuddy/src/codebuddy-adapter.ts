@@ -131,6 +131,8 @@ export class CodeBuddyAdapter implements HarnessAdapter {
     try {
       if (!(await stat(input.cwd)).isDirectory())
         throw new CodeBuddyError("invalidRequest", "Working directory is not a directory");
+      if (this.#closed)
+        throw new CodeBuddyError("invalidState", "Adapter closed while opening Session");
       if (input.kind === "resume") validateNativeRef(input.nativeRef);
       if (input.kind === "fork" || input.kind === "rollbackLastTurn") {
         const sourceId = input.sourceRef.nativeSessionId;
@@ -138,6 +140,8 @@ export class CodeBuddyAdapter implements HarnessAdapter {
           (session) => session.initialState.nativeRef?.nativeSessionId === sourceId,
         );
         const snapshot = await source?.readSnapshot();
+        if (this.#closed)
+          throw new CodeBuddyError("invalidState", "Adapter closed while reading source Session");
         if (snapshot && !snapshot.ok) return snapshot;
         const derivation = deriveCodeBuddySession({
           input,
@@ -153,6 +157,8 @@ export class CodeBuddyAdapter implements HarnessAdapter {
           this.#derivations.delete(derivation);
         }
       }
+      if (this.#closed)
+        throw new CodeBuddyError("invalidState", "Adapter closed while opening Session");
       session = new CodeBuddySession(
         input,
         { ...this.#environment, ...input.environment },

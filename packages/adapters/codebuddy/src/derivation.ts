@@ -34,6 +34,8 @@ export async function copyCodeBuddySession(
   environment: NodeJS.ProcessEnv,
   signal: AbortSignal,
 ): Promise<void> {
+  if (signal.aborted)
+    throw new CodeBuddyError("invalidState", "Adapter closed before history copy");
   const invocation = codeBuddyInvocation(environment, false, [
     "--resume",
     sourceId,
