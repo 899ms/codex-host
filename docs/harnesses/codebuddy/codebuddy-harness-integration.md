@@ -42,7 +42,7 @@ CodeBuddy 2.148.0 can retain cancellation state after returning a cancelled prom
 | Usage | Reads native model-request usage once per request, exposes context size/used, and reports CodeBuddy credits as credits, not USD. Account quota is not implemented. |
 | Native history | Read-only JSONL projection follows the current parent chain. Persisted user-message IDs identify Turns. Prompt completion and snapshots must agree on identity. A Tool result written before its call — CodeBuddy records a refused call and its result from separate writers — is applied when its call arrives; a result whose call never appears is dropped instead of failing the read. Missing, ambiguous, corrupt or oversized history produces an explicit error. Incomplete native history remains `unknown`; it is not labeled successful. |
 | File diffs | Standard ACP diff content is understood when supplied. Native tools still expose their calls/results when no diff is available. This is not a claim that every CodeBuddy Edit/Write supplies a complete historical diff. |
-| Fork / rollback | Explicitly unsupported. In CLI 2.151.0, ACP does not expose `session/fork`; `--acp --resume <id> --fork-session` followed by `session/new` created an empty Session in a real probe, rather than copying history. The native `_codebuddy.ai/session/rollback` extension mutates its source in place, so it cannot satisfy the Host's derived-Session/source-isolation contract on its own. No transcript rewriting or lossy `session/inject_history` replay is used. |
+| Fork / rollback | Native derived Sessions at a Turn boundary, in the same cwd. A model-free CLI copy isolates the source; native `/fork` gives the final Session independent native identities, then `_codebuddy.ai/session/rollback` retains the exact requested prefix. See the version-specific lifecycle below. |
 | Native Agent subagents | Running/completed collaboration cards and read-only child Threads, with real child messages/tools read from the native transcript. Native Agent IDs survive resume. A background launch acknowledgement completes its tool Item but not the child lifecycle; observation continues without mutating that completed Item, and becomes interrupted when the parent exits without a proven native child-completion signal. |
 | Cross-Harness delegation | Uses the shared persistent Thread/delegation path, native `fullAccess` for unattended creation, and per-Session environment forwarding. When all four Runtime/CLI/Thread variables are present, the plugin passes discovery instructions through native `--append-system-prompt`; the native shell invokes the configured CLI and inherits the correct parent identity. Runtime tokens are never expanded into process arguments or prompt text. CodeBuddy-native Agent subagents retain their separate behavior. |
 | Commands and compact | The Session command catalog follows native ACP `available_commands_update`, including argument hints and skill commands. Execution sends the advertised slash text through `session/prompt`; `/compact` supports native summarization instructions and projects a `contextCompaction` Item. Commands that replace the Session, detach work, create autonomous queues, or require a native UI are excluded. No speculative RPC or hardcoded fallback command catalog is used. |
@@ -143,3 +143,57 @@ projection, and per-Thread environment propagation. A real macOS CLI probe execu
 history. The delegation probe uses the native shell and an isolated test CLI to
 verify system-prompt discovery and inherited Runtime/parent environment; it is not
 an end-to-end test of another live Harness or Desktop deployment.
+
+
+## Native Fork and revision (CLI 2.151.0)
+
+The installed native CLI has two different Fork paths. ACP does not advertise
+`session/fork`, and ACP startup with `--resume --fork-session` did not copy the
+source. Print mode with `--resume SOURCE --fork-session --session-id TARGET
+--print --input-format stream-json --output-format stream-json` and immediate
+stdin EOF does copy history without a prompt or model request. Its result must
+confirm TARGET and zero API duration; result usage includes historical tokens.
+Source bytes and the
+native copied history must match exactly, with no added user/model items, before continuing; stdout and transcript reads
+are bounded to 64 MB.
+
+That print copy alone is unsuitable as a writable Thread: native reload derives
+its runtime identity from inherited `sessionId` rows, so it reuses the source's
+runtime ID under a different store ID. The plugin opens that temporary copy only
+for administration, verifies that the native command catalog advertises `/fork`,
+and invokes that native local command. CodeBuddy emits the final Session ID and
+regenerates message IDs and parent links itself. Every copied content field and
+parent edge is compared with the source. No model work or child Agent is started
+in the temporary copy.
+
+The final Session is rewound using native `resend_edit`, with files disabled, to
+the end of the selected Turn, including its Tool result suffix. Revision retains
+the prefix before the last Turn, including the valid empty prefix. Native
+`resend-fork-notice` records select the active branch of the append-only history;
+the plugin verifies the durable result and removes all `/fork` administrative
+messages from that active branch. It never edits native transcripts, injects
+replacement messages, invents native message IDs, or rewinds source files.
+Snapshots and Turn completion expose checkpoints based on persisted native user
+message IDs. Cross-cwd Fork remains unsupported.
+
+This requires an extra temporary CLI and administrative ACP process before the
+final writable ACP Session starts. ACP currently has no Session-delete method,
+so the temporary native copy remains in CodeBuddy's own session list; failures
+may also leave an unreturned native derived Session. Only subprocesses are
+closed, including on timeout/shutdown; the plugin does not unlink native stores.
+Unsupported commands, changed source history, altered native copies, or an
+unconfirmed/nonpersistent rewind return an error without exposing a writable
+result.
+
+When the source is open, current confirmed Model, Thinking and Permission settings
+are inherited; explicit revision settings take precedence. Confirmed derived
+settings travel in the opaque Native Session locator and are reapplied on reload,
+including after cancellation. A closed original Session without saved settings
+uses the native loaded configuration, as native ACP itself does. The public
+contracts and other Harnesses do not change.
+
+Real no-model probes verified source-byte isolation, recursive Fork from a derived
+Session, exact native IDs across process restart, one-Turn revision to empty
+history, and restoration of `plan` / `high` configuration. Focused tests also
+cover Tool suffixes, invalid checkpoints, missing advertised commands, native
+copy/rewind failures, altered history, shutdown, and configuration overrides.

@@ -24,6 +24,7 @@ export interface CodeBuddyClient {
   configure(sessionId: string, configId: string, value: string): Promise<Record<string, unknown>>;
   prompt(sessionId: string, input: string): Promise<Record<string, unknown>>;
   cancel(sessionId: string): Promise<void>;
+  rollback?(sessionId: string, forkPointId: string | null): Promise<Record<string, unknown>>;
   answer(
     sessionId: string,
     toolCallId: string,
@@ -187,6 +188,21 @@ export class CodeBuddyAcpClient implements CodeBuddyClient {
 
   async cancel(sessionId: string) {
     await this.#request(() => this.#connection.cancel({ sessionId }), "ACP cancel");
+  }
+
+  async rollback(sessionId: string, forkPointId: string | null) {
+    return record(
+      await this.#request(
+        () =>
+          this.#connection.extMethod("_codebuddy.ai/session/rollback", {
+            sessionId,
+            forkPointId,
+            reason: "resend_edit",
+            files: false,
+          }),
+        "ACP history rewind",
+      ),
+    );
   }
 
   async answer(sessionId: string, toolCallId: string, answers: Record<string, string[]> | null) {

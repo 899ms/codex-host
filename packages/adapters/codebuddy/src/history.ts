@@ -1,6 +1,7 @@
 import { access, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   HostItemSnapshot,
   HostThreadSnapshot,
@@ -52,8 +53,9 @@ export async function codeBuddyNativeHistory(
   cwd: string,
   ref: NativeSessionRef,
   environment: NodeJS.ProcessEnv,
+  verifiedCopySource?: string,
 ): Promise<CodeBuddyHistorySource> {
-  return codeBuddyHistory(cwd, ref, environment, false);
+  return codeBuddyHistory(cwd, ref, environment, false, verifiedCopySource);
 }
 
 /** Live child observation may see one final record before CodeBuddy appends its newline. */
@@ -70,6 +72,7 @@ async function codeBuddyHistory(
   ref: NativeSessionRef,
   environment: NodeJS.ProcessEnv,
   tolerateIncompleteTail: boolean,
+  verifiedCopySource?: string,
 ) {
   validateNativeRef(ref);
   const configRoot =
@@ -120,8 +123,21 @@ async function codeBuddyHistory(
     ),
     parsed = parseJsonl(source.contents, tolerateIncompleteTail);
   const checkedDirectories = new Set<string>();
+  // Only the private derivation transaction may inspect an intermediate native
+  // --fork-session copy. Each inherited row must exactly match the verified source.
+  const sourceRows = new Map<string, Record<string, unknown>[]>();
+  for (const row of verifiedCopySource ? parseRows(verifiedCopySource) : []) {
+    const id = text(row.id);
+    const candidates = sourceRows.get(id) ?? [];
+    candidates.push(row);
+    sourceRows.set(id, candidates);
+  }
   for (const row of parsed.rows) {
-    if (row.sessionId && row.sessionId !== ref.nativeSessionId)
+    if (
+      row.sessionId &&
+      row.sessionId !== ref.nativeSessionId &&
+      !sourceRows.get(text(row.id))?.some((source) => isDeepStrictEqual(source, row))
+    )
       throw new CodeBuddyError("protocolError", "Native history has a different Session identity");
     if (typeof row.cwd === "string" && !checkedDirectories.has(row.cwd)) {
       if (!(await sameCwd(row.cwd, cwd)))
@@ -181,6 +197,12 @@ export function nativeHistoryRows(contents: string) {
   const entries = new Map<string, Record<string, unknown>>();
   let leaf = "";
   for (const row of parseRows(contents)) {
+    if (row.type === "resend-fork-notice") {
+      // Native resend_edit atomically moves the durable lane to this parent.
+      // The append-only transcript deliberately retains the discarded branch.
+      leaf = text(row.parentId);
+      continue;
+    }
     if (!["message", "reasoning", "function_call", "function_call_result"].includes(text(row.type)))
       continue;
     if (!text(row.id))
@@ -388,6 +410,14 @@ export function snapshotFromHistory(
       if (snapshot) applyResult(snapshot, row);
       else earlyResults.set(callId, row);
     }
+  }
+  for (const turn of turns) {
+    turn.checkpoint = {
+      harnessId: CODEBUDDY_ID,
+      nativeSessionId: ref.nativeSessionId,
+      checkpointId: turn.nativeTurnRef.nativeTurnKey,
+      formatVersion: 1,
+    };
   }
   return { turns };
 }

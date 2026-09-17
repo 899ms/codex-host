@@ -18,6 +18,7 @@ import { CODEBUDDY_CAPABILITIES, configuration } from "./configuration.js";
 import { validateNativeRef } from "./history.js";
 import { CodeBuddySession, type CodeBuddyHistoryReader } from "./session.js";
 import { readCodeBuddyChild } from "./subagent-history.js";
+import { deriveCodeBuddySession } from "./derivation.js";
 import type { HarnessSubagentCapability } from "@codexhost/harness-adapter";
 
 export interface CodeBuddyAdapterOptions {
@@ -54,6 +55,8 @@ export class CodeBuddyAdapter implements HarnessAdapter {
   readonly #inspections = new Set<CodeBuddyClient>();
   readonly #cache = new Map<string, Promise<HarnessInspection>>();
   #closed = false;
+  readonly #abort = new AbortController();
+  readonly #derivations = new Set<Promise<unknown>>();
   constructor(readonly options: CodeBuddyAdapterOptions = {}) {
     this.#environment = { ...(options.environment ?? process.env) };
     this.#factory = options.clientFactory ?? ((options) => new CodeBuddyAcpClient(options));
@@ -124,16 +127,32 @@ export class CodeBuddyAdapter implements HarnessAdapter {
         "invalidRequest",
         "Unattended execution requires native fullAccess permissions",
       );
-    if (input.kind === "fork" || input.kind === "rollbackLastTurn")
-      return failure(
-        "unsupported",
-        "CodeBuddy ACP does not expose a verified precise history boundary operation",
-      );
     let session: CodeBuddySession | undefined;
     try {
       if (!(await stat(input.cwd)).isDirectory())
         throw new CodeBuddyError("invalidRequest", "Working directory is not a directory");
       if (input.kind === "resume") validateNativeRef(input.nativeRef);
+      if (input.kind === "fork" || input.kind === "rollbackLastTurn") {
+        const sourceId = input.sourceRef.nativeSessionId;
+        const source = [...this.#sessions].find(
+          (session) => session.initialState.nativeRef?.nativeSessionId === sourceId,
+        );
+        const snapshot = await source?.readSnapshot();
+        if (snapshot && !snapshot.ok) return snapshot;
+        const derivation = deriveCodeBuddySession({
+          input,
+          environment: { ...this.#environment, ...input.environment },
+          factory: this.#factory,
+          signal: this.#abort.signal,
+          ...(snapshot?.ok && snapshot.value.state ? { state: snapshot.value.state } : {}),
+        });
+        this.#derivations.add(derivation);
+        try {
+          input = await derivation;
+        } finally {
+          this.#derivations.delete(derivation);
+        }
+      }
       session = new CodeBuddySession(
         input,
         { ...this.#environment, ...input.environment },
@@ -163,6 +182,8 @@ export class CodeBuddyAdapter implements HarnessAdapter {
 
   async close() {
     this.#closed = true;
+    this.#abort.abort();
+    await Promise.allSettled([...this.#derivations]);
     const results = await Promise.allSettled(
       [...this.#sessions, ...this.#inspections].map((resource) => resource.close()),
     );

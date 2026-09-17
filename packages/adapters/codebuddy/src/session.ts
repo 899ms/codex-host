@@ -182,6 +182,10 @@ export class CodeBuddySession implements HarnessSession {
   }
 
   async initialize() {
+    const saved =
+      this.input.kind === "resume"
+        ? record(record(this.input.nativeRef.locator).configuration)
+        : {};
     if (this.input.kind === "resume") {
       this.#ref = this.input.nativeRef;
       const history = await this.readHistory(this.input.cwd, this.#ref, this.environment);
@@ -197,16 +201,21 @@ export class CodeBuddySession implements HarnessSession {
       harnessId: CODEBUDDY_ID,
       nativeSessionId: sessionId,
       formatVersion: 1,
+      ...(this.#ref?.locator ? { locator: this.#ref.locator } : {}),
     });
     this.#apply(configuration(opened.configOptions), false);
     if (this.input.kind === "create" && this.input.executionPolicy === "unattended-full-access") {
       // Unlike bypassPermissions, the native fullAccess option also covers HIGH/CRITICAL actions.
       await this.#configure("mode", "fullAccess");
-    } else if (this.input.permissionModeId)
-      await this.#configure("mode", this.input.permissionModeId);
-    if (this.input.model) await this.#configure("model", nativeModel(this.input.model));
-    if (this.input.thinkingOptionId)
-      await this.#configure("thought_level", this.input.thinkingOptionId);
+    } else if (this.input.permissionModeId || text(saved.mode))
+      await this.#configure("mode", this.input.permissionModeId ?? text(saved.mode));
+    if (this.input.model || text(saved.model))
+      await this.#configure(
+        "model",
+        this.input.model ? nativeModel(this.input.model) : text(saved.model),
+      );
+    if (this.input.thinkingOptionId || text(saved.thinking))
+      await this.#configure("thought_level", this.input.thinkingOptionId ?? text(saved.thinking));
     if (this.#fault || this.#closed)
       throw new CodeBuddyError("invalidState", "Native Session failed while opening");
     this.initialState = { ...this.#state };
@@ -218,6 +227,19 @@ export class CodeBuddySession implements HarnessSession {
   }
   #apply(config: ReturnType<typeof configuration>, emit = true) {
     this.#config = config;
+    if (this.#ref && record(this.#ref.locator).codebuddyDerived === 1) {
+      this.#ref = nativeSessionRefSchema.parse({
+        ...this.#ref,
+        locator: {
+          codebuddyDerived: 1,
+          configuration: {
+            model: config.state.effectiveModel ? nativeModel(config.state.effectiveModel) : "",
+            mode: config.state.effectivePermissionModeId ?? "",
+            thinking: config.state.effectiveThinkingOptionId ?? "",
+          },
+        },
+      });
+    }
     this.#state = { ...config.state, ...(this.#ref ? { nativeRef: this.#ref } : {}) };
     if (emit) this.#emit({ type: "session.state.changed", state: this.#state });
   }
@@ -462,7 +484,11 @@ export class CodeBuddySession implements HarnessSession {
           "ACP terminal and native history disagree on Turn identity",
         );
       if (outcome.status === "cancelled") await this.#resumeAfterCancel();
-      this.#finish(active, outcome, nativeTurnRef);
+      this.#finish(
+        active,
+        { ...outcome, ...(added[0]?.checkpoint ? { checkpoint: added[0].checkpoint } : {}) },
+        nativeTurnRef,
+      );
       if (this.#usage)
         this.#emit({ type: "session.usage.changed", usage: { ...this.#usage, ...this.#context } });
     } catch (error) {
