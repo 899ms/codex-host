@@ -13,7 +13,10 @@ export function cursorCommands(native: AvailableCommand[]): HarnessCommandCatalo
       invocation: `/${command.name}`,
       label: `/${command.name}`,
       ...(command.description.trim() ? { description: command.description.slice(0, 512) } : {}),
-      argumentMode: command.name === "copy-request-id" ? "none" : "text",
+      // Cursor 2026.09.10 omits input metadata for both its administrative command
+      // and custom commands/skills, whose parser still accepts trailing text.
+      // Honor an explicit native no-input declaration without disabling those skills.
+      argumentMode: command.input === null || command.name === "copy-request-id" ? "none" : "text",
     });
     if (result.success) commands.set(result.data.id, result.data);
   }

@@ -211,6 +211,25 @@ describe("Cursor advertised slash commands", () => {
     { name: "review", description: "Review changes" },
     { name: "copy-request-id", description: "Copy request ID" },
   ];
+  it("honors explicit native command input while retaining legacy custom arguments", () => {
+    const catalog = cursorCommands([
+      ...native,
+      { name: "status", description: "Native local status", input: null },
+      { name: "search", description: "Search", input: { hint: "query" } },
+    ]);
+    expect(catalog.commands.map(({ id, argumentMode }) => [id, argumentMode])).toEqual([
+      ["cursor.review", "text"],
+      ["cursor.copy-request-id", "none"],
+      ["cursor.status", "none"],
+      ["cursor.search", "text"],
+    ]);
+    expect(
+      cursorCommandPrompt(
+        { turnId, commandId: "cursor.status", arguments: { text: "x" } },
+        catalog,
+      ),
+    ).toMatchObject({ error: { code: "invalidRequest" } });
+  });
   it("rejects unadvertised commands and invalid arguments", () => {
     const catalog = cursorCommands(native);
     expect(cursorCommandPrompt({ turnId, commandId: "cursor.compact" }, catalog)).toMatchObject({

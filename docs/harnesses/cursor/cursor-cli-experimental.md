@@ -128,6 +128,11 @@ in ACP. The local `/copy-request-id` command can produce a successful terminal
 without a `nativeTurnRef` when native history is unchanged; all ordinary command
 turns still require the verified native user-turn identity.
 
+The tested native `sendAvailableCommands` omits `input` for both custom commands
+and `/copy-request-id`, although its custom-command parser accepts trailing text.
+The plugin preserves that native behavior, honors an explicit `input: null` as
+argument-free, and treats the administrative command as argument-free.
+
 ## Outbound delegation MCP bridge
 
 The Cursor plugin uses the official MCP SDK to expose a loopback-only HTTP server
