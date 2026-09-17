@@ -114,6 +114,16 @@ export class CodeBuddyAdapter implements HarnessAdapter {
 
   async open(input: OpenSessionInput): Promise<HarnessResult<HarnessSession>> {
     if (this.#closed) return failure("invalidState", "Adapter is closed");
+    if (
+      input.kind === "create" &&
+      input.executionPolicy === "unattended-full-access" &&
+      input.permissionModeId &&
+      input.permissionModeId !== "fullAccess"
+    )
+      return failure(
+        "invalidRequest",
+        "Unattended execution requires native fullAccess permissions",
+      );
     if (input.kind === "fork" || input.kind === "rollbackLastTurn")
       return failure(
         "unsupported",

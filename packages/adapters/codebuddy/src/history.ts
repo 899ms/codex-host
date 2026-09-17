@@ -12,7 +12,7 @@ import {
   nativeTurnRefSchema,
   type NativeSessionRef,
 } from "@codexhost/shared-contracts";
-import { CODEBUDDY_ID, CodeBuddyError, record, text } from "./common.js";
+import { CODEBUDDY_ID, CodeBuddyError, nativeError, record, text } from "./common.js";
 import { modelRef } from "./configuration.js";
 import { contentText, toolItem, toolOutcome, toolOutput } from "./projection.js";
 import { codeBuddyChildId, codeBuddyDelegation } from "./subagent-tool.js";
@@ -239,7 +239,54 @@ export function snapshotFromHistory(
       snapshot.item.outputTruncated = Boolean(output.truncated);
     }
   };
-  for (const row of nativeHistoryRows(contents)) {
+  const history = nativeHistoryRows(contents);
+  // Only manual compaction creates a command Turn. Native automatic compaction
+  // also has an internal user prompt, which must not split the current user Turn.
+  const manualCompactions = new Set<string>();
+  let compactUser: string | undefined;
+  for (const row of history) {
+    const data = record(row.providerData);
+    if (row.type === "message" && row.role === "user")
+      compactUser = data.agent === "compact" ? text(row.id) : undefined;
+    if (compactUser && row.role === "assistant" && data.compactType === "user-command")
+      manualCompactions.add(compactUser);
+  }
+  for (const row of history) {
+    const data = record(row.providerData);
+    const body = contentText(row.content);
+    const localCommand =
+      data.skipRun === true
+        ? /^<command-name>([^<]+)<\/command-name>(?:\s*<command-args>([\s\S]*)<\/command-args>)?$/u.exec(
+            body,
+          )
+        : null;
+    const localOutput =
+      data.skipRun === true
+        ? /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/u.exec(body)
+        : null;
+    if (localOutput) {
+      if (current) {
+        current.items.push({
+          item: {
+            type: "agentMessage",
+            itemId: hostItemIdSchema.parse(`agentMessage-${text(row.id)}`),
+            text: localOutput[1] ?? "",
+          },
+          outcome: { status: "succeeded" },
+        });
+        current.outcome = { status: "succeeded" };
+      }
+      continue;
+    }
+    if (data.skipRun === true && body.startsWith('<system-reminder data-role="command-caveat">'))
+      continue;
+    if (
+      row.type === "message" &&
+      row.role === "user" &&
+      data.agent === "compact" &&
+      !manualCompactions.has(text(row.id))
+    )
+      continue;
     if (row.type === "message" && row.role === "user") {
       current = {
         nativeTurnRef: nativeTurnRefSchema.parse({
@@ -248,7 +295,17 @@ export function snapshotFromHistory(
           nativeTurnKey: row.id,
           formatVersion: 1,
         }),
-        input: [{ type: "text", text: contentText(row.content) }],
+        input: [
+          {
+            type: "text",
+            text:
+              data.agent === "compact"
+                ? "/compact"
+                : localCommand
+                  ? `${localCommand[1]}${localCommand[2] ? ` ${localCommand[2]}` : ""}`
+                  : body,
+          },
+        ],
         items: [],
         outcome: { status: "unknown", reason: "Native terminal outcome was not recorded" },
         ...(typeof row.timestamp === "number" ? { startedAtMs: row.timestamp } : {}),
@@ -259,6 +316,32 @@ export function snapshotFromHistory(
       continue;
     }
     if (!current) continue;
+    if (data.agent === "compact" || data.isCompactInternal === true) {
+      if (row.role === "assistant") {
+        current.items.push({
+          item: {
+            type: "contextCompaction",
+            itemId: hostItemIdSchema.parse(`compact-${text(row.id)}`),
+          },
+          outcome:
+            row.status === "completed" && data.isCompacted === true
+              ? { status: "succeeded" }
+              : {
+                  status: "failed",
+                  error: nativeError(
+                    new CodeBuddyError("nativeFailure", "Native compaction did not complete"),
+                  ),
+                },
+        });
+        if (
+          row.status === "completed" &&
+          data.isCompacted === true &&
+          data.compactType === "user-command"
+        )
+          current.outcome = { status: "succeeded" };
+      }
+      continue;
+    }
     const model = text(record(row.providerData).model);
     if (model) current.model = modelRef(model);
     if ((row.type === "message" && row.role === "assistant") || row.type === "reasoning") {

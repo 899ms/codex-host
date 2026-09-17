@@ -42,10 +42,11 @@ CodeBuddy 2.148.0 can retain cancellation state after returning a cancelled prom
 | Usage | Reads native model-request usage once per request, exposes context size/used, and reports CodeBuddy credits as credits, not USD. Account quota is not implemented. |
 | Native history | Read-only JSONL projection follows the current parent chain. Persisted user-message IDs identify Turns. Prompt completion and snapshots must agree on identity. A Tool result written before its call — CodeBuddy records a refused call and its result from separate writers — is applied when its call arrives; a result whose call never appears is dropped instead of failing the read. Missing, ambiguous, corrupt or oversized history produces an explicit error. Incomplete native history remains `unknown`; it is not labeled successful. |
 | File diffs | Standard ACP diff content is understood when supplied. Native tools still expose their calls/results when no diff is available. This is not a claim that every CodeBuddy Edit/Write supplies a complete historical diff. |
-| Fork / rollback | Explicitly unsupported. SDK `forkSession` does not prove a precise ACP checkpoint operation satisfying the Host's prefix and source-isolation contracts. |
+| Fork / rollback | Explicitly unsupported. In CLI 2.151.0, ACP does not expose `session/fork`; `--acp --resume <id> --fork-session` followed by `session/new` created an empty Session in a real probe, rather than copying history. The native `_codebuddy.ai/session/rollback` extension mutates its source in place, so it cannot satisfy the Host's derived-Session/source-isolation contract on its own. No transcript rewriting or lossy `session/inject_history` replay is used. |
 | Native Agent subagents | Running/completed collaboration cards and read-only child Threads, with real child messages/tools read from the native transcript. Native Agent IDs survive resume. A background launch acknowledgement completes its tool Item but not the child lifecycle; observation continues without mutating that completed Item, and becomes interrupted when the parent exits without a proven native child-completion signal. |
-| Cross-Harness delegation | Uses the shared Thread/delegation path and per-session environment forwarding. Full cross-Harness collaboration, including native visibility of delegation instructions and recursive delegation, still needs dedicated end-to-end acceptance; native Agent subagents alone do not establish it. |
-| Commands, compact, Teams | No dedicated Host UI/coordination capability. Member-tagged output is not mixed into the parent's answer. Native CodeBuddy configuration is not rewritten to disable these features. |
+| Cross-Harness delegation | Uses the shared persistent Thread/delegation path, native `fullAccess` for unattended creation, and per-Session environment forwarding. When all four Runtime/CLI/Thread variables are present, the plugin passes discovery instructions through native `--append-system-prompt`; the native shell invokes the configured CLI and inherits the correct parent identity. Runtime tokens are never expanded into process arguments or prompt text. CodeBuddy-native Agent subagents retain their separate behavior. |
+| Commands and compact | The Session command catalog follows native ACP `available_commands_update`, including argument hints and skill commands. Execution sends the advertised slash text through `session/prompt`; `/compact` supports native summarization instructions and projects a `contextCompaction` Item. Commands that replace the Session, detach work, create autonomous queues, or require a native UI are excluded. No speculative RPC or hardcoded fallback command catalog is used. |
+| Teams | No dedicated Host coordination capability. Member-tagged output is not mixed into the parent's answer. Native CodeBuddy configuration is not rewritten to disable Teams. |
 | Images | Current public Turn input remains text. Native ACP image capability is not advertised as Host image support. |
 
 The plugin is preinstalled through `scripts/release/harness-plugins.json`; no new SDK dependency or proprietary CodeBuddy binary enters the distribution. Desktop's remaining static Agent list, per-Agent configuration, icon, settings link and production enabled list are updated. Routing uses `encodeHarnessPluginRoute`; no CodeBuddy-specific Host codec or ownership fallback is added. The plugin and Renderer use identical copies of the user-provided CodeBuddy mark captured from `https://www.codebuddy.cn/`, replacing the original neutral code glyph. The SVG is bundled locally without changing its colors, proportions or clipping; asset provenance is recorded in `packages/renderer-extension/src/assets/README.md`.
@@ -116,3 +117,29 @@ real Mac Remote Host and official SSH proxy. The user also verified local Deskto
 subagents, Windows-to-Mac remote sessions, and Mac-to-Windows Remote Control.
 Those user confirmations are separate from automated adapter/Host tests. Building
 this branch does not itself restart or deploy any existing Desktop installation.
+
+## Command and delegation validation (CLI 2.151.0)
+
+The [native ACP documentation](https://www.codebuddy.cn/docs/cli/acp) describes
+`available_commands_update`; [slash commands](https://www.codebuddy.cn/docs/cli/slash-commands)
+describe `/compact`. The installed CLI's native ACP implementation and help were
+also checked for command execution, compaction markers, and `--append-system-prompt`.
+
+Commands share normal Turn busy/cancel/fault handling. Local commands may complete
+without a persisted user Turn; the adapter then omits Native Turn identity instead
+of fabricating it. CodeBuddy's persisted local-command caveat, command, and stdout
+records project as one command Turn. Its internal compaction prompt, reasoning,
+and summary project as `/compact` and a compaction Item, rather than appearing as
+user instructions or a normal assistant reply. Native automatic compaction does
+not create an extra user Turn. Compaction Items start only from native evidence;
+a successful Item requires a newly persisted `isCompacted` summary, and native
+failure/cancellation preserves the corresponding Item outcome. Ordinary prompts still require
+exactly one persisted Native Turn.
+
+Focused adapter tests cover catalog refresh, removed/invalid commands, native
+arguments, busy rejection, cancellation recovery, command histories, compaction
+projection, and per-Thread environment propagation. A real macOS CLI probe executed
+`/cost` followed by `/compact` and verified two successful Turns and their reloaded
+history. The delegation probe uses the native shell and an isolated test CLI to
+verify system-prompt discovery and inherited Runtime/parent environment; it is not
+an end-to-end test of another live Harness or Desktop deployment.

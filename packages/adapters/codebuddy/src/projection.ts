@@ -62,6 +62,7 @@ export class CodeBuddyTurnOutput {
   readonly #finished = new Set<string>();
   readonly #tools = new Map<string, Record<string, unknown>>();
   readonly #diffs = new Set<string>();
+  #compactionConfirmed = false;
   constructor(
     readonly turnId: HostTurnId,
     readonly cwd: string,
@@ -84,12 +85,36 @@ export class CodeBuddyTurnOutput {
     });
   }
 
+  replayCommandResult(items: HostItemSnapshot[]) {
+    if (this.#items.size) return;
+    for (const snapshot of items) {
+      this.#start(structuredClone(snapshot.item));
+      this.#finish(snapshot.item, snapshot.outcome);
+    }
+  }
+
+  confirmCompaction(items: HostItemSnapshot[]) {
+    this.#compactionConfirmed = items.some(
+      (snapshot) =>
+        snapshot.item.type === "contextCompaction" && snapshot.outcome.status === "succeeded",
+    );
+  }
+
+  compact() {
+    const itemId = hostItemIdSchema.parse(`compact-${this.turnId}`);
+    if (!this.#items.has(itemId)) this.#start({ type: "contextCompaction", itemId });
+  }
+
   update(value: unknown) {
     const update = record(value),
       meta = record(update._meta);
     // Team-member output must never masquerade as the parent response.
     if (meta["codebuddy.ai/memberEvent"]) return;
     const kind = update.sessionUpdate;
+    if (meta["codebuddy.ai/isCompactInternal"] === true) {
+      this.compact();
+      return;
+    }
     if (kind === "agent_message_chunk" || kind === "agent_thought_chunk") {
       const delta = contentText(update.content);
       if (!delta) return;
@@ -199,10 +224,20 @@ export class CodeBuddyTurnOutput {
   finish(status: "succeeded" | "failed" | "cancelled", error?: HarnessError) {
     for (const { item } of this.#items.values()) {
       const outcome: HostItemOutcome =
-        status === "failed"
+        status === "failed" ||
+        (item.type === "contextCompaction" && status === "succeeded" && !this.#compactionConfirmed)
           ? {
-              status,
-              error: error ?? nativeError(new CodeBuddyError("nativeFailure", "Turn failed")),
+              status: "failed",
+              error:
+                error ??
+                nativeError(
+                  new CodeBuddyError(
+                    "nativeFailure",
+                    item.type === "contextCompaction"
+                      ? "Native compaction completion was not confirmed"
+                      : "Turn failed",
+                  ),
+                ),
             }
           : { status };
       this.#finish(item, outcome);
