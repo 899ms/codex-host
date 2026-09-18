@@ -159,12 +159,14 @@ export class AntigravitySubagents {
     const parentId = this.#options.parentId();
     const port = await this.#options.port();
     if (!parentId || port === null) {
-      this.#expireUnobserved();
+      for (const id of this.#states.keys()) this.#expireUnobserved(id);
+      if (this.#ended && !this.running) this.stop();
       return;
     }
     for (const [id, previous] of this.#states) {
       if (this.#stopped) return;
       let status = previous.status;
+      let statusObserved = false;
       try {
         const value = await subagentRpc(port, id, "GetCascadeTrajectory");
         const observed = subagentRunStatus(value, parentId);
@@ -173,7 +175,8 @@ export class AntigravitySubagents {
         if (observed !== "completed" || (status !== "interrupted" && status !== "failed")) {
           status = observed ?? status;
         }
-        if (observed !== null) this.#lastObservedAt.set(id, Date.now());
+        statusObserved = observed !== null;
+        if (statusObserved) this.#lastObservedAt.set(id, Date.now());
       } catch {
         // A transient read failure is not evidence that the native child finished.
       }
@@ -208,8 +211,11 @@ export class AntigravitySubagents {
           this.#options.emit({ type: "subagent.transcript.changed", nativeSubagentId: id });
         }
       }
+      // Only a failed observation can expire this child. A slow transcript read
+      // or subsequent RPCs for other children must not invalidate a valid status.
+      if (!statusObserved) this.#expireUnobserved(id);
     }
-    this.#expireUnobserved();
+    if (this.#ended && !this.running) this.stop();
   }
 
   finish(outcome: HostItemOutcome): void {
@@ -226,26 +232,23 @@ export class AntigravitySubagents {
     if (!this.running) this.stop();
   }
 
-  #expireUnobserved(): void {
+  #expireUnobserved(id: string): void {
     if (!this.#ended || this.#stopped) return;
+    const state = this.#states.get(id);
+    if (!state || (state.status !== "running" && state.status !== "pending")) return;
     const now = Date.now();
-    for (const [id, state] of this.#states) {
-      if (state.status !== "running" && state.status !== "pending") continue;
-      if (now - (this.#lastObservedAt.get(id) ?? now) < this.#options.observationTimeoutMs)
-        continue;
-      const resultSummary =
-        "Observation timed out; native Subagent completion could not be confirmed.";
-      this.#states.set(id, { ...state, status: "interrupted", resultSummary });
-      this.#options.emit({
-        type: "subagent.state.changed",
-        nativeSubagentId: id,
-        status: "interrupted",
-        resultSummary,
-      });
-      this.#options.emit({ type: "subagent.transcript.changed", nativeSubagentId: id });
-      this.#lastObservedAt.delete(id);
-    }
-    if (!this.running) this.stop();
+    if (now - (this.#lastObservedAt.get(id) ?? now) < this.#options.observationTimeoutMs) return;
+    const resultSummary =
+      "Observation timed out; native Subagent completion could not be confirmed.";
+    this.#states.set(id, { ...state, status: "interrupted", resultSummary });
+    this.#options.emit({
+      type: "subagent.state.changed",
+      nativeSubagentId: id,
+      status: "interrupted",
+      resultSummary,
+    });
+    this.#options.emit({ type: "subagent.transcript.changed", nativeSubagentId: id });
+    this.#lastObservedAt.delete(id);
   }
 
   cancel(): Promise<void> {

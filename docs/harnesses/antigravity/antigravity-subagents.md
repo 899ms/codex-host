@@ -45,10 +45,14 @@ claiming successful native cancellation.
 
 After the parent Turn completes, each running child has a 30-second window to
 return a valid native status. A valid running status renews that window, so a
-healthy background child can continue working. If status remains unavailable,
-the child is marked `interrupted` with an unconfirmed-completion explanation.
-This releases the observer and CLI after the remaining children settle; it does
-not claim the native child completed or was cancelled.
+healthy background child can continue working. Expiry is checked on that child's
+failed or invalid status observation (or when the parent ID or Language Server
+port is unavailable), not at the end of the entire polling pass. Slow transcript
+reads or polling other children cannot invalidate a valid running observation.
+If status remains unavailable for the window, the child is marked `interrupted`
+with an unconfirmed-completion explanation. This releases the observer and CLI
+after the remaining children settle; it does not claim the native child completed
+or was cancelled.
 
 ## Boundaries
 
