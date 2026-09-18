@@ -96,6 +96,8 @@ WorkBuddy 插件复用经过验证的 CodeBuddy ACP Session 语义，但保持�
 
 WorkBuddy 2.137.1 对标准 ACP `session/fork` 返回 `Method not found`，所以本集成不会虚构一个标准 ACP Fork。派生流程组合该版本公开 CLI 的 `--resume ... --fork-session` 管理模式、原生 `/fork` 和公开 `_codebuddy.ai/session/rollback` 扩展：先生成不调用模型的临时原生副本，再由目标目录中的 WorkBuddy ACP Session 执行原生 Fork，最后回滚到请求的精确 Turn 边界。所有模型工作仍由最终的 WorkBuddy Native Session 承担。
 
+回滚通知已落盘不代表新进程已经恢复了分支指针：内置 CLI 的 `resend_edit` 会修改当前进程的 `lastMessageId`，但新进程 `session/load` 可能忽略 `resend-fork-notice`，重新选中被丢弃的分支末尾。因此，最终可写 Session 在加载后、接受 Prompt 前会检查已经校验的原生历史：最后一个消息／回滚记录若仍为回滚通知，就在该进程重新执行原生 rollback 并确认目标位置（空前缀为 `null`）。普通恢复和取消后的进程重建共用此路径。标题、摘要和文件快照不改变该判断；一旦已有新的消息、Reasoning 或工具记录接续分支，就不再回滚，保留后续有效对话。恢复失败时关闭 Session，不返回可写成功。此逻辑不增加持久化状态、不改写 Transcript，也不按操作系统分叉；已经错误续写的旧会话不自动修剪，应从正确 checkpoint 重新派生。
+
 无模型复制阶段（`--print --fork-session`，stdin 直接 EOF）在自动发现的 App 内置 CLI 上默认设置 `DISABLE_TELEMETRY=1`，避免在复制前等待原生遥测通道初始化。该设置仅传给临时复制进程；调用方显式设置的同名环境变量保留，显式覆盖的自定义 CLI 不自动应用。正常 ACP、原生 `/fork`、rollback、源历史校验和临时副本删除流程保持原有语义；仍等待复制进程正常退出后再验证落盘结果。
 
 原生 `session/load` 只在当前项目存储中按 Session ID 查找，不能直接跨项目加载来源 Session。跨目录 Fork 因此把上述原生临时副本的完整字节，以排他创建和仅当前用户可读写权限桥接到目标项目；目标 `/fork` 成功后，只在文件仍与适配器创建内容完全一致时删除这份桥接文件。原生 CLI 在来源项目创建的临时副本没有公开删除 API，可能保留在 WorkBuddy 数据目录中；适配器不会绕过原生所有权直接删除它。
@@ -137,6 +139,8 @@ codexhost broker status --harness workbuddy
 
 2026-09-18 在本机 macOS 的 WorkBuddy App 内置 CLI 上，以现有原生认证和 Auto 模型完成了真实 create → 空历史读取 → 首条 Turn → close → 同 Session resume → 第二条 Turn → 两轮历史读取。执行目录包含大小写、点号、中文和空格；两个 Turn 都成功，没有请求工具或文件修改。另验证了真实跨目录 Fork 到第一轮：派生会话恰好保留一轮，源会话仍保留两轮，派生会话关闭后可在目标 cwd 恢复。此前失败任务的原生空历史也已通过修正后的只读目录校验。
 
-2026-09-18 的性能复测确认，无模型复制阶段跳过遥测通道等待后，本机两轮历史的 Fork 从约 6.7–7.5 秒降至 5.3–5.6 秒；精确保留前缀、修订及关闭后恢复通过。但历史 Fork 恢复后继续对话报 `Could not identify exactly one persisted Native Turn`，关闭该优化的对照路径同样复现。这个既有历史问题尚未修复，不能将当前历史 Fork 的继续写入视为已通过完整在线验收。
+2026-09-18 的性能复测确认，无模型复制阶段跳过遥测通道等待后，本机两轮历史的 Fork 从约 6.7–7.5 秒降至 5.3–5.6 秒；精确保留前缀、修订及关闭后恢复通过。但历史 Fork 恢复后继续对话报 `Could not identify exactly one persisted Native Turn`，关闭该优化的对照路径同样复现。其根因是管理进程中的回滚指针未在最终可写进程加载后恢复，而不仅是历史显示或遥测问题；当前实现按上述规则恢复尚未接续的分支指针。
+
+修复后的 Windows WorkBuddy 5.5.6（内置 CLI 2.137.1、Auto）通过真实 Adapter 验证了中间／末尾 checkpoint Fork、跨目录 Fork、修订最后一轮、单轮修订为空，以及首次 Prompt 前关闭恢复和续写后再次恢复。验收同时检查新增消息父节点、Turn 数量、终态身份、模型可见的保留／排除标记及源历史字节不变，而不只检查打开成功。取消后继续对话和递归 Fork 的首条续写也通过；但“取消 → 继续 → 递归 Fork → 关闭恢复原分支”的组合出现回复已落盘、Host Turn 仍未在 60 秒内结束的情况，该组合仍待定位，不宣称所有组合已稳定。修复后的 macOS 在线路径尚未复测。
 
 危险权限、真实跨 Harness 委派、压缩及子 Agent 的在线行为尚未在本轮验收。Fork、修订、命令、委派、Adapter、插件加载、发行 Bundle、Host 路由和 Desktop 的自动化验证使用受控 fixture；实际结果以对应验证报告为准，不能由本文替代。
