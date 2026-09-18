@@ -23,6 +23,20 @@ export function hermesCommandCatalog(commands: readonly AvailableCommand[]): Har
   });
 }
 
+export const HERMES_GATEWAY_COMMANDS: AvailableCommand[] = [
+  ...["help", "tools", "context", "version"].map((name) => ({
+    name,
+    description: `Hermes /${name}`,
+  })),
+  {
+    name: "compress",
+    description: "Compress conversation context",
+    input: { hint: "Optional compression focus" },
+  },
+];
+// Static menu metadata; the Session validates its actual native command catalog at execution.
+export const HERMES_COMMAND_CATALOG = hermesCommandCatalog(HERMES_GATEWAY_COMMANDS);
+
 export function hermesCommandText(
   command: HarnessCommandInvocation,
   catalog: HarnessCommandCatalog,

@@ -1,3 +1,4 @@
+import { HERMES_COMMAND_CATALOG } from "./hermes-commands.js";
 import type { ClientSideConnection } from "@agentclientprotocol/sdk";
 import { createHash } from "node:crypto";
 import type {
@@ -68,6 +69,7 @@ const IMPORT_TIMEOUT_MS = 20_000;
 const HERMES_THREAD_ID_ENV = "CODEXHOST_THREAD_ID";
 
 export class HermesAdapter implements HarnessAdapter {
+  readonly commandCatalog = HERMES_COMMAND_CATALOG;
   readonly harnessId: HarnessId = hermesHarnessId;
 
   readonly sessionImport = {
