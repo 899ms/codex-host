@@ -1,3 +1,4 @@
+import type * as FsPromises from "node:fs/promises";
 import { access, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,8 +22,23 @@ import {
 import { WORKBUDDY_RUNTIME_PROFILE } from "../src/common.js";
 import { WorkBuddyAdapter } from "../src/workbuddy-adapter.js";
 
+const simulatedWindows = vi.hoisted(() => ({ enabled: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof FsPromises>();
+  return {
+    ...fs,
+    lstat: async (...args: Parameters<typeof fs.lstat>) => {
+      const info = await fs.lstat(...args);
+      if (simulatedWindows.enabled && typeof info.mode === "number") info.mode |= 0o077;
+      return info;
+    },
+  };
+});
+
 const roots: string[] = [];
 afterEach(async () => {
+  simulatedWindows.enabled = false;
+  vi.unstubAllGlobals();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -719,16 +735,46 @@ describe("WorkBuddy native history derivation", () => {
     });
   });
 
+  it.each([false, true])(
+    "accepts Windows mode bits and cleans the bridge (native child copy: %s)",
+    async (nativeCopiesChild) => {
+      const fixture = await setup({ withChild: true, nativeCopiesChild });
+      simulatedWindows.enabled = true;
+      vi.stubGlobal("process", { ...process, platform: "win32" });
+
+      await fixture.run();
+
+      const temporaryId = fixture.opens[0]?.sessionId;
+      if (!temporaryId) throw new Error("missing temporary native copy identity");
+      await expect(access(fixture.file(fixture.targetCwd, temporaryId))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it("still rejects group/other-writable Subagent directories on POSIX", async () => {
+    const fixture = await setup({ withChild: true });
+    simulatedWindows.enabled = true;
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
+
+    await expect(fixture.run()).rejects.toThrow("Redirected native Subagent directory");
+  });
+
   it("uses the WorkBuddy native invocation for derivation with an explicit client factory", async () => {
     const fixture = await setup();
-    const executable = path.join(path.dirname(fixture.sourceCwd), "native-copy");
+    const script = path.join(path.dirname(fixture.sourceCwd), "native-copy.mjs");
+    const executable = process.platform === "win32" ? `${script}.cmd` : script;
     const log = path.join(path.dirname(fixture.sourceCwd), "native-copy.log");
     await writeFile(
-      executable,
+      script,
       await readFile(path.resolve("packages/adapters/workbuddy/test/fixtures/native-copy.mjs")),
       { mode: 0o700 },
     );
-    await chmod(executable, 0o700);
+    if (process.platform === "win32") {
+      await writeFile(executable, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+    } else {
+      await chmod(executable, 0o700);
+    }
     const adapter = new WorkBuddyAdapter({
       clientFactory: fixture.factory,
       environment: {

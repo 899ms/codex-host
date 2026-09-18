@@ -100,7 +100,7 @@ WorkBuddy 2.137.1 对标准 ACP `session/fork` 返回 `Method not found`，所�
 
 原生 `session/load` 只在当前项目存储中按 Session ID 查找，不能直接跨项目加载来源 Session。跨目录 Fork 因此把上述原生临时副本的完整字节，以排他创建和仅当前用户可读写权限桥接到目标项目；目标 `/fork` 成功后，只在文件仍与适配器创建内容完全一致时删除这份桥接文件。原生 CLI 在来源项目创建的临时副本没有公开删除 API，可能保留在 WorkBuddy 数据目录中；适配器不会绕过原生所有权直接删除它。
 
-`--fork-session` 和原生 `/fork` 都不会复制 `<sessionId>/subagents/*.jsonl`。对于保留前缀中的 Agent 结果，适配器按 `callId` 关联调用，通过结构化的 `subAgent.sessionId` 与包含式 `lastId` 确定子 Transcript 边界，再把精确前缀以排他创建和 `0600` 权限复制到最终 Session。它不会依赖跨 Session 全局扫描到来源 sidecar；来源删除后派生 Session 仍可独立读取。源文件、目标文件、内部 Session 身份、字节数、行数、SHA-256 与历史 cwd 均被复验，符号链接、歧义、越界范围、并发变化或非精确的已存在目标会使派生失败。
+`--fork-session` 和原生 `/fork` 都不会复制 `<sessionId>/subagents/*.jsonl`。对于保留前缀中的 Agent 结果，适配器按 `callId` 关联调用，通过结构化的 `subAgent.sessionId` 与包含式 `lastId` 确定子 Transcript 边界，再把精确前缀以排他创建和 `0600` 权限复制到最终 Session。它不会依赖跨 Session 全局扫描到来源 sidecar；来源删除后派生 Session 仍可独立读取。源文件、目标文件、内部 Session 身份、字节数、行数、SHA-256 与历史 cwd 均被复验，符号链接、歧义、越界范围、并发变化或非精确的已存在目标会使派生失败。桥接清理和子 Transcript 复制的 POSIX 权限位检查仅用于 POSIX 平台；Windows 依赖原生目录 ACL，不用合成的 mode 位判断隔离性，路径、文件类型和内容校验仍然保留。
 
 最终 Native Ref 记录目标 cwd、目标项目 slug、继承主历史前缀，以及每个继承子 Transcript 的 provenance 和原生目标绑定记录。Resume 和后续历史读取都会重新验证这些约束；继承前缀变化、派生后的追加内容来自其他 cwd、来源在派生期间变化、checkpoint 不存在或原生回滚未精确落盘时，操作失败关闭而不是返回近似 Session。工具历史继续使用其原始 cwd 投影，因此跨目录 Fork 不会把旧命令伪装成在目标目录执行。
 

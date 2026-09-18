@@ -309,7 +309,7 @@ async function cleanupBridge(bridge: OwnedCopy | undefined) {
   if (!bridge) return;
   try {
     const info = await lstat(bridge.file);
-    if (!info.isFile() || (info.mode & 0o077) !== 0) return;
+    if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077) !== 0)) return;
     if (!isDeepStrictEqual(await readFile(bridge.file), bridge.expected)) return;
     await unlink(bridge.file);
   } catch (error) {
@@ -429,7 +429,12 @@ async function plainDirectory(parent: string, name: string) {
     if (record(error).code !== "EEXIST") throw error;
   });
   const info = await lstat(directory);
-  if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o022) !== 0)
+  // Windows isolation relies on native ACLs, not the synthesized POSIX mode bits.
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    (process.platform !== "win32" && (info.mode & 0o022) !== 0)
+  )
     throw new CodeBuddyError("invalidRequest", "Redirected native Subagent directory");
   const actual = await realpath(directory);
   if (!sameResolvedPath(actual, directory))
@@ -439,7 +444,11 @@ async function plainDirectory(parent: string, name: string) {
 
 async function verifiedChildFile(file: string, expected: Buffer) {
   const info = await lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0)
+  if (
+    !info.isFile() ||
+    info.isSymbolicLink() ||
+    (process.platform !== "win32" && (info.mode & 0o077) !== 0)
+  )
     throw new CodeBuddyError("invalidRequest", "Unsafe derived Subagent transcript");
   if (!sameResolvedPath(await realpath(file), file))
     throw new CodeBuddyError("invalidRequest", "Redirected derived Subagent transcript");

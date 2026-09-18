@@ -284,19 +284,32 @@ describe("WorkBuddy command invocation", () => {
 
   it("uses WorkBuddy's root when only WORKBUDDY_CONFIG_DIR is configured", () => {
     expect(
-      workBuddyEnvironment({ HOME: "/Users/test", WORKBUDDY_CONFIG_DIR: "/workbuddy" }),
+      workBuddyEnvironment({ HOME: "/Users/test", WORKBUDDY_CONFIG_DIR: "/workbuddy" }, "darwin"),
     ).toMatchObject({
       CODEBUDDY_CONFIG_DIR: "/workbuddy",
       WORKBUDDY_CONFIG_DIR: "/workbuddy",
     });
-    expect(workBuddyEnvironment({ HOME: "/Users/test" }).CODEBUDDY_CONFIG_DIR).toBe(
+    expect(workBuddyEnvironment({ HOME: "/Users/test" }, "darwin").CODEBUDDY_CONFIG_DIR).toBe(
       "/Users/test/.workbuddy-ai",
     );
   });
 
+  it("uses Windows paths for configured and default WorkBuddy roots", () => {
+    expect(
+      workBuddyEnvironment({ WORKBUDDY_CONFIG_DIR: "C:/WorkBuddy/config" }, "win32"),
+    ).toMatchObject({
+      CODEBUDDY_CONFIG_DIR: "C:\\WorkBuddy\\config",
+      WORKBUDDY_CONFIG_DIR: "C:\\WorkBuddy\\config",
+    });
+    expect(workBuddyEnvironment({ USERPROFILE: "C:\\Users\\test" }, "win32")).toMatchObject({
+      CODEBUDDY_CONFIG_DIR: "C:\\Users\\test\\.workbuddy-ai",
+      WORKBUDDY_CONFIG_DIR: "C:\\Users\\test\\.workbuddy-ai",
+    });
+  });
+
   it("makes a relative WorkBuddy root stable across Host and ACP working directories", () => {
-    const root = path.resolve("relative-workbuddy-root");
-    const productConfigPath = path.join(root, "cache", "acc-product-config-v3.json");
+    const root = path.posix.resolve("relative-workbuddy-root");
+    const productConfigPath = path.posix.join(root, "cache", "acc-product-config-v3.json");
     const invocation = workBuddyInvocation(
       { HOME: "/Users/test", WORKBUDDY_CONFIG_DIR: "relative-workbuddy-root" },
       true,
@@ -318,11 +331,14 @@ describe("WorkBuddy command invocation", () => {
 
   it("does not inherit a global CodeBuddy history root or overwrite updater policy", () => {
     expect(
-      workBuddyEnvironment({
-        HOME: "/Users/test",
-        CODEBUDDY_CONFIG_DIR: "/ordinary-codebuddy",
-        DISABLE_AUTOUPDATER: "0",
-      }),
+      workBuddyEnvironment(
+        {
+          HOME: "/Users/test",
+          CODEBUDDY_CONFIG_DIR: "/ordinary-codebuddy",
+          DISABLE_AUTOUPDATER: "0",
+        },
+        "darwin",
+      ),
     ).toMatchObject({
       CODEBUDDY_CONFIG_DIR: "/Users/test/.workbuddy-ai",
       WORKBUDDY_CONFIG_DIR: "/Users/test/.workbuddy-ai",
@@ -332,7 +348,7 @@ describe("WorkBuddy command invocation", () => {
 
   it.each(["", "   "])("treats an empty WorkBuddy root %j as unset", (configuredRoot) => {
     expect(
-      workBuddyEnvironment({ HOME: "/Users/test", WORKBUDDY_CONFIG_DIR: configuredRoot }),
+      workBuddyEnvironment({ HOME: "/Users/test", WORKBUDDY_CONFIG_DIR: configuredRoot }, "darwin"),
     ).toMatchObject({
       CODEBUDDY_CONFIG_DIR: "/Users/test/.workbuddy-ai",
       WORKBUDDY_CONFIG_DIR: "/Users/test/.workbuddy-ai",
