@@ -1,11 +1,24 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import {
   commandInvocation,
+  environmentValue,
+  isExecutableFile,
   resolveHarnessExecutable,
+  targetPath,
   VERSION_MANAGER_ROOTS,
+  type HarnessDiscoveryDependencies,
   type HarnessDiscoverySpec,
 } from "@codexhost/harness-discovery";
 import { ZcodeError } from "./errors.js";
+
+function isReadableFile(file: string): boolean {
+  try {
+    accessSync(file, constants.R_OK);
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
 
 const cliSpec: HarnessDiscoverySpec = {
   id: "zcode",
@@ -45,26 +58,33 @@ export function zcodeInvocation(
   environment: NodeJS.ProcessEnv,
   command?: string,
   platform: NodeJS.Platform = process.platform,
+  dependencies: HarnessDiscoveryDependencies & { isReadableFile?: (file: string) => boolean } = {},
 ) {
   const input = { environment, platform, ...(command ? { command } : {}) };
-  const readable = (file: string) => {
-    try {
-      accessSync(file, constants.R_OK);
-      return true;
-    } catch {
-      return false;
-    }
+  const readable = dependencies.isReadableFile ?? isReadableFile;
+  const executable = dependencies.isExecutable ?? ((file) => isExecutableFile(file, platform));
+  const configured = command ?? environmentValue(environment, "CODEXHOST_ZCODE_COMMAND");
+  const paths = targetPath(platform);
+  const cli = {
+    ...cliSpec,
+    runnableCandidate: (candidate: string) => {
+      // A Windows Desktop executable on PATH is not the app-server CLI. Use
+      // only its own bundled script, executed by the Host's Node runtime.
+      if (platform === "win32" && paths.extname(candidate).toLowerCase() === ".exe") {
+        const script = paths.join(paths.dirname(candidate), "resources", "glm", "zcode.cjs");
+        if (executable(candidate) && readable(script)) return script;
+      }
+      return candidate;
+    },
   };
-  const configured = command ?? environment.CODEXHOST_ZCODE_COMMAND;
   const resolution =
-    resolveHarnessExecutable(
-      cliSpec,
-      input,
-      configured && /\.[cm]?js$/iu.test(configured) ? { isExecutable: readable } : {},
-    ) ??
-    (configured
+    resolveHarnessExecutable(cli, input, {
+      ...dependencies,
+      isExecutable: (file) => (/\.[cm]?js$/iu.test(file) ? readable(file) : executable(file)),
+    }) ??
+    (configured !== undefined
       ? undefined
-      : resolveHarnessExecutable(desktopSpec, input, { isExecutable: readable }));
+      : resolveHarnessExecutable(desktopSpec, input, { ...dependencies, isExecutable: readable }));
   if (!resolution)
     throw new ZcodeError(
       "notInstalled",

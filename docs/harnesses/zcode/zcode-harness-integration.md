@@ -10,6 +10,8 @@
 
 安装 [ZCode Desktop](https://zcode.z.ai/cn/docs/install)，或提供支持上述原生 app-server 的 ZCode CLI。自动发现先检查 PATH 和常见 CLI 安装目录，再检查 Desktop 的 `resources/glm/zcode.cjs`。macOS 默认路径是 `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`。其他位置可设置 `CODEXHOST_ZCODE_COMMAND` 为可执行文件或 `zcode.cjs` 的完整路径；显式配置无效时不会回退到另一份安装。
 
+Windows 自动检查 `%LOCALAPPDATA%\Programs\ZCode\resources\glm\zcode.cjs` 和 `%ProgramFiles%\ZCode\resources\glm\zcode.cjs`；PATH 中找到 Desktop `ZCode.exe` 时，优先使用该可执行文件同一安装目录的内置脚本，不拼接另一份安装。内置脚本由 Host 的 Node 运行时启动，无需额外安装独立 CLI；独立 `.cmd` CLI 仍通过公共 Windows 启动包装执行。脚本必须可读且为普通文件，环境变量名按 Windows 大小写不敏感规则读取。自定义安装既不在 PATH 中也不在上述目录时，仍需显式配置；不扫描整个磁盘或猜测未知安装布局。
+
 Provider 优先使用原生 CLI 配置。当原生 CLI 的模型目录为空时，插件从 `~/.zcode/v2/config.json` 读取启用的 Desktop Provider，经 `workspace/updateProviderRegistry` 注册到当前子进程内存。`CODEXHOST_ZCODE_CONFIG` 可指定采用相同 `provider` 结构的文件，并覆盖自动配置来源。支持 Anthropic、OpenAI、OpenAI-compatible Provider，传递原生 reasoning levels 及各档位对应的 Provider 参数。API Key 不写入 Host 映射或插件目录，也不输出原生 stderr。
 
 检查会读取真实 Catalog，但不创建用户 Session、不发送模型请求，也不证明远端凭据有效。模型、Thinking 与权限切换仅在原生响应确认生效后返回成功。
@@ -37,6 +39,8 @@ CLI 默认使用自身的 `~/.zcode/cli` 配置及数据库；桥接 Desktop Pro
 
 每个 Session 独立拥有一个原生进程；工厂环境与 `OpenSessionInput.environment` 合并传给实际执行进程，Thread 覆盖值优先。关闭会调用原生关闭接口并回收自己的进程树；RPC 超时、协议损坏或进程退出使该 Session 故障，接受的 Turn 只产生一次终态。恢复历史不消费 `outputs`，Host 是输出流的唯一消费者。
 
+恢复及历史派生校验真实工作目录身份：比较文件系统解析后的路径，必要时用非零文件 ID 与卷/设备 ID 确认同一目录，接受指向同一目录的盘符大小写、分隔符、符号链接或 junction 别名。不会统一转成小写而误放行大小写敏感目录；目录缺失、无法读取或身份无法确认时拒绝。通过原生 `session/resume` 确认 Session 身份和工作区后，临时 Provider 注册使用该原生工作区标识，再读取已激活 Session 的快照，避免别名路径导致恢复后模型不可用。执行 cwd 仍来自 Desktop，不放宽跨工作区 Fork 限制，也不扫描或迁移原生历史。
+
 ## 明确的限制
 
 - 原生运行中的子代理没有独立的无副作用 Transcript 读取接口。`session/resume` 会恢复并修复会话状态，因此读取运行中子代理时返回可重试的 `sessionBusy`，完成后可读。
@@ -48,6 +52,8 @@ CLI 默认使用自身的 `~/.zcode/cli` 配置及数据库；桥接 Desktop Pro
 ## 验证
 
 常规测试使用可执行的 JSON-RPC fixture，验证接受响应与事件竞争、重复事件、原生退出、协议损坏、取消、恢复和清理。实际搬移后的插件经过 Loader 和 AppServerHost，覆盖创建、Turn、Host 重启后恢复、继续以及 Coordinator 委派。Renderer 测试覆盖 ZCode 选择、配置隔离、公共 route 编解码、锁定 Thread 恢复与现有 Harness 回归。
+
+Windows 发现测试使用合成文件清单覆盖用户/系统安装、PATH 便携安装、中文和空格路径、`.cmd`、显式配置不回退及候选文件校验。目录身份测试覆盖 Windows 路径别名、大小写敏感目录、跨卷和无有效文件 ID；协议 fixture 验证目录别名恢复后继续写入、拒绝不同工作区以及失败后重试。这些测试不替代 Windows 真机原生验收。
 
 原生测试显式启用，使用安装的 ZCode 运行时、临时 HOME/数据库与本地 Anthropic HTTP fixture，不使用真实凭据或计费模型：
 

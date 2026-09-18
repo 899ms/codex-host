@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -35,6 +35,64 @@ async function fixture() {
   return { adapter, root, session, outputs, ended };
 }
 describe("ZCode session lifecycle", () => {
+  it.each(["trailing-separator", "junction"])(
+    "resumes the same workspace via %s and continues writing",
+    async (variant) => {
+      const f = await fixture();
+      const nativeRef = required(f.session.initialState.nativeRef);
+      await f.session.close();
+      await f.ended;
+      const cwd = variant === "junction" ? path.join(f.root, "目录 Alias") : f.root + path.sep;
+      if (variant === "junction") await symlink(f.root, cwd, "junction");
+      const resumed = await f.adapter.open({ kind: "resume", nativeRef, cwd });
+      if (!resumed.ok) throw new Error(JSON.stringify(resumed.error));
+      expect(resumed.value.initialState.nativeRef?.nativeSessionId).toBe(nativeRef.nativeSessionId);
+      const output: HarnessOutput[] = [];
+      const ended = (async () => {
+        for await (const item of resumed.value.outputs) output.push(item);
+      })();
+      expect(
+        await resumed.value.execute({
+          type: "turn.start",
+          turnId: hostTurnIdSchema.parse("after-resume"),
+          input: [{ type: "text", text: "continue" }],
+        }),
+      ).toMatchObject({ ok: true });
+      await expect
+        .poll(() =>
+          output.some((item) => item.kind === "event" && item.event.type === "turn.completed"),
+        )
+        .toBe(true);
+      const snapshot = await resumed.value.readSnapshot();
+      expect(snapshot.ok && snapshot.value.turns).toHaveLength(1);
+      await resumed.value.close();
+      await ended;
+    },
+  );
+
+  it("rejects a different requested or native workspace without replacing the session", async () => {
+    const f = await fixture();
+    const nativeRef = required(f.session.initialState.nativeRef);
+    await f.session.close();
+    const other = path.join(f.root, "Other");
+    await mkdir(other);
+    expect(await f.adapter.open({ kind: "resume", nativeRef, cwd: other })).toMatchObject({
+      ok: false,
+      error: { code: "unsupported" },
+    });
+    expect(
+      await f.adapter.open({
+        kind: "resume",
+        nativeRef,
+        cwd: f.root,
+        environment: { ZCODE_FIXTURE_RESUME_WORKSPACE: other },
+      }),
+    ).toMatchObject({ ok: false, error: { code: "unsupported" } });
+    expect(await f.adapter.open({ kind: "resume", nativeRef, cwd: f.root })).toMatchObject({
+      ok: true,
+    });
+  });
+
   it("buffers early notifications, deduplicates terminal events and resumes persistent identity", async () => {
     const f = await fixture(),
       turnId = hostTurnIdSchema.parse("turn");

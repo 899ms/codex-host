@@ -8,6 +8,7 @@ try {
   sessions = JSON.parse(readFileSync(store, "utf8"));
 } catch {}
 let active;
+let configuredWorkspace;
 const write = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const save = () => {
   if (store) writeFileSync(store, JSON.stringify(sessions));
@@ -76,8 +77,10 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (!method) return;
   const s = sessions[p.sessionId];
   const reply = (result) => write({ id, result });
-  if (method === "workspace/readState")
+  if (method === "workspace/readState") {
+    configuredWorkspace = p.workspace;
     return reply({ workspace: p.workspace, settings: settings() });
+  }
   if (method === "session/create") {
     const sessionId = randomUUID(),
       now = Date.now();
@@ -105,6 +108,17 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (method === "session/list")
     return reply({ sessions: Object.values(sessions).map((s) => s.session) });
   if (!s) return write({ id, error: { code: -32004, message: "Session missing" } });
+  if (method === "session/resume" && process.env.ZCODE_FIXTURE_RESUME_WORKSPACE)
+    return reply({
+      ...s,
+      session: {
+        ...s.session,
+        workspace: {
+          ...s.session.workspace,
+          workspacePath: process.env.ZCODE_FIXTURE_RESUME_WORKSPACE,
+        },
+      },
+    });
   if (method === "session/resume" || method === "session/read") return reply(s);
   if (method === "session/events") return reply({ events: [] });
   if (method === "session/subscribe") return reply({ eventSeq: s.runtime.eventSeq, events: [] });
@@ -116,6 +130,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     return;
   }
   if (method === "session/send") {
+    if (configuredWorkspace?.workspaceKey !== s.session.workspace.workspaceKey)
+      return write({
+        id,
+        error: { code: -32000, message: "Provider registry belongs to another workspace" },
+      });
     const user = randomUUID(),
       turnId = randomUUID();
     s.messages.push({
