@@ -10,6 +10,7 @@ import {
 } from "@codexhost/adapter-codebuddy";
 import { nativeSessionRefSchema } from "@codexhost/shared-contracts";
 import { WorkBuddyAdapter } from "../src/workbuddy-adapter.js";
+import { WORKBUDDY_RUNTIME_PROFILE } from "../src/common.js";
 
 const adapters: WorkBuddyAdapter[] = [];
 afterEach(async () => {
@@ -102,7 +103,7 @@ describe("WorkBuddy Adapter identity", () => {
     const home = await mkdtemp(path.join(tmpdir(), "codexhost-workbuddy-"));
     const cwd = await mkdtemp(path.join(tmpdir(), "codexhost-workbuddy-cwd-"));
     const sessionId = "workbuddy-history";
-    const slug = codeBuddyProjectSlug(cwd);
+    const slug = codeBuddyProjectSlug(cwd, WORKBUDDY_RUNTIME_PROFILE);
     const workBuddyProject = path.join(home, ".workbuddy-ai", "projects", slug);
     const codeBuddyProject = path.join(home, ".codebuddy", "projects", slug);
     await Promise.all([

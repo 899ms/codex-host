@@ -54,8 +54,13 @@ interface DerivedLocator {
   bindingMarkerId: string;
 }
 
-export function codeBuddyProjectSlug(cwd: string) {
-  return codeBuddyCanonicalCwd(cwd)
+export function codeBuddyProjectSlug(
+  cwd: string,
+  profile: CodeBuddyRuntimeProfile = CODEBUDDY_RUNTIME_PROFILE,
+) {
+  const canonical = codeBuddyCanonicalCwd(cwd);
+  if (profile.projectDirectoryName) return profile.projectDirectoryName(canonical);
+  return canonical
     .replace(/[^a-z0-9]/giu, "-")
     .replace(/-+/gu, "-")
     .replace(/^-|-$/gu, "")
@@ -92,7 +97,7 @@ export function codeBuddyPrimaryHistoryPath(
   return path.join(
     codeBuddyConfigRoot(environment, profile),
     "projects",
-    codeBuddyProjectSlug(cwd),
+    codeBuddyProjectSlug(cwd, profile),
     `${ref.nativeSessionId}.jsonl`,
   );
 }
@@ -228,7 +233,7 @@ async function codeBuddyHistory(
   validateNativeRef(ref, profile);
   const configRoot = codeBuddyConfigRoot(environment, profile);
   const root = path.join(configRoot, "projects");
-  const slug = codeBuddyProjectSlug(cwd);
+  const slug = codeBuddyProjectSlug(cwd, profile);
   const primary = path.join(root, slug, `${ref.nativeSessionId}.jsonl`);
   const provenance = derivedLocator(ref);
   let candidates: string[] = [];

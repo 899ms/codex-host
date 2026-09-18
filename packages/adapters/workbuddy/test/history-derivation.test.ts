@@ -7,7 +7,6 @@ import {
   CodeBuddyChildObserver,
   codeBuddyCanonicalCwd,
   codeBuddyNativeHistory,
-  codeBuddyPrimaryHistoryPath,
   deriveCodeBuddySession,
   modelRef,
   nativeHistoryRows,
@@ -70,8 +69,8 @@ async function setup(
 ) {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbuddy-derive-"));
   roots.push(root);
-  const sourceCwd = path.join(root, "source-project");
-  const targetCwd = options.sameCwd ? sourceCwd : path.join(root, "target-project");
+  const sourceCwd = path.join(root, "Source.Project");
+  const targetCwd = options.sameCwd ? sourceCwd : path.join(root, "Target.Worktree 项目");
   await Promise.all([mkdir(sourceCwd), ...(options.sameCwd ? [] : [mkdir(targetCwd)])]);
   const environment = { WORKBUDDY_CONFIG_DIR: path.join(root, "config") };
   const retained = [
@@ -167,12 +166,18 @@ async function setup(
     },
   ];
   const contents = jsonl(original);
+  // Build native fixture paths independently of the adapter's history path implementation.
+  const rootDirectory = codeBuddyCanonicalCwd(root)
+    .split(path.sep)
+    .filter(Boolean)
+    .join("-")
+    .replace(/:/gu, "");
   const file = (cwd: string, id: string) =>
-    codeBuddyPrimaryHistoryPath(
-      cwd,
-      { ...sourceRef, nativeSessionId: id },
-      environment,
-      WORKBUDDY_RUNTIME_PROFILE,
+    path.join(
+      environment.WORKBUDDY_CONFIG_DIR,
+      "projects",
+      `${rootDirectory}-${cwd === sourceCwd ? "Source.Project" : "Target.Worktree 项目"}`,
+      `${id}.jsonl`,
     );
   const childFile = (cwd: string, parentId: string, childId = "agent-child") =>
     path.join(path.dirname(file(cwd, parentId)), parentId, "subagents", `${childId}.jsonl`);
