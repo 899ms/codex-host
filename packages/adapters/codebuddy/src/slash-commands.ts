@@ -66,6 +66,16 @@ export function commandCatalog(value: unknown): HarnessCommandCatalog {
   };
 }
 
+// The Host reads Adapter metadata without opening a native Session. Publish only
+// verified built-ins here; execution still checks the Session's live ACP catalog.
+export const CODEBUDDY_COMMAND_CATALOG: HarnessCommandCatalog = commandCatalog([
+  {
+    name: "compact",
+    description: "Summarize conversation context with optional focus instructions",
+  },
+  { name: "cost", description: "Show current Session usage and cost" },
+]);
+
 export function commandPrompt(
   command: HarnessCommandInvocation,
   catalog: HarnessCommandCatalog,

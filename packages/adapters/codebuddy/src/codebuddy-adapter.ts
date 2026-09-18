@@ -1,3 +1,4 @@
+import { CODEBUDDY_COMMAND_CATALOG } from "./slash-commands.js";
 import { stat } from "node:fs/promises";
 import type {
   HarnessAdapter,
@@ -29,6 +30,7 @@ export interface CodeBuddyAdapterOptions {
 
 export class CodeBuddyAdapter implements HarnessAdapter {
   readonly harnessId = CODEBUDDY_ID;
+  readonly commandCatalog = CODEBUDDY_COMMAND_CATALOG;
   readonly subagents: HarnessSubagentCapability = {
     readSnapshot: async ({ parent, nativeSubagentId, cwd }) => {
       try {

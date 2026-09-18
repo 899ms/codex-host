@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HarnessOutput } from "@codexhost/harness-adapter";
+import type { HarnessAdapter, HarnessOutput } from "@codexhost/harness-adapter";
 import { hostTurnIdSchema } from "@codexhost/shared-contracts";
 import { CodeBuddyAdapter } from "../src/codebuddy-adapter.js";
 import { commandCatalog, commandPrompt } from "../src/slash-commands.js";
@@ -11,6 +11,20 @@ afterEach(async () => {
 const turnId = hostTurnIdSchema.parse("command-turn");
 
 describe("CodeBuddy native slash commands", () => {
+  it("exposes the command-button catalog without opening a native Session", () => {
+    const clientFactory = vi.fn(() => {
+      throw new Error("metadata must not start a native process");
+    });
+    const adapter = new CodeBuddyAdapter({ clientFactory });
+    adapters.push(adapter);
+    const hostAdapter: HarnessAdapter = adapter;
+    expect(hostAdapter.commandCatalog?.commands.map((command) => command.invocation)).toEqual([
+      "/compact",
+      "/cost",
+    ]);
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
   it("retains native names and arguments while excluding Session switches and malformed entries", () => {
     const catalog = commandCatalog([
       { name: "compact", description: "Summary" },
