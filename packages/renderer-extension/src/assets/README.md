@@ -30,10 +30,12 @@ mark, 40×40 viewBox and rounded clipping are preserved without modification.
 It matches `packages/adapters/codebuddy/assets/icon.svg` byte for byte; both
 copies are bundled locally so no network request is needed.
 
-`workbuddy-agent.svg` uses the PWA mark bundled with WorkBuddy AI 5.5.2 at
-`cli/dist/web-ui/pwa-icon.svg`, preserving the same vector artwork. It matches
-the WorkBuddy Harness plugin icon; both copies are bundled locally so the
-Renderer does not depend on an installed application path or a network request.
+`workbuddy-agent.svg` is the WorkBuddy mark provided as `10001.svg` from a
+capture of `https://www.workbuddy.ai/`. The original green gradient, yellow
+glow, white mark, 130×130 viewBox and rounded clipping are preserved without
+modification. It matches `packages/adapters/workbuddy/assets/icon.svg` byte
+for byte, which is also used by the README capability table; both copies are
+bundled locally so no installed application path or network request is needed.
 
 `cursor-agent.svg` is the unmodified official Cursor Cube favicon from
 `https://cursor.com/favicon.svg`, with its original 512×512 viewBox, dark rounded
@@ -55,6 +57,13 @@ resized copy of the Grok mark served by `grok.com`, provided from a captured
 first-party page asset so the Renderer does not make a network request. The
 square source is stored with transparent rounded corners so the black plate
 does not render as a hard square.
+
+`zcode-agent.svg` is the user-selected Z.ai mark provided as `10001.svg` from
+a capture of `https://chat.z.ai/`, used for ZCode. The original 30×30 viewBox,
+dark rounded plate, white border and white mark are preserved without
+modification. It matches `packages/adapters/zcode/assets/icon.svg` byte for
+byte; the README also references that plugin asset. Both copies are bundled
+locally without runtime network requests.
 
 `codexhost-readme.svg` embeds `codex-agent.png`, `claude-agent.svg`, and
 `pi-agent.svg` in a responsive vector composition. Its background is `#F2EDE7`.
