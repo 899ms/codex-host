@@ -14,6 +14,7 @@ import {
   type HostThreadSnapshot,
   type InspectHarnessInput,
   type OpenSessionInput,
+  type ForkSessionInput,
   type TurnOutcome,
   type TurnStartCommand,
   type TurnStartAccepted,
@@ -47,11 +48,17 @@ import {
   type CursorSessionInfo,
   type CursorTransportOptions,
 } from "./transport.js";
-import { readCursorNativeTurns, type CursorNativeTurn } from "./native-history.js";
+import {
+  cursorSameWorkspace,
+  readCursorNativeTurns,
+  type CursorNativeTurn,
+} from "./native-history.js";
 import { CursorTurnOutput, cursorSnapshot } from "./projection.js";
 import { cursorThinking, cursorThinkingState } from "./thinking.js";
 import { CURSOR_COMMAND_CATALOG, cursorCommands, cursorCommandPrompt } from "./slash-commands.js";
 import { CursorInteractions } from "./interactions.js";
+import { forkCursorSession, validateCursorFork } from "./fork.js";
+import { cursorForkAvailable, cursorTailCheckpoint } from "./fork-support.js";
 import { type CursorSubagents, cursorTaskAddress } from "./subagents.js";
 import type { HarnessSubagentCapability } from "@codexhost/harness-adapter";
 
@@ -112,6 +119,7 @@ export class CursorAdapter implements HarnessAdapter {
   };
   readonly harnessId = harnessIdSchema.parse("cursor-cli");
   readonly #sessions = new Set<CursorSession>();
+  readonly #forks = new Map<AbortController, Promise<HarnessResult<HarnessSession>>>();
   readonly #inspections = new Map<
     string,
     { pending: boolean; result: Promise<HarnessInspection> }
@@ -165,8 +173,18 @@ export class CursorAdapter implements HarnessAdapter {
   }
   async open(input: OpenSessionInput): Promise<HarnessResult<HarnessSession>> {
     if (this.#closed) return rejected("invalidState", "Cursor adapter is closed");
+    if (input.kind === "fork") {
+      const controller = new AbortController();
+      const pending = this.#fork(input, controller.signal);
+      this.#forks.set(controller, pending);
+      try {
+        return await pending;
+      } finally {
+        this.#forks.delete(controller);
+      }
+    }
     if (input.kind !== "create" && input.kind !== "resume")
-      return rejected("unsupported", "Cursor fork and rollback are not supported");
+      return rejected("unsupported", "Cursor rollback is not supported");
     if (input.kind === "create" && input.executionPolicy === "unattended-full-access")
       return rejected(
         "unsupported",
@@ -232,8 +250,86 @@ export class CursorAdapter implements HarnessAdapter {
       return { ok: false, error: cursorError(error) };
     }
   }
+  async #fork(
+    input: ForkSessionInput,
+    signal: AbortSignal,
+  ): Promise<HarnessResult<HarnessSession>> {
+    if (!cursorForkAvailable())
+      return rejected("unsupported", "Cursor Fork requires macOS/Linux with /usr/bin/script");
+    try {
+      validateCursorFork(input.sourceRef, input.checkpoint);
+    } catch {
+      return rejected("invalidRequest", "Invalid Cursor fork checkpoint");
+    }
+    const source = [...this.#sessions].find(
+      (session) => session.transport.sessionId === input.sourceRef.nativeSessionId,
+    );
+    if (source && !cursorSameWorkspace(source.transport.options.cwd, input.cwd))
+      return rejected("unsupported", "Cursor Fork does not support changing workspace");
+    const release = source?.lockForFork();
+    if (source && !release) return rejected("sessionBusy", "Cursor source session is busy");
+    let derived: Awaited<ReturnType<typeof forkCursorSession>> | undefined;
+    let session: HarnessSession | undefined;
+    try {
+      const options = source
+        ? {
+            ...source.transport.options,
+            environment: { ...source.transport.options.environment, ...input.environment },
+          }
+        : this.transportOptions(input.cwd, input.environment);
+      const native = readCursorNativeTurns(
+        input.sourceRef.nativeSessionId,
+        input.cwd,
+        options.environment,
+      );
+      if (!native.some((turn) => turn.id === input.checkpoint.checkpointId))
+        return rejected("checkpointNotFound", "Cursor fork checkpoint no longer exists");
+      if (native.at(-1)?.id !== input.checkpoint.checkpointId)
+        return rejected("unsupported", "Cursor Fork currently supports only the last turn");
+      derived = await forkCursorSession(input.sourceRef, input.checkpoint, options, signal);
+      signal.throwIfAborted();
+      const opened = await this.open({
+        kind: "resume",
+        cwd: input.cwd,
+        environment: options.environment,
+        nativeRef: nativeSessionRefSchema.parse({
+          harnessId: this.harnessId,
+          nativeSessionId: derived.sessionId,
+          formatVersion: 1,
+        }),
+        ...(source?.initialState.effectiveModel
+          ? { model: source.initialState.effectiveModel }
+          : {}),
+        ...(source?.initialState.effectiveThinkingOptionId
+          ? { thinkingOptionId: source.initialState.effectiveThinkingOptionId }
+          : {}),
+        ...(source?.initialState.effectivePermissionModeId
+          ? { permissionModeId: source.initialState.effectivePermissionModeId }
+          : {}),
+      });
+      if (!opened.ok) throw new Error(opened.error.message);
+      session = opened.value;
+      // Resume has verified the native turn IDs and full ACP replay before adoption.
+      if (
+        JSON.stringify(
+          readCursorNativeTurns(input.sourceRef.nativeSessionId, input.cwd, options.environment),
+        ) !== JSON.stringify(derived.expected)
+      )
+        throw new Error("Cursor source changed before fork adoption");
+      derived.commit();
+      return { ok: true, value: session };
+    } catch (error) {
+      await session?.close();
+      await derived?.discard();
+      return { ok: false, error: cursorError(error) };
+    } finally {
+      release?.();
+    }
+  }
   async close() {
     this.#closed = true;
+    for (const controller of this.#forks.keys()) controller.abort();
+    await Promise.allSettled(this.#forks.values());
     await Promise.allSettled([...this.#sessions].map((session) => session.close()));
     await Promise.allSettled(
       [...this.#inspections.values()].map((inspection) => inspection.result),
@@ -273,6 +369,13 @@ export class CursorSession implements HarnessSession {
   #closed = false;
   #fresh: boolean;
   #subagentOutput: CursorSubagents | undefined;
+  lockForFork(): (() => void) | undefined {
+    if (this.#closed || this.#active || this.#configuring) return;
+    this.#configuring = true;
+    return () => {
+      this.#configuring = false;
+    };
+  }
   subagentSnapshot(callId: string): HostThreadSnapshot | undefined {
     try {
       return this.#subagentOutput?.snapshot(this.transport.sessionId, callId);
@@ -528,6 +631,11 @@ export class CursorSession implements HarnessSession {
           formatVersion: 1,
         });
         this.#fresh = false;
+        if (outcome.status === "succeeded" && cursorForkAvailable())
+          outcome = {
+            ...outcome,
+            checkpoint: cursorTailCheckpoint(this.transport.sessionId, added[0].id),
+          };
       }
     } catch (error) {
       if (outcome.status === "succeeded") outcome = { status: "failed", error: cursorError(error) };

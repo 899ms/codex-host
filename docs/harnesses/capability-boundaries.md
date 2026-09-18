@@ -13,7 +13,7 @@
 
 ## Cursor 剩余边界
 
-Cursor 当前 ACP 没有 Usage、Fork、回滚或上下文压缩出口。插件不写原生 SQLite 历史来合成这些操作，也不把普通 `/compact` Prompt 计为压缩。
+Cursor 当前 ACP 没有 Usage、Fork、回滚或上下文压缩出口。macOS/Linux 的末尾 Fork 通过隔离的 CLI 会话副本执行原生 `/fork`，再由 ACP 恢复；会话内容不做格式转换。历史位置 Fork、修订上一条和 Windows Fork 仍不支持。插件不重写原生消息来合成回滚，也不把普通 `/compact` Prompt 计为压缩。
 
 Agent 间任务协作目前是单向的：正常 Cursor Session 可以通过原生 MCP 向其他 Harness 委派、查询及跟进任务。无人值守入站需要确认原生 Full Access 已生效，但 Cursor 的 `--force` 可能被团队策略静默降级，而 ACP 只公布 Agent/Plan/Ask，不能确认最终审批策略，因此仍返回 `unsupported`。这不同于缺少向外委派能力，能力表分别标明。
 

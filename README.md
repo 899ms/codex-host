@@ -131,7 +131,7 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 | 权限模式 | 原生 | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Agent 间任务协作 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 向外 | ✅* | ✅ | ✅ |
 | Usage | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ |
-| Fork | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 受限* | ✅ | ✅ |
+| Fork | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 末尾* | 受限* | ✅ | ✅ |
 | 上下文压缩 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | ✅ | ✅ | ✅ |
 | 斜杠命令 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 修订上一条消息 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 受限* | ✅ | ✅ |
@@ -139,6 +139,8 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 Cursor 的 Agent 间任务协作目前仅支持向外委派；无人值守入站执行仍受原生权限确认限制。其余保留的缺口及接入条件见[能力边界](docs/harnesses/capability-boundaries.md)。
 
 Hermes 的 * 项需要可用的原生 gateway；0.21.3 / contract 7 是测试基线，不是版本门槛。旧 ACP 会话保持原接入方式。Fork 和修订仅支持可完整保留的未压缩历史。
+
+Cursor 的 Fork 仅支持 macOS/Linux 同工作目录的当前最后一轮；修订上一条仍不支持。详见[接入说明](docs/harnesses/cursor/cursor-cli-experimental.md#native-cli-fork-bridge)。
 
 ## 跨 Agent 协作
 
