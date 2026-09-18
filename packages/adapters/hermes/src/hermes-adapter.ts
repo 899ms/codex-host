@@ -38,6 +38,15 @@ import {
 } from "./hermes-models.js";
 import { HermesSession } from "./hermes-session.js";
 import { resolveHermesExecutable } from "./command.js";
+import { HermesGatewayTransport } from "./gateway-transport.js";
+import { HermesGatewayHistoryError } from "./gateway-history.js";
+import { hermesGatewayThinkingOptions } from "./gateway-session-transport.js";
+import {
+  gatewayCapabilities,
+  gatewayPermissionModes,
+  isGatewayRef,
+  openGatewaySession,
+} from "./gateway-open.js";
 
 const hermesHarnessId: HarnessId = harnessIdSchema.parse("hermes");
 
@@ -77,6 +86,9 @@ export class HermesAdapter implements HarnessAdapter {
   #warmTransports = new Map<string, Promise<HermesAcpTransport | null>>();
   #transports = new Set<HermesAcpTransport>();
   #closed = false;
+  #gatewayTransports = new Set<HermesGatewayTransport>();
+  #gatewayProbes = new Map<string, Promise<string | null>>();
+  #openingNativeIds = new Set<string>();
 
   constructor(options: HermesAdapterOptions = {}) {
     this.#options = options;
@@ -90,6 +102,28 @@ export class HermesAdapter implements HarnessAdapter {
       return this.#inspectionCache;
     }
     const environment = this.#effectiveEnvironment();
+    if (input.refresh) this.#gatewayProbes.clear();
+    const gatewayPython = await this.#gatewayPython(cwd, environment);
+    if (gatewayPython) {
+      try {
+        const catalog = catalogModelsFromInventory(await this.#readInventory());
+        const inspection: HarnessInspection = {
+          status: "ready",
+          catalog: {
+            models: catalog.models.map(({ ref, label }) => ({ ref, label })),
+            thinkingOptions: hermesGatewayThinkingOptions,
+            ...(catalog.defaultModel ? { defaultModel: catalog.defaultModel } : {}),
+          },
+          permissionModes: gatewayPermissionModes(),
+          capabilities: gatewayCapabilities,
+        };
+        this.#inspectionCache = inspection;
+        this.#inspectionCacheScope = cwd;
+        return inspection;
+      } catch (error) {
+        return inspectionFromTransportError(error);
+      }
+    }
     const transport = await this.#takeTransport(cwd, environment);
     let retainedForOpen = false;
     try {
@@ -156,6 +190,32 @@ export class HermesAdapter implements HarnessAdapter {
     if (typeof cwd !== "string" || cwd.trim().length === 0) {
       return failure("invalidRequest", "open requires a cwd");
     }
+    const nativeRef =
+      input.kind === "create" ? null : input.kind === "resume" ? input.nativeRef : input.sourceRef;
+    const gatewayEnvironment = {
+      ...(this.#options.environment ?? process.env),
+      ...(input.environment ?? {}),
+    };
+    const environment = this.#effectiveEnvironment(input.environment);
+    if (
+      input.kind === "resume" &&
+      (this.#openingNativeIds.has(input.nativeRef.nativeSessionId) ||
+        [...this.#sessions].some(
+          (s) => s.initialState.nativeRef?.nativeSessionId === input.nativeRef.nativeSessionId,
+        ))
+    )
+      return failure("sessionBusy", "This Hermes Session already has an owner", true);
+    // A saved ACP Session always stays ACP, even when a newer gateway is installed.
+    if (!nativeRef || isGatewayRef(nativeRef)) {
+      const python = await this.#gatewayPython(cwd, gatewayEnvironment);
+      if (this.#closed) return failure("invalidState", "Hermes Adapter is closed");
+      if (python) return this.#openGateway(input, python, gatewayEnvironment);
+      if (nativeRef)
+        return failure(
+          "unavailable",
+          "Hermes gateway Session requires an available gateway with exclusive turn support",
+        );
+    }
     let transportOpen: HermesOpenInput;
     let permissionModeId: HarnessPermissionModeId | undefined;
     if (input.kind === "create") {
@@ -183,7 +243,6 @@ export class HermesAdapter implements HarnessAdapter {
     if (permissionModeId && !isHermesModeId(permissionModeId)) {
       return failure("invalidRequest", "Permission Mode does not belong to Hermes");
     }
-    const environment = this.#effectiveEnvironment(input.environment);
     const transport = await this.#takeTransport(cwd, environment);
     if (this.#closed) {
       await this.#releaseTransport(transport);
@@ -272,6 +331,95 @@ export class HermesAdapter implements HarnessAdapter {
     }
   }
 
+  async #gatewayPython(cwd: string, environment: NodeJS.ProcessEnv): Promise<string | null> {
+    const key = `${cwd}:${this.#transportScope(cwd, environment)}`;
+    let pending = this.#gatewayProbes.get(key);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          return await HermesGatewayTransport.probe(
+            resolveHermesExecutable({
+              ...(this.#options.command ? { command: this.#options.command } : {}),
+              environment,
+            }),
+            cwd,
+            environment,
+          );
+        } catch {
+          return null;
+        }
+      })();
+      this.#gatewayProbes.set(key, pending);
+    }
+    return pending;
+  }
+  async #openGateway(
+    input: OpenSessionInput,
+    python: string,
+    environment: NodeJS.ProcessEnv,
+  ): Promise<HarnessResult<HarnessSession>> {
+    if (this.#closed) return failure("invalidState", "Hermes Adapter is closed");
+    const ref = input.kind === "resume" ? input.nativeRef : null;
+    if (input.kind === "fork" || input.kind === "rollbackLastTurn") {
+      const source = [...this.#sessions].find(
+        (s) => s.initialState.nativeRef?.nativeSessionId === input.sourceRef.nativeSessionId,
+      );
+      if (source?.busy)
+        return failure(
+          "sessionBusy",
+          "Cannot derive a Hermes Session while its source Turn is active",
+          true,
+        );
+    }
+    const owned = (id: string) =>
+      this.#openingNativeIds.has(id) ||
+      [...this.#sessions].some((session) => session.initialState.nativeRef?.nativeSessionId === id);
+    if (ref && owned(ref.nativeSessionId))
+      return failure("sessionBusy", "This Hermes Session already has an owner", true);
+    if (ref) this.#openingNativeIds.add(ref.nativeSessionId);
+    const transport = new HermesGatewayTransport(
+      python,
+      input.cwd,
+      environment,
+      this.#options.commandTimeoutMs,
+    );
+    this.#gatewayTransports.add(transport);
+    try {
+      let inheritedMode: string | undefined;
+      if (input.kind === "fork") {
+        const source = [...this.#sessions].find(
+          (s) => s.initialState.nativeRef?.nativeSessionId === input.sourceRef.nativeSessionId,
+        );
+        const snapshot = await source?.readSnapshot();
+        if (snapshot?.ok) inheritedMode = snapshot.value.state?.effectivePermissionModeId;
+      }
+      const session = await openGatewaySession(
+        input,
+        transport,
+        (settled) => {
+          this.#sessions.delete(settled);
+          this.#gatewayTransports.delete(transport);
+        },
+        inheritedMode,
+      );
+      if (this.#closed) {
+        await session.close();
+        return failure("invalidState", "Hermes Adapter is closed");
+      }
+      this.#sessions.add(session);
+      return { ok: true, value: session };
+    } catch (error) {
+      await transport.close().catch(() => undefined);
+      this.#gatewayTransports.delete(transport);
+      return failure(
+        error instanceof HermesGatewayHistoryError ? error.code : "nativeFailure",
+        error instanceof Error ? error.message : "Hermes gateway open failed",
+      );
+    } finally {
+      if (ref) this.#openingNativeIds.delete(ref.nativeSessionId);
+    }
+  }
+
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
@@ -281,6 +429,8 @@ export class HermesAdapter implements HarnessAdapter {
     this.#warmTransports.clear();
     await Promise.all(sessions.map((session) => session.close().catch(() => undefined)));
     await Promise.all([...this.#transports].map((transport) => this.#releaseTransport(transport)));
+    await Promise.all([...this.#gatewayTransports].map((transport) => transport.close()));
+    this.#gatewayTransports.clear();
   }
 
   #effectiveEnvironment(environment?: Record<string, string | undefined>): NodeJS.ProcessEnv {
