@@ -1,5 +1,5 @@
 import { createServer, type ServerResponse } from "node:http";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -319,7 +319,9 @@ describe.skipIf(!runtime)(
       const ref = required(session.initialState.nativeRef);
       await session.close();
       await observed.done;
-      const resumed = await adapter.open({ kind: "resume", nativeRef: ref, cwd: root });
+      const alias = path.join(root, "workspace-alias");
+      await symlink(root, alias, "junction");
+      const resumed = await adapter.open({ kind: "resume", nativeRef: ref, cwd: alias + path.sep });
       if (!resumed.ok) throw new Error(JSON.stringify(resumed.error));
       expect(await resumed.value.readSnapshot()).toMatchObject({
         ok: true,

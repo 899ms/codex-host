@@ -2,13 +2,18 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { record, text, workspaceStateSchema } from "./protocol.js";
+import { record, text, workspaceStateSchema, type NativeSnapshot } from "./protocol.js";
 import type { ZcodeTransport } from "./transport.js";
 import { ZcodeError } from "./errors.js";
 
 /** The Desktop sends this same ephemeral registry to app-server. Never copy its credentials to disk. */
-export async function readWorkspace(transport: ZcodeTransport) {
-  const workspace = { workspacePath: transport.options.cwd, workspaceKey: transport.options.cwd };
+export async function readWorkspace(
+  transport: ZcodeTransport,
+  workspace: NativeSnapshot["session"]["workspace"] = {
+    workspacePath: transport.options.cwd,
+    workspaceKey: transport.options.cwd,
+  },
+) {
   let state = workspaceStateSchema.parse(
     await transport.request("workspace/readState", { workspace }),
   );

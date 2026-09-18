@@ -25,6 +25,7 @@ import { history } from "./history.js";
 import { forkConversation } from "./fork.js";
 import { CAPABILITIES } from "./capabilities.js";
 import { COMMAND_CATALOG } from "./commands.js";
+import { sameWorkspaceDirectory } from "./workspace-directory.js";
 
 export interface ZcodeAdapterOptions {
   environment?: NodeJS.ProcessEnv;
@@ -103,7 +104,7 @@ export class ZcodeAdapter implements HarnessAdapter {
     if (!nativeSessionRefSchema.safeParse(ref).success || ref.harnessId !== ZCODE_ID)
       throw new ZcodeError("invalidRequest", "Native session reference does not belong to ZCode");
     const savedCwd = text(record(ref.locator).cwd);
-    if (savedCwd && path.resolve(savedCwd) !== path.resolve(cwd))
+    if (savedCwd && !sameWorkspaceDirectory(savedCwd, cwd))
       throw new ZcodeError("unsupported", "ZCode sessions cannot change workspace directory");
     if (
       this.#opening.has(ref.nativeSessionId) ||
@@ -140,7 +141,20 @@ export class ZcodeAdapter implements HarnessAdapter {
           throw new ZcodeError("checkpointNotFound", "ZCode checkpoint belongs to another session");
       }
       transport = this.#transport(input.cwd, input.environment);
-      const workspace = await readWorkspace(transport);
+      // Restore the native workspace before registering ephemeral Providers. An
+      // equivalent cwd spelling is not necessarily the same native registry key.
+      let source: NativeSnapshot | undefined;
+      if (input.kind !== "create") {
+        const ref = input.kind === "resume" ? input.nativeRef : input.sourceRef;
+        source = snapshotSchema.parse(
+          await transport.request("session/resume", { sessionId: ref.nativeSessionId }),
+        );
+        if (source.session.sessionId !== ref.nativeSessionId)
+          throw new ZcodeError("protocolError", "ZCode resumed a different session");
+        if (!sameWorkspaceDirectory(source.session.workspace.workspacePath, input.cwd))
+          throw new ZcodeError("unsupported", "ZCode session belongs to a different workspace");
+      }
+      const workspace = await readWorkspace(transport, source?.session.workspace);
       if (
         "model" in input &&
         input.model &&
@@ -190,13 +204,13 @@ export class ZcodeAdapter implements HarnessAdapter {
       } else {
         const ref = input.kind === "resume" ? input.nativeRef : input.sourceRef;
         snapshot = snapshotSchema.parse(
-          await transport.request("session/resume", {
+          await transport.request("session/read", {
             sessionId: ref.nativeSessionId,
           }),
         );
         if (snapshot.session.sessionId !== ref.nativeSessionId)
           throw new ZcodeError("protocolError", "ZCode resumed a different session");
-        if (snapshot.session.workspace.workspacePath !== input.cwd)
+        if (!sameWorkspaceDirectory(snapshot.session.workspace.workspacePath, input.cwd))
           throw new ZcodeError("unsupported", "ZCode resumed a different workspace");
         if (input.kind !== "resume") {
           const source = history(snapshot),
