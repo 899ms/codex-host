@@ -43,6 +43,7 @@ interface SubagentOptions {
   port(): Promise<number | null>;
   cwd: string;
   outputLimit: number;
+  observationTimeoutMs: number;
   initialStates?: HostSubagentState[];
   emit(event: HostEvent): void;
   complete(snapshot: HostItemSnapshot): void;
@@ -51,6 +52,7 @@ interface SubagentOptions {
 
 export class AntigravitySubagents {
   readonly #states = new Map<string, HostSubagentState>();
+  readonly #lastObservedAt = new Map<string, number>();
   readonly #transcripts = new Map<string, string>();
   readonly #items = new Map<number, Delegation>();
   readonly #options: SubagentOptions;
@@ -156,7 +158,10 @@ export class AntigravitySubagents {
     if (this.#stopped) return;
     const parentId = this.#options.parentId();
     const port = await this.#options.port();
-    if (!parentId || port === null) return;
+    if (!parentId || port === null) {
+      this.#expireUnobserved();
+      return;
+    }
     for (const [id, previous] of this.#states) {
       if (this.#stopped) return;
       let status = previous.status;
@@ -168,6 +173,7 @@ export class AntigravitySubagents {
         if (observed !== "completed" || (status !== "interrupted" && status !== "failed")) {
           status = observed ?? status;
         }
+        if (observed !== null) this.#lastObservedAt.set(id, Date.now());
       } catch {
         // A transient read failure is not evidence that the native child finished.
       }
@@ -203,7 +209,7 @@ export class AntigravitySubagents {
         }
       }
     }
-    if (this.#ended && !this.running) this.stop();
+    this.#expireUnobserved();
   }
 
   finish(outcome: HostItemOutcome): void {
@@ -211,6 +217,34 @@ export class AntigravitySubagents {
       if (!delegation.completed) this.#complete(delegation, outcome);
     }
     this.#ended = true;
+    const now = Date.now();
+    for (const [id, state] of this.#states) {
+      if (state.status === "running" || state.status === "pending") {
+        this.#lastObservedAt.set(id, now);
+      }
+    }
+    if (!this.running) this.stop();
+  }
+
+  #expireUnobserved(): void {
+    if (!this.#ended || this.#stopped) return;
+    const now = Date.now();
+    for (const [id, state] of this.#states) {
+      if (state.status !== "running" && state.status !== "pending") continue;
+      if (now - (this.#lastObservedAt.get(id) ?? now) < this.#options.observationTimeoutMs)
+        continue;
+      const resultSummary =
+        "Observation timed out; native Subagent completion could not be confirmed.";
+      this.#states.set(id, { ...state, status: "interrupted", resultSummary });
+      this.#options.emit({
+        type: "subagent.state.changed",
+        nativeSubagentId: id,
+        status: "interrupted",
+        resultSummary,
+      });
+      this.#options.emit({ type: "subagent.transcript.changed", nativeSubagentId: id });
+      this.#lastObservedAt.delete(id);
+    }
     if (!this.running) this.stop();
   }
 
@@ -270,6 +304,7 @@ export class AntigravitySubagents {
   stop(): void {
     this.#stopped = true;
     clearInterval(this.#timer);
+    this.#lastObservedAt.clear();
     this.#settled?.();
   }
 

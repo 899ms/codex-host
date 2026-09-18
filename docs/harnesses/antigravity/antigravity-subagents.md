@@ -43,6 +43,13 @@ the native cancellation RPC before CLI shutdown. If native cancellation cannot
 be confirmed, the result explicitly reports interrupted observation instead of
 claiming successful native cancellation.
 
+After the parent Turn completes, each running child has a 30-second window to
+return a valid native status. A valid running status renews that window, so a
+healthy background child can continue working. If status remains unavailable,
+the child is marked `interrupted` with an unconfirmed-completion explanation.
+This releases the observer and CLI after the remaining children settle; it does
+not claim the native child completed or was cancelled.
+
 ## Boundaries
 
 - Child Threads are read-only. Further instructions go through the parent.
@@ -51,8 +58,9 @@ claiming successful native cancellation.
   restrict parent or child tool actions. The Question bridge remains scoped to
   the parent Turn.
 - If a parent result arrives while children are still running, the observer and
-  CLI stay alive until they settle or the Session closes. New parent input is
-  rejected as busy during that interval.
+  CLI stay alive while native status remains observable. They are released when
+  the children settle, their status becomes unobservable for 30 seconds, or the
+  Session closes. New parent input is rejected as busy during that interval.
 - Native Language Server methods and log shapes are compatibility-sensitive.
   Missing or invalid child history returns a typed error, never fabricated
   successful history. Logs above 8 MiB are explicitly unsupported.

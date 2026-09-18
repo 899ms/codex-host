@@ -77,6 +77,7 @@ function fixture() {
     port: async () => 1,
     cwd: process.cwd(),
     outputLimit: 64_000,
+    observationTimeoutMs: 30_000,
     emit: (event) => events.push(event),
     complete: (snapshot) => completed.push(snapshot),
     schedule: (work) => {
@@ -225,6 +226,46 @@ describe("Antigravity Subagents", () => {
     }
   });
 
+  it("interrupts only after native status has been unobservable since parent completion", async () => {
+    vi.useFakeTimers();
+    const events: HostEvent[] = [];
+    const observer = new AntigravitySubagents({
+      turnId,
+      parentId: () => parent,
+      port: async () => 1,
+      cwd: process.cwd(),
+      outputLimit: 64_000,
+      observationTimeoutMs: 30_000,
+      emit: (event) => events.push(event),
+      complete: () => undefined,
+      schedule: () => undefined,
+    });
+    vi.mocked(readSubagentTranscript).mockResolvedValue({ ok: true, value: { turns: [] } });
+    try {
+      observer.handle(step("DONE"));
+      observer.finish({ status: "succeeded" });
+      vi.mocked(subagentRpc).mockResolvedValue(native("RUNNING"));
+      await vi.advanceTimersByTimeAsync(25_000);
+      await observer.refresh();
+      vi.mocked(subagentRpc).mockRejectedValue(new Error("401 missing CSRF token"));
+      await vi.advanceTimersByTimeAsync(29_000);
+      await observer.refresh();
+      expect(observer.state(child)?.status).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await observer.refresh();
+      await observer.settled;
+      expect(observer.state(child)).toMatchObject({
+        status: "interrupted",
+        resultSummary: expect.stringContaining("could not be confirmed"),
+      });
+      expect(events.filter((event) => event.type === "subagent.state.changed")).toHaveLength(1);
+    } finally {
+      observer.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("validates ownership before cancelling and distinguishes unavailable native cancellation", async () => {
     const { observer, events } = fixture();
     observer.handle(step("ACTIVE"));
@@ -258,6 +299,7 @@ describe("Antigravity Subagents", () => {
       port: async () => 1,
       cwd: process.cwd(),
       outputLimit: 64_000,
+      observationTimeoutMs: 30_000,
       complete: () => undefined,
       emit: (event) => events.push(event),
       schedule: () => undefined,
