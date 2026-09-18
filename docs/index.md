@@ -62,6 +62,12 @@
 | [`harnesses/opencode/opencode-edit-recovery.md`](harnesses/opencode/opencode-edit-recovery.md) | OpenCode 原生 Fork 编辑恢复和取消终态语义；修改编辑或取消时阅读。 |
 | [`harnesses/pi/pi-edit-recovery.md`](harnesses/pi/pi-edit-recovery.md) | Pi 空历史编辑、原生文件发布和生命周期 Gate；修改 Pi 恢复时阅读。 |
 
+### OMP
+
+| 文档 | 内容与阅读时机 |
+| --- | --- |
+| [`harnesses/omp/omp-interactions.md`](harnesses/omp/omp-interactions.md) | OMP 原生提问、审批、选项说明和超时语义；维护 OMP 交互时阅读。 |
+
 ### Grok
 
 | 文档 | 内容与阅读时机 |
