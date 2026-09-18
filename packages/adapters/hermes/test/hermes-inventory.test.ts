@@ -45,8 +45,11 @@ describe("Hermes model catalog", () => {
       ],
       currentModelId: "custom:pi-openai:gpt-5.6-sol",
     });
-    expect(catalog.defaultModel).toEqual(encodeHermesModelRef("pi-openai:gpt-5.6-sol"));
+    expect(catalog.defaultModel).toEqual(encodeHermesModelRef("custom:pi-openai:gpt-5.6-sol"));
     expect(catalog.models.map(({ ref }) => ref)).toContainEqual(catalog.defaultModel);
+    expect(catalog.models.map(({ ref }) => ref)).toContainEqual(
+      encodeHermesModelRef("custom:pi-openai:gpt-5.6-sol"),
+    );
   });
 
   it("does not invent a default when Hermes reports no configured model", () => {
