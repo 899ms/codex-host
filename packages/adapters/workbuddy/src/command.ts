@@ -1,3 +1,4 @@
+import { lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { CodeBuddyError, type CodeBuddyInvocationFactory } from "@codexhost/adapter-codebuddy";
@@ -25,13 +26,69 @@ export const workBuddyDiscoverySpec: HarnessDiscoverySpec = {
 interface WorkBuddyInvocationDependencies {
   platform?: NodeJS.Platform;
   isExecutable?: (candidate: string) => boolean;
+  lstat?: (candidate: string) => {
+    isDirectory(): boolean;
+    isFile(): boolean;
+    isSymbolicLink(): boolean;
+    mode: number;
+    size: number;
+    uid: number;
+  };
+  getuid?: () => number | undefined;
+}
+
+const WORKBUDDY_PRODUCT_CONFIG_PATH_ENV = "ACC_PRODUCT_CONFIG_PATH";
+const WORKBUDDY_PRODUCT_CONFIG_INLINE_ENVS = [
+  "ACC_PRODUCT_CONFIG_V3",
+  "ACC_PRODUCT_CONFIG_V2",
+  "ACC_PRODUCT_CONFIG",
+] as const;
+const WORKBUDDY_PRODUCT_CONFIG_CACHE = path.join("cache", "acc-product-config-v3.json");
+
+function bundledProductConfigPath(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  dependencies: WorkBuddyInvocationDependencies,
+): string | undefined {
+  if (
+    environment[WORKBUDDY_PRODUCT_CONFIG_PATH_ENV] !== undefined ||
+    WORKBUDDY_PRODUCT_CONFIG_INLINE_ENVS.some((name) => environment[name] !== undefined)
+  )
+    return;
+
+  const root = environment.WORKBUDDY_CONFIG_DIR;
+  if (!root) return;
+  const candidate = path.join(root, WORKBUDDY_PRODUCT_CONFIG_CACHE);
+  try {
+    const inspect = dependencies.lstat ?? lstatSync;
+    const uid = (dependencies.getuid ?? (() => process.getuid?.()))();
+    for (const directory of [root, path.dirname(candidate)]) {
+      const metadata = inspect(directory);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) return;
+      if (platform !== "win32") {
+        if ((metadata.mode & 0o022) !== 0) return;
+        if (uid !== undefined && metadata.uid !== uid) return;
+      }
+    }
+    const metadata = inspect(candidate);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size <= 0) return;
+    if (platform !== "win32") {
+      if ((metadata.mode & 0o077) !== 0) return;
+      if (uid !== undefined && metadata.uid !== uid) return;
+    }
+    return candidate;
+  } catch {
+    return;
+  }
 }
 
 export function workBuddyEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const configuredRoot = environment.WORKBUDDY_CONFIG_DIR;
-  const root = configuredRoot?.trim()
-    ? configuredRoot
-    : path.join(environment.HOME || environment.USERPROFILE || homedir(), ".workbuddy-ai");
+  const root = path.resolve(
+    configuredRoot?.trim()
+      ? configuredRoot
+      : path.join(environment.HOME || environment.USERPROFILE || homedir(), ".workbuddy-ai"),
+  );
   return {
     ...environment,
     // The bundled core reads CODEBUDDY_CONFIG_DIR. Force both names to one
@@ -78,8 +135,15 @@ export function workBuddyInvocation(
     process.execPath,
     platform,
   );
+  const productConfigPath = bundled
+    ? bundledProductConfigPath(configuredEnvironment, platform, dependencies)
+    : undefined;
   const childEnvironment = bundled
-    ? { ...configuredEnvironment, ELECTRON_RUN_AS_NODE: "1" }
+    ? {
+        ...configuredEnvironment,
+        ...(productConfigPath ? { [WORKBUDDY_PRODUCT_CONFIG_PATH_ENV]: productConfigPath } : {}),
+        ELECTRON_RUN_AS_NODE: "1",
+      }
     : configuredEnvironment;
   return {
     ...commandInvocation(
