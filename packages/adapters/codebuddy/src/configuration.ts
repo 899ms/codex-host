@@ -10,7 +10,14 @@ import {
   harnessPermissionModeIdSchema,
   harnessThinkingOptionSchema,
 } from "@codexhost/shared-contracts";
-import { CodeBuddyError, record, rows, text } from "./common.js";
+import {
+  CODEBUDDY_RUNTIME_PROFILE,
+  CodeBuddyError,
+  record,
+  rows,
+  text,
+  type CodeBuddyRuntimeProfile,
+} from "./common.js";
 
 export const CODEBUDDY_CAPABILITIES: HarnessSessionCapabilities = {
   configuration: {
@@ -19,9 +26,18 @@ export const CODEBUDDY_CAPABILITIES: HarnessSessionCapabilities = {
     selectPermissionMode: true,
     permissionModeScope: "live",
   },
-  history: { fork: false, forkAcrossCwd: false, rollbackLastTurn: false },
+  history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
   subagents: { observe: true, readTranscript: true },
 };
+
+export function capabilitiesForProfile(
+  profile: CodeBuddyRuntimeProfile = CODEBUDDY_RUNTIME_PROFILE,
+): HarnessSessionCapabilities {
+  return {
+    ...CODEBUDDY_CAPABILITIES,
+    history: profile.historyCapabilities ?? CODEBUDDY_CAPABILITIES.history,
+  };
+}
 
 export function modelRef(modelId: string): HarnessModelRef {
   return harnessModelRefSchema.parse({ id: `cb.${Buffer.from(modelId).toString("base64url")}` });
@@ -30,7 +46,7 @@ export function modelRef(modelId: string): HarnessModelRef {
 export function nativeModel(ref: HarnessModelRef): string {
   const value = Buffer.from(ref.id.slice(3), "base64url").toString("utf8");
   if (!value || !ref.id.startsWith("cb.") || modelRef(value).id !== ref.id)
-    throw new CodeBuddyError("invalidRequest", "Invalid CodeBuddy Model Ref");
+    throw new CodeBuddyError("invalidRequest", "Invalid native Model Ref");
   return value;
 }
 

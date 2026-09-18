@@ -25,10 +25,12 @@ const HARNESS_INSTALL_URLS: Readonly<Record<ExternalRendererAgent, string>> = Ob
   antigravity: "https://antigravity.google/product/antigravity-cli",
   "kiro-cli": "https://kiro.dev/docs/cli/",
   codebuddy: "https://www.codebuddy.ai/docs/zh/cli/overview",
+  workbuddy: "https://www.workbuddy.ai/docs/workbuddy/Quickstart",
   "cursor-cli": "https://cursor.com/docs/cli/installation",
   hermes: "https://hermes-agent.nousresearch.com/docs",
   qoder: "https://docs.qoder.com/",
   "qoder-cn": "https://docs.qoder.cn/",
+  zcode: "https://zcode.z.ai/cn/docs/install",
 });
 
 export interface RendererConnectionAgentSnapshot {
@@ -824,7 +826,13 @@ export function createConnectionsSettingsPage(
         );
         const agentByKey = new Map(groupableItems.map((item) => [item.key, item]));
         const preferenceOrder = groupPreference
-          .list()
+          .list(
+            new Set(
+              groupableItems
+                .filter((item) => item.availability === "notInstalled")
+                .map((item) => item.agentSnapshot.agent),
+            ),
+          )
           .filter((entry) => agentByKey.has(entry.agent));
         for (const item of groupableItems) {
           if (!preferenceOrder.some((entry) => entry.agent === item.key)) {

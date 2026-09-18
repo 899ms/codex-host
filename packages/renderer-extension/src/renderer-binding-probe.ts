@@ -97,10 +97,12 @@ const externalHarnessIds = {
   antigravity: harnessIdSchema.parse("antigravity"),
   "kiro-cli": harnessIdSchema.parse("kiro-cli"),
   codebuddy: harnessIdSchema.parse("codebuddy"),
+  workbuddy: harnessIdSchema.parse("workbuddy"),
   "cursor-cli": harnessIdSchema.parse("cursor-cli"),
   hermes: harnessIdSchema.parse("hermes"),
   qoder: harnessIdSchema.parse("qoder"),
   "qoder-cn": harnessIdSchema.parse("qoder-cn"),
+  zcode: harnessIdSchema.parse("zcode"),
 } as const;
 
 const externalAgents: readonly ExternalRendererAgent[] = [
@@ -113,10 +115,12 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "antigravity",
   "kiro-cli",
   "codebuddy",
+  "workbuddy",
   "cursor-cli",
   "hermes",
   "qoder",
   "qoder-cn",
+  "zcode",
 ];
 type HarnessAvailability = Partial<Record<ExternalRendererAgent, RendererAgentAvailability>>;
 type HarnessAvailabilityErrors = Partial<Record<ExternalRendererAgent, CodexhostError | undefined>>;
@@ -470,6 +474,7 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
   if (
     inspection.harnessId === "kiro-cli" ||
     inspection.harnessId === "codebuddy" ||
+    inspection.harnessId === "workbuddy" ||
     inspection.harnessId === "cursor-cli"
   ) {
     const route = decodeHarnessPluginRoute(inspection.transportModelId);
@@ -502,10 +507,14 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
         : {}),
     };
   }
-  if (inspection.harnessId === "qoder" || inspection.harnessId === "qoder-cn") {
+  if (
+    inspection.harnessId === "qoder" ||
+    inspection.harnessId === "qoder-cn" ||
+    inspection.harnessId === "zcode"
+  ) {
     const route = decodeHarnessPluginRoute(inspection.transportModelId);
     if (!route || route.harnessId !== inspection.harnessId) {
-      throw new Error("Qoder Thread reported an incompatible transport Model");
+      throw new Error("Harness Thread reported an incompatible transport Model");
     }
     const model = inspection.effectiveModel ?? route.model;
     const thinkingOptionId =
@@ -753,10 +762,12 @@ export function installRendererBindingProbe(
       antigravity: undefined,
       "kiro-cli": undefined,
       codebuddy: undefined,
+      workbuddy: undefined,
       "cursor-cli": undefined,
       hermes: undefined,
       qoder: undefined,
       "qoder-cn": undefined,
+      zcode: undefined,
     },
     webUi: Object.fromEntries(
       externalAgents.map((agent) => [agent, false]),

@@ -31,6 +31,7 @@ class FakeOmpProcess extends EventEmitter {
     readonly toolFrameMode:
       "none" | "async-job" | "frame-gaps" | "unknown-update" | "malformed-update" = "none",
     readonly onPrompt?: (process: FakeOmpProcess) => void,
+    readonly interactionOverrides: Record<string, unknown> = {},
   ) {
     super();
     this.stdin.on("data", (chunk: Buffer) => {
@@ -218,6 +219,7 @@ class FakeOmpProcess extends EventEmitter {
             method: "select",
             title: "Approve write?",
             options: ["Approve", "Deny"],
+            ...this.interactionOverrides,
           });
           return;
         }
@@ -306,7 +308,7 @@ describe("OMP RPC session", () => {
           isExecutable: () => true,
         },
       ),
-    ).toMatchObject({ arguments: ["--mode", "rpc", "--resume", "/tmp/omp.jsonl"] });
+    ).toMatchObject({ arguments: ["--mode", "rpc-ui", "--resume", "/tmp/omp.jsonl"] });
   });
 
   it("maps OMP Permission Modes to startup approval flags", () => {
@@ -320,7 +322,7 @@ describe("OMP RPC session", () => {
         { cwd: "/synthetic", environment: {}, permissionMode: "write" },
         dependencies,
       ),
-    ).toMatchObject({ arguments: ["--mode", "rpc", "--approval-mode", "write"] });
+    ).toMatchObject({ arguments: ["--mode", "rpc-ui", "--approval-mode", "write"] });
   });
 
   it("uses OMP's yolo approval mode for unattended full access", () => {
@@ -333,7 +335,7 @@ describe("OMP RPC session", () => {
           isExecutable: () => true,
         },
       ),
-    ).toMatchObject({ arguments: ["--mode", "rpc", "--approval-mode", "yolo"] });
+    ).toMatchObject({ arguments: ["--mode", "rpc-ui", "--approval-mode", "yolo"] });
   });
 
   it("uses OMP's --fork flag for forked sessions", () => {
@@ -346,7 +348,7 @@ describe("OMP RPC session", () => {
           isExecutable: () => true,
         },
       ),
-    ).toMatchObject({ arguments: ["--mode", "rpc", "--fork", "/tmp/omp.jsonl"] });
+    ).toMatchObject({ arguments: ["--mode", "rpc-ui", "--fork", "/tmp/omp.jsonl"] });
   });
 
   it("starts through ready/negotiation and settles a streamed text turn on agent_end", async () => {
@@ -753,6 +755,97 @@ describe("OMP RPC session", () => {
     await turn;
     await session.close();
   });
+
+  it("retains aligned native question descriptions", async () => {
+    const process = new FakeOmpProcess("complete", undefined, "approval", "none", undefined, {
+      title: "Choose a storage format",
+      options: ["JSON", "SQLite"],
+      optionDetails: [{ description: "Portable file" }, {}],
+    });
+    const session = new OmpRpcSession(
+      { cwd: "/synthetic", commandTimeoutMs: 2_000 },
+      { spawn: () => process as never },
+    );
+    await session.start();
+    const events: OmpTurnEvent[] = [];
+    const turn = session.runTurn("choose", (event) => events.push(event));
+    await vi.waitFor(() =>
+      expect(events.some((event) => event.type === "interaction.requested")).toBe(true),
+    );
+    expect(events).toContainEqual({
+      type: "interaction.requested",
+      request: {
+        requestId: "approval-1",
+        method: "select",
+        title: "Choose a storage format",
+        options: ["JSON", "SQLite"],
+        optionDetails: [{ description: "Portable file" }, {}],
+      },
+    });
+    await session.respondToInteraction({ requestId: "approval-1", value: "JSON" });
+    await turn;
+    await session.close();
+  });
+
+  it.each([
+    { optionDetails: [] },
+    { optionDetails: [{ description: 42 }, {}] },
+    { optionDetails: [null, {}] },
+  ])("rejects malformed or misaligned option descriptions: %j", async ({ optionDetails }) => {
+    const process = new FakeOmpProcess("complete", undefined, "approval", "none", undefined, {
+      optionDetails,
+    });
+    const session = new OmpRpcSession(
+      { cwd: "/synthetic", commandTimeoutMs: 2_000 },
+      { spawn: () => process as never },
+    );
+    await session.start();
+    await expect(session.runTurn("choose", () => {})).rejects.toThrow("option details are invalid");
+    await session.close();
+  });
+
+  it.each([true, false])(
+    "distinguishes question expiry from cancellation: expired=%s",
+    async (expired) => {
+      const process = new FakeOmpProcess("complete", undefined, "approval", "none", undefined, {
+        method: "input",
+        title: "Name?",
+        ...(expired ? { timeout: 10 } : {}),
+      });
+      const session = new OmpRpcSession(
+        { cwd: "/synthetic", commandTimeoutMs: 2_000 },
+        { spawn: () => process as never },
+      );
+      await session.start();
+      const events: OmpTurnEvent[] = [];
+      const turn = session.runTurn("ask", (event) => events.push(event));
+      await vi.waitFor(() =>
+        expect(events.some((event) => event.type === "interaction.requested")).toBe(true),
+      );
+      if (!expired)
+        await session.respondToInteraction({ requestId: "approval-1", cancelled: true });
+      await turn;
+      expect(
+        process.commands.filter((command) => command.type === "extension_ui_response"),
+      ).toEqual([
+        {
+          type: "extension_ui_response",
+          id: "approval-1",
+          cancelled: true,
+          ...(expired ? { timedOut: true } : {}),
+        },
+      ]);
+      expect(events).toContainEqual({
+        type: "interaction.closed",
+        requestId: "approval-1",
+        reason: expired ? "expired" : "cancelled",
+      });
+      await expect(
+        session.respondToInteraction({ requestId: "approval-1", value: "late" }),
+      ).rejects.toThrow("not pending");
+      await session.close();
+    },
+  );
 
   it("projects Subagent lifecycle frames from the RPC stream", async () => {
     const process = new FakeOmpProcess();

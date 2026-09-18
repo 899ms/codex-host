@@ -73,8 +73,10 @@ afterEach(async () => {
 describe("Harness plugin discovery and loading", () => {
   it.each([
     ["codebuddy", "CodeBuddy", "CODEXHOST_CODEBUDDY_COMMAND"],
+    ["workbuddy", "WorkBuddy", "CODEXHOST_WORKBUDDY_COMMAND"],
     ["qoder", "Qoder", "CODEXHOST_QODER_COMMAND"],
     ["qoder-cn", "Qoder CN", "CODEXHOST_QODERCN_COMMAND"],
+    ["zcode", "ZCode", "CODEXHOST_ZCODE_COMMAND"],
   ])(
     "loads the relocated %s bundle without workspace dependencies and isolates factories",
     async (id, name, commandVariable) => {
@@ -117,6 +119,7 @@ describe("Harness plugin discovery and loading", () => {
     "antigravity",
     "qoder",
     "qoder-cn",
+    "zcode",
   ])("ships a valid %s manifest and resolvable compiled resources", async (id) => {
     const location = path.resolve("packages/adapters", id);
     const manifest = harnessPluginManifestSchema.parse(
