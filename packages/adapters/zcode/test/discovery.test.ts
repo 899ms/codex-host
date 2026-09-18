@@ -20,12 +20,51 @@ function files(executables: string[], scripts: string[] = []) {
     entries.some((entry) => entry.toLowerCase() === candidate.toLowerCase());
   return {
     isExecutable: (candidate: string) => contains(executables, candidate),
-    isReadableFile: (candidate: string) => contains(scripts, candidate),
+    // Existing discovery fixtures represent complete bundles with native-adjacent config.
+    isReadableFile: (candidate: string) =>
+      contains(
+        [
+          ...scripts,
+          ...scripts.map((script) =>
+            path.win32.join(path.win32.dirname(script), "provider", "zcode-builtin.json"),
+          ),
+        ],
+        candidate,
+      ),
     subdirectories: () => [],
   };
 }
 
 describe("ZCode Windows discovery", () => {
+  it.each(["D:\\自定义 ZCode", "D:\\自定义 ZCode\\"])(
+    "resolves an installation directory %s without an exe path",
+    (directory) => {
+      const script = "D:\\自定义 ZCode\\resources\\glm\\zcode.cjs";
+      const dependencies = {
+        ...files([], [script]),
+        isDirectory: (candidate: string) => candidate === directory,
+      };
+      expect(
+        zcodeInvocation(
+          { ...environment, CODEXHOST_ZCODE_COMMAND: directory },
+          undefined,
+          "win32",
+          dependencies,
+        ),
+      ).toMatchObject({ command: process.execPath, arguments: [script, ...args] });
+      expect(() =>
+        zcodeInvocation(
+          { ...environment, CODEXHOST_ZCODE_COMMAND: directory },
+          undefined,
+          "win32",
+          {
+            ...files([], ["C:\\Program Files\\ZCode\\resources\\glm\\zcode.cjs"]),
+            isDirectory: dependencies.isDirectory,
+          },
+        ),
+      ).toThrow("Install ZCode");
+    },
+  );
   it.each(["C:\\Users\\测试 User\\AppData\\Local\\Programs\\ZCode", "C:\\Program Files\\ZCode"])(
     "finds the bundled script in %s without a separate CLI or PATH entry",
     (root) => {
@@ -35,6 +74,7 @@ describe("ZCode Windows discovery", () => {
         command: process.execPath,
         arguments: [script, ...args],
         windowsVerbatimArguments: false,
+        environment,
       });
     },
   );

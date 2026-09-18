@@ -2,6 +2,62 @@ import { describe, expect, it } from "vitest";
 import { workBuddyInvocation } from "../src/command.js";
 
 describe("WorkBuddy app discovery", () => {
+  it.each(["WorkBuddy.exe", "WorkBuddy AI.exe"])(
+    "finds %s inside a selected installation directory",
+    (name) => {
+      const directory = "D:\\自定义 WorkBuddy";
+      const executable = `${directory}\\${name}`;
+      const cli = `${directory}\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy`;
+      const dependencies = {
+        platform: "win32" as const,
+        isDirectory: (candidate: string) => candidate === directory,
+        isExecutable: (candidate: string) => candidate === executable || candidate === cli,
+      };
+      const invocation = workBuddyInvocation(
+        { CODEXHOST_WORKBUDDY_COMMAND: directory },
+        false,
+        dependencies,
+      );
+      expect(invocation.command).toBe(executable);
+      expect(invocation.arguments).toEqual([cli, "--acp"]);
+      expect(invocation.environment.ELECTRON_RUN_AS_NODE).toBe("1");
+      expect(() =>
+        workBuddyInvocation({ CODEXHOST_WORKBUDDY_COMMAND: directory }, false, {
+          ...dependencies,
+          isExecutable: (candidate) => candidate !== cli,
+        }),
+      ).toThrow("unavailable");
+    },
+  );
+  it.each([
+    [
+      "win32",
+      "D:\\Custom Apps\\WorkBuddy.exe",
+      "D:\\Custom Apps\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy",
+    ],
+    [
+      "darwin",
+      "/custom/WorkBuddy AI.app/Contents/MacOS/Electron",
+      "/custom/WorkBuddy AI.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy",
+    ],
+  ] as const)(
+    "pairs an explicit %s Desktop path with only its own CLI",
+    (platform, executable, cli) => {
+      const invocation = workBuddyInvocation({ CODEXHOST_WORKBUDDY_COMMAND: executable }, false, {
+        platform,
+        isExecutable: (file) => file === executable || file === cli,
+      });
+      expect(invocation.command).toBe(executable);
+      expect(invocation.arguments).toEqual([cli, "--acp"]);
+      expect(invocation.environment.ELECTRON_RUN_AS_NODE).toBe("1");
+      expect(() =>
+        workBuddyInvocation({ CODEXHOST_WORKBUDDY_COMMAND: executable }, false, {
+          platform,
+          isExecutable: (file) => file !== cli,
+        }),
+      ).toThrow("unavailable");
+    },
+  );
   it.each([
     ["C:\\Users\\Test\\AppData\\Local\\Programs\\WorkBuddy", "WorkBuddy.exe"],
     ["C:\\Users\\Test\\AppData\\Local\\Programs\\WorkBuddy AI", "WorkBuddy AI.exe"],

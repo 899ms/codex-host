@@ -1,4 +1,4 @@
-import type { CodexhostError } from "@codexhost/shared-contracts";
+import type { CodexhostError, HarnessLaunchSettings } from "@codexhost/shared-contracts";
 
 import {
   getSharedAgentGroupPreferenceStore,
@@ -10,6 +10,7 @@ import { createRendererAgentIcon, RENDERER_AGENT_LABELS } from "../renderer-agen
 import type { RendererAdapterStatus } from "../versioned-renderer-adapter.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
 import { createRendererSettingsIcon } from "./icons.js";
+import { createHarnessLaunchControls } from "./harness-launch-controls.js";
 import type { RendererSettingsMessages } from "./localization.js";
 
 export const CODEXHOST_GITHUB_ISSUES_NEW_URL =
@@ -55,6 +56,12 @@ export interface RendererConnectionDiagnostics {
   snapshot(): RendererConnectionSnapshot;
   refresh(): Promise<void>;
   openWebUi?(hostId: string, agent: ExternalRendererAgent): Promise<void>;
+  getLaunchSettings?(hostId: string, agent: ExternalRendererAgent): Promise<HarnessLaunchSettings>;
+  setLaunchSettings?(
+    hostId: string,
+    agent: ExternalRendererAgent,
+    path: string | null,
+  ): Promise<HarnessLaunchSettings>;
   subscribe(listener: () => void): () => void;
 }
 
@@ -404,7 +411,9 @@ function renderConnectionInspector(
   item: ConnectionListItem,
   hostId: string,
   messages: RendererSettingsMessages,
-): void {
+  diagnostics: RendererConnectionDiagnostics | null,
+  existingLaunchControls: HTMLElement | null,
+): HTMLElement | null {
   inspector.replaceChildren(createInspectorHeader(document, item, messages));
   const body = document.createElement("div");
   body.className = "settings-connection-inspector__body";
@@ -524,7 +533,26 @@ function renderConnectionInspector(
     }
   }
 
+  let launchControls: HTMLElement | null = null;
+  const agent = item.agentSnapshot?.agent;
+  const getLaunchSettings = diagnostics?.getLaunchSettings?.bind(diagnostics);
+  const setLaunchSettings = diagnostics?.setLaunchSettings?.bind(diagnostics);
+  if (
+    hostId === "local" &&
+    (agent === "zcode" || agent === "workbuddy") &&
+    getLaunchSettings &&
+    setLaunchSettings
+  ) {
+    launchControls =
+      existingLaunchControls ??
+      createHarnessLaunchControls(document, messages, agent, {
+        get: () => getLaunchSettings(hostId, agent),
+        set: (path) => setLaunchSettings(hostId, agent, path),
+      });
+    body.append(launchControls);
+  }
   inspector.append(body);
+  return launchControls;
 }
 
 function connectionItems(
@@ -638,6 +666,9 @@ export function createConnectionsSettingsPage(
       let pending = false;
       let selectedHostId: string | null = null;
       let selectedItemKey: string | null = null;
+      // Background availability updates must not discard a path draft or an in-flight save.
+      let launchControls: { hostId: string; itemKey: string; element: HTMLElement | null } | null =
+        null;
       let latestSnapshot: RendererConnectionSnapshot | null = null;
       let disposeHostScroller = (): void => undefined;
 
@@ -802,7 +833,20 @@ export function createConnectionsSettingsPage(
             row.dataset.connectionSelected = String(selected);
             row.tabIndex = selected ? 0 : -1;
           }
-          renderConnectionInspector(document, inspector, item, selectedHost.hostId, messages);
+          const existing =
+            launchControls?.hostId === selectedHost.hostId && launchControls.itemKey === item.key
+              ? launchControls.element
+              : null;
+          const element = renderConnectionInspector(
+            document,
+            inspector,
+            item,
+            selectedHost.hostId,
+            messages,
+            getDiagnostics(),
+            existing,
+          );
+          launchControls = { hostId: selectedHost.hostId, itemKey: item.key, element };
         };
 
         const pinnedItem = items.find((item) => item.key === "renderer-adapter");

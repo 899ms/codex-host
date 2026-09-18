@@ -40,7 +40,7 @@ export class ZcodeTransport {
     const invocation = zcodeInvocation(environment, this.options.command);
     const child = spawn(invocation.command, invocation.arguments, {
       cwd: this.options.cwd,
-      env: environment,
+      env: invocation.environment,
       stdio: "pipe",
       windowsHide: true,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,

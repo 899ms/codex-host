@@ -2261,6 +2261,16 @@ export function installRendererBindingProbe(
         refreshHarnessAvailabilityForHost(hostId, true, false, true),
       );
     },
+    async getLaunchSettings(hostId, agent) {
+      const client = hostId === "local" ? modelClientForHost(hostId) : null;
+      if (!client?.getHarnessLaunchSettings) throw new Error("Launch settings are unavailable");
+      return client.getHarnessLaunchSettings({ harnessId: externalHarnessIds[agent] });
+    },
+    async setLaunchSettings(hostId, agent, path) {
+      const client = hostId === "local" ? modelClientForHost(hostId) : null;
+      if (!client?.setHarnessLaunchSettings) throw new Error("Launch settings are unavailable");
+      return client.setHarnessLaunchSettings({ harnessId: externalHarnessIds[agent], path });
+    },
     async openWebUi(hostId: string, agent: ExternalRendererAgent): Promise<void> {
       const state = hostHarnessAvailabilityState(hostId);
       const client = hostId === "local" ? modelClientForHost(hostId) : null;

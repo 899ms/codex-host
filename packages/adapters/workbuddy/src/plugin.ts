@@ -12,5 +12,10 @@ export function createHarnessAdapter(context: HarnessPluginContext) {
       environment: { ...context.environment },
       ...(context.brokerDescriptorPath ? { descriptorPath: context.brokerDescriptorPath } : {}),
     });
-  return new WorkBuddyAdapter({ environment: { ...context.environment } });
+  return new WorkBuddyAdapter({
+    environment: {
+      ...context.environment,
+      ...(context.launchCommand ? { CODEXHOST_WORKBUDDY_COMMAND: context.launchCommand } : {}),
+    },
+  });
 }

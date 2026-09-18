@@ -3,6 +3,7 @@ import {
   commandInvocation,
   environmentValue,
   isExecutableFile,
+  isDirectory,
   resolveHarnessExecutable,
   targetPath,
   VERSION_MANAGER_ROOTS,
@@ -10,6 +11,7 @@ import {
   type HarnessDiscoverySpec,
 } from "@codexhost/harness-discovery";
 import { ZcodeError } from "./errors.js";
+import { zcodeProviderEnvironment } from "./provider-environment.js";
 
 function isReadableFile(file: string): boolean {
   try {
@@ -58,7 +60,10 @@ export function zcodeInvocation(
   environment: NodeJS.ProcessEnv,
   command?: string,
   platform: NodeJS.Platform = process.platform,
-  dependencies: HarnessDiscoveryDependencies & { isReadableFile?: (file: string) => boolean } = {},
+  dependencies: HarnessDiscoveryDependencies & {
+    isReadableFile?: (file: string) => boolean;
+    isDirectory?: (file: string) => boolean;
+  } = {},
 ) {
   const input = { environment, platform, ...(command ? { command } : {}) };
   const readable = dependencies.isReadableFile ?? isReadableFile;
@@ -68,6 +73,11 @@ export function zcodeInvocation(
   const cli = {
     ...cliSpec,
     runnableCandidate: (candidate: string) => {
+      if (candidate === configured && (dependencies.isDirectory ?? isDirectory)(candidate)) {
+        return platform === "darwin"
+          ? paths.join(candidate, "Contents", "Resources", "glm", "zcode.cjs")
+          : paths.join(candidate, "resources", "glm", "zcode.cjs");
+      }
       // A Windows Desktop executable on PATH is not the app-server CLI. Use
       // only its own bundled script, executed by the Host's Node runtime.
       if (platform === "win32" && paths.extname(candidate).toLowerCase() === ".exe") {
@@ -88,15 +98,25 @@ export function zcodeInvocation(
   if (!resolution)
     throw new ZcodeError(
       "notInstalled",
-      "Install ZCode or set CODEXHOST_ZCODE_COMMAND to its native CLI or zcode.cjs runtime",
+      "Install ZCode or set CODEXHOST_ZCODE_COMMAND to its installation directory or native entrypoint",
     );
   const args = ["app-server", "--stdio", "--surface", "terminal"];
-  if (/\.[cm]?js$/iu.test(resolution.executable))
-    return commandInvocation(
-      process.execPath,
-      [resolution.executable, ...args],
+  if (/\.[cm]?js$/iu.test(resolution.executable)) {
+    const childEnvironment = zcodeProviderEnvironment(
+      resolution.executable,
       environment,
       platform,
+      readable,
     );
-  return commandInvocation(resolution.executable, args, environment, platform);
+    return {
+      ...commandInvocation(
+        process.execPath,
+        [resolution.executable, ...args],
+        childEnvironment,
+        platform,
+      ),
+      environment: childEnvironment,
+    };
+  }
+  return { ...commandInvocation(resolution.executable, args, environment, platform), environment };
 }

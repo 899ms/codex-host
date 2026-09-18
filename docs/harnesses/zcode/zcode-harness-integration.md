@@ -2,15 +2,19 @@
 
 ## 原生路径与交付
 
-插件 ID 为 `zcode`，入口是 `packages/adapters/zcode/src/plugin.ts`。使用 ZCode 自带的 `app-server --stdio --surface terminal` 双向 JSON-RPC，而不是模拟终端或套用其他 Harness 的 ACP。已验证 macOS 上 ZCode 内置运行时 `0.16.5`；该接口没有独立的兼容性承诺，升级后应重新运行原生验收。
+插件 ID 为 `zcode`，入口是 `packages/adapters/zcode/src/plugin.ts`。使用 ZCode 自带的 `app-server --stdio --surface terminal` 双向 JSON-RPC，而不是模拟终端或套用其他 Harness 的 ACP。已验证 macOS 上 ZCode 内置运行时 `0.16.5`；该接口没有独立的兼容性承诺，升级后应重新运行原生验收。当前 Windows 安装包的内置运行时虽同样报告 `0.16.5`，但实测不提供 Adapter 所需的 `workspace/readState`，返回 `Method not found`；Provider 路径兜底解决启动退出，不代表该安装包的协议接入已通过，不能仅凭版本字符串判定兼容。
 
 插件已加入预装清单，使用公共 Loader、Harness route codec 和普通可写 Thread。Host Runtime 不直接依赖 ZCode Adapter。Renderer 的 Agent/Model/Thinking/权限选择、连接页、侧栏图标、Thread 恢复及 Desktop Controller/诊断工具名单均已接入。
 
 ## 安装、配置和数据
 
-安装 [ZCode Desktop](https://zcode.z.ai/cn/docs/install)，或提供支持上述原生 app-server 的 ZCode CLI。自动发现先检查 PATH 和常见 CLI 安装目录，再检查 Desktop 的 `resources/glm/zcode.cjs`。macOS 默认路径是 `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`。其他位置可设置 `CODEXHOST_ZCODE_COMMAND` 为可执行文件或 `zcode.cjs` 的完整路径；显式配置无效时不会回退到另一份安装。
+安装 [ZCode Desktop](https://zcode.z.ai/cn/docs/install)，或提供支持上述原生 app-server 的 ZCode CLI。自动发现先检查 PATH 和常见 CLI 安装目录，再检查 Desktop 的 `resources/glm/zcode.cjs`。macOS 默认路径是 `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`。其他位置可设置 `CODEXHOST_ZCODE_COMMAND` 为应用安装目录，也兼容可执行文件或 `zcode.cjs` 的完整路径；显式配置无效时不会回退到另一份安装。
 
 Windows 自动检查 `%LOCALAPPDATA%\Programs\ZCode\resources\glm\zcode.cjs` 和 `%ProgramFiles%\ZCode\resources\glm\zcode.cjs`；PATH 中找到 Desktop `ZCode.exe` 时，优先使用该可执行文件同一安装目录的内置脚本，不拼接另一份安装。内置脚本由 Host 的 Node 运行时启动，无需额外安装独立 CLI；独立 `.cmd` CLI 仍通过公共 Windows 启动包装执行。脚本必须可读且为普通文件，环境变量名按 Windows 大小写不敏感规则读取。自定义安装既不在 PATH 中也不在上述目录时，仍需显式配置；不扫描整个磁盘或猜测未知安装布局。
+
+连接设置页的本地 ZCode 右侧详情卡片填写应用安装目录，例如 `D:\program\Zcode`，无需填写 `.exe` 或脚本。Adapter 自动定位目录内的 `resources/glm/zcode.cjs`，目录不完整时不回退到其他安装。支持保存或清除覆盖配置。设置持久化在 Host 数据目录，优先于 `CODEXHOST_ZCODE_COMMAND`；清除后恢复环境变量或自动发现。重启 codexhost 后应用，不热替换运行中的 Session，保存成功不代表原生协议或认证检查成功。详见[自定义启动路径设置](../../architecture/harness-plugin-runtime.md#自定义启动路径设置)。
+
+启动 Desktop 内置 `resources/glm/zcode.cjs` 时，先保留原生脚本已有的 Provider 配置查找位置；这些位置不可用时，才检查同一安装目录的 `resources/config/provider/zcode-builtin.json`。找到后仅给子进程补充 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`，由 ZCode 原生启动逻辑继续管理活动配置缓存、个人配置及刷新，不复制或修改安装目录文件。用户显式提供原生 Provider 配置路径时不覆盖，独立脚本和可执行文件的启动语义不变；已识别的 Desktop 布局两处都缺失时明确报告安装缺少内置 Provider 配置。
 
 Provider 优先使用原生 CLI 配置。当原生 CLI 的模型目录为空时，插件从 `~/.zcode/v2/config.json` 读取启用的 Desktop Provider，经 `workspace/updateProviderRegistry` 注册到当前子进程内存。`CODEXHOST_ZCODE_CONFIG` 可指定采用相同 `provider` 结构的文件，并覆盖自动配置来源。支持 Anthropic、OpenAI、OpenAI-compatible Provider，传递原生 reasoning levels 及各档位对应的 Provider 参数。API Key 不写入 Host 映射或插件目录，也不输出原生 stderr。
 

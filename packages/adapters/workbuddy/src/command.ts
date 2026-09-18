@@ -5,13 +5,18 @@ import {
   commandInvocation,
   environmentValue,
   isExecutableFile,
+  isDirectory,
   resolveHarnessExecutable,
   targetPath,
   withNodeRuntimeOnPath,
   type HarnessDiscoverySpec,
 } from "@codexhost/harness-discovery";
 import { workBuddyDelegationArguments } from "./delegation.js";
-import { resolveWorkBuddyBundle, WORKBUDDY_MACOS_ELECTRON } from "./discovery.js";
+import {
+  resolveWorkBuddyBundle,
+  resolveWorkBuddyInstallDirectory,
+  WORKBUDDY_MACOS_ELECTRON,
+} from "./discovery.js";
 export { WORKBUDDY_MACOS_ELECTRON, WORKBUDDY_MACOS_CLI } from "./discovery.js";
 
 export const workBuddyDiscoverySpec: HarnessDiscoverySpec = {
@@ -24,6 +29,7 @@ export const workBuddyDiscoverySpec: HarnessDiscoverySpec = {
 interface WorkBuddyInvocationDependencies {
   platform?: NodeJS.Platform;
   isExecutable?: (candidate: string) => boolean;
+  isDirectory?: (candidate: string) => boolean;
   lstat?: (candidate: string) => {
     isDirectory(): boolean;
     isFile(): boolean;
@@ -121,16 +127,33 @@ export function workBuddyInvocation(
     );
   const isExecutable =
     dependencies.isExecutable ?? ((candidate: string) => isExecutableFile(candidate, platform));
-  const bundle = configured
-    ? undefined
-    : resolveWorkBuddyBundle(environment, platform, isExecutable);
-  const executable = configured
-    ? resolveHarnessExecutable(
-        workBuddyDiscoverySpec,
-        { environment, platform, command: configured },
-        { isExecutable },
-      )?.executable
-    : bundle?.executable;
+  const configuredDirectory =
+    configured && (dependencies.isDirectory ?? isDirectory)(configured) ? configured : undefined;
+  const explicitExecutable =
+    configured && !configuredDirectory
+      ? resolveHarnessExecutable(
+          workBuddyDiscoverySpec,
+          { environment, platform, command: configured },
+          { isExecutable },
+        )?.executable
+      : undefined;
+  const explicitDesktop =
+    explicitExecutable &&
+    ((platform === "win32" &&
+      /^(?:WorkBuddy|WorkBuddy AI)\.exe$/iu.test(
+        targetPath(platform).basename(explicitExecutable),
+      )) ||
+      (platform === "darwin" &&
+        /\/(?:WorkBuddy|WorkBuddy AI)\.app\/Contents\/MacOS\/Electron$/u.test(explicitExecutable)));
+  const bundle = configuredDirectory
+    ? resolveWorkBuddyInstallDirectory(configuredDirectory, environment, platform, isExecutable)
+    : !configured || explicitDesktop
+      ? resolveWorkBuddyBundle(environment, platform, isExecutable, explicitExecutable)
+      : undefined;
+  const executable =
+    configured && !explicitDesktop && !configuredDirectory
+      ? explicitExecutable
+      : bundle?.executable;
   if (!executable)
     throw new CodeBuddyError("notInstalled", "WorkBuddy AI app or its bundled CLI is unavailable");
 
