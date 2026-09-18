@@ -826,7 +826,13 @@ export function createConnectionsSettingsPage(
         );
         const agentByKey = new Map(groupableItems.map((item) => [item.key, item]));
         const preferenceOrder = groupPreference
-          .list()
+          .list(
+            new Set(
+              groupableItems
+                .filter((item) => item.availability === "notInstalled")
+                .map((item) => item.agentSnapshot.agent),
+            ),
+          )
           .filter((entry) => agentByKey.has(entry.agent));
         for (const item of groupableItems) {
           if (!preferenceOrder.some((entry) => entry.agent === item.key)) {

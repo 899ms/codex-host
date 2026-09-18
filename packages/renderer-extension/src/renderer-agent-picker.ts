@@ -559,7 +559,8 @@ export function mountRendererAgentPicker(
       const agent = entry.agent as RendererAgent;
       if (!enabledSet.has(agent) || seen.has(agent)) continue;
       seen.add(agent);
-      (entry.section === "more" ? nextMore : nextMain).push(agent);
+      const section = groupPreference.sectionOf(entry.agent, notInstalled.has(agent));
+      (section === "more" ? nextMore : nextMain).push(agent);
     }
 
     // Defensive: an enabled Agent the preference store hasn't recorded yet
