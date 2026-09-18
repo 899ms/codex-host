@@ -110,6 +110,11 @@ export interface HermesInventory {
 }
 
 export class HermesInventoryError extends Error {}
+export class HermesInventoryTimeoutError extends HermesInventoryError {
+  constructor() {
+    super("Hermes model inventory probe timed out");
+  }
+}
 
 export async function venvPythonFromShim(
   hermesExecutable: string,
@@ -169,7 +174,7 @@ function runProbe(
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new HermesInventoryError("Hermes model inventory probe timed out"));
+      reject(new HermesInventoryTimeoutError());
     }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
