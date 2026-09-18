@@ -82,7 +82,7 @@ export class HermesGatewayTransport {
   async prepareSession(): Promise<void> {
     if (this.#child || this.#closed)
       throw new Error("Hermes gateway Session cannot be prepared after start");
-    const prepared = await prepareGatewayDelegation(this.python, this.cwd, this.environment);
+    const prepared = await prepareGatewayDelegation(this.environment);
     if (this.#closed) {
       await prepared.dispose();
       throw new Error("Hermes gateway closed during Session preparation");
@@ -91,17 +91,21 @@ export class HermesGatewayTransport {
   }
   async start(): Promise<void> {
     if (this.#child || this.#closed) throw new Error("Hermes gateway cannot be started twice");
-    const child = spawn(this.python, ["-I", "-u", "-c", GATEWAY_LAUNCH], {
-      cwd: this.cwd,
-      env: {
-        ...process.env,
-        ...(this.#delegation?.environment ?? this.environment),
-        HERMES_TUI_TOOL_PROGRESS: "all",
+    const child = spawn(
+      this.python,
+      ["-I", "-u", "-c", (this.#delegation?.bootstrap ?? "") + GATEWAY_LAUNCH],
+      {
+        cwd: this.cwd,
+        env: {
+          ...process.env,
+          ...(this.#delegation?.environment ?? this.environment),
+          HERMES_TUI_TOOL_PROGRESS: "all",
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        detached: process.platform !== "win32",
       },
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      detached: process.platform !== "win32",
-    });
+    );
     this.#child = child;
     this.#processClosed = new Promise((resolve) => child.once("close", () => resolve()));
     child.stderr.on("data", (data: Buffer) => {

@@ -1,8 +1,9 @@
 import { createServer, type ServerResponse } from "node:http";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { SpawnOptions } from "node:child_process";
+import { execFile, type SpawnOptions } from "node:child_process";
+import { promisify } from "node:util";
 import type * as ChildProcess from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { hostTurnIdSchema } from "@codexhost/shared-contracts";
@@ -286,9 +287,20 @@ function failResponse(response: ServerResponse): void {
 }
 
 describe.skipIf(!python)("Hermes native outgoing delegation discovery", () => {
-  it("preloads native guidance and preserves the parent environment in a real terminal call", async () => {
+  it("registers process-local guidance while preserving user skills and terminal environment", async () => {
     if (!python) throw new Error("Missing native Hermes interpreter");
     const home = await mkdtemp(path.join(os.tmpdir(), "hermes-delegation-native-test-"));
+    const skills = path.join(home, "skills");
+    await mkdir(path.join(skills, "existing-guide"), { recursive: true });
+    await writeFile(
+      path.join(skills, "existing-guide", "SKILL.md"),
+      "---\nname: existing-guide\ndescription: Existing user guidance.\n---\nUser skill preload remains active.\n",
+    );
+    const temporarySkills = async () =>
+      (await readdir(os.tmpdir()))
+        .filter((name) => name.startsWith("codexhost-hermes-delegation-"))
+        .sort();
+    const before = await temporarySkills();
     const cli = path.join(home, "host-cli");
     const runtimeToken = "fake-runtime-token-do-not-log";
     await writeFile(
@@ -314,7 +326,7 @@ describe.skipIf(!python)("Hermes native outgoing delegation discovery", () => {
           const messages = Array.isArray(input.messages) ? input.messages.map(object) : [];
           const tools = Array.isArray(input.tools) ? input.tools.map(object) : [];
           const hasTerminal = tools.some((t) => object(t.function).name === "terminal");
-          const toolCall = hasTerminal && !messages.some((m) => m.role === "tool");
+          const toolCall = hasTerminal && messages.at(-1)?.role === "user";
           const call = {
             id: "native-delegation-call",
             type: "function",
@@ -371,6 +383,7 @@ describe.skipIf(!python)("Hermes native outgoing delegation discovery", () => {
       OPENAI_API_KEY: "local-test",
       OPENAI_BASE_URL: url,
       CODEXHOST_HERMES_GATEWAY_PYTHON: python,
+      HERMES_TUI_SKILLS: "existing-guide",
       CODEXHOST_CLI_PATH: cli,
       CODEXHOST_THREAD_ID: "native-parent",
       CODEXHOST_RUNTIME_ENDPOINT: "local-runtime",
@@ -385,52 +398,89 @@ describe.skipIf(!python)("Hermes native outgoing delegation discovery", () => {
         kind: "create",
         cwd: home,
         executionPolicy: "unattended-full-access",
+        environment: { CODEXHOST_THREAD_ID: "" },
       });
       if (!opened.ok) throw new Error(opened.error.message);
-      const session = opened.value;
-      expect(
-        (await readdir(path.join(home, "skills"))).some((name) =>
-          name.startsWith("codexhost-runtime-"),
-        ),
-      ).toBe(true);
-      const complete = (async () => {
-        for await (const output of session.outputs) {
-          if (output.kind === "interaction")
-            throw new Error("Unattended native terminal unexpectedly requested interaction");
-          if (output.kind === "event" && output.event.type === "turn.completed")
-            return output.event;
+      let session = opened.value;
+      for (const phase of ["without-delegation", "resume", "resume-again"]) {
+        expect(
+          (await readdir(skills, { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => entry.name),
+        ).toEqual(["existing-guide"]);
+        if (phase === "resume") {
+          // A second real Hermes process sharing the same home cannot resolve
+          // this gateway's in-memory Skill registration.
+          await promisify(execFile)(
+            python,
+            [
+              "-I",
+              "-c",
+              `import json
+from tools.skills_tool import skill_view
+assert not json.loads(skill_view("codexhost-runtime:delegation"))["success"]
+`,
+            ],
+            { cwd: home, env: environment, timeout: 20_000 },
+          );
         }
-        throw new Error("Native delegation probe closed before completion");
-      })();
-      const accepted = await session.execute({
-        type: "turn.start",
-        turnId: hostTurnIdSchema.parse("native-env-turn"),
-        input: [
-          {
-            type: "text",
-            text: "Run only the configured Host CLI --help through your terminal. Do not delegate or print environment values.",
-          },
-        ],
-      });
-      expect(accepted.ok).toBe(true);
-      expect(await complete).toMatchObject({ outcome: { status: "succeeded" } });
-      const systems = modelBodies.flatMap((body) =>
-        Array.isArray(body.messages)
-          ? body.messages.map(object).filter((m) => m.role === "system")
-          : [],
-      );
-      expect(JSON.stringify(systems)).toContain("CODEXHOST_CLI_PATH");
-      expect(JSON.stringify(systems)).toContain("delegate start");
-      expect(JSON.stringify(modelBodies)).not.toContain(runtimeToken);
-      const snapshot = await session.readSnapshot();
-      if (!snapshot.ok) throw new Error(snapshot.error.message);
-      expect(JSON.stringify(snapshot.value)).toContain("native-delegation-env-ok");
-      await session.close();
+        modelBodies.length = 0;
+        const complete = (async () => {
+          for await (const output of session.outputs) {
+            if (output.kind === "interaction")
+              throw new Error("Unattended native terminal unexpectedly requested interaction");
+            if (output.kind === "event" && output.event.type === "turn.completed")
+              return output.event;
+          }
+          throw new Error("Native delegation probe closed before completion");
+        })();
+        const accepted = await session.execute({
+          type: "turn.start",
+          turnId: hostTurnIdSchema.parse(`native-env-${phase}`),
+          input: [
+            {
+              type: "text",
+              text: "Run only the configured Host CLI --help through your terminal. Do not delegate or print environment values.",
+            },
+          ],
+        });
+        expect(accepted.ok).toBe(true);
+        expect(await complete).toMatchObject({ outcome: { status: "succeeded" } });
+        const systems = modelBodies.flatMap((body) =>
+          Array.isArray(body.messages)
+            ? body.messages.map(object).filter((m) => m.role === "system")
+            : [],
+        );
+        if (phase !== "without-delegation")
+          expect(JSON.stringify(systems)).toContain("CODEXHOST_CLI_PATH");
+        if (phase === "without-delegation")
+          expect(JSON.stringify(systems)).not.toContain("delegate start");
+        else expect(JSON.stringify(systems)).toContain("delegate start");
+        expect(JSON.stringify(systems)).toContain("User skill preload remains active.");
+        expect(JSON.stringify(modelBodies)).not.toContain(runtimeToken);
+        const snapshot = await session.readSnapshot();
+        if (!snapshot.ok) throw new Error(snapshot.error.message);
+        if (phase !== "without-delegation")
+          expect(JSON.stringify(snapshot.value.turns.at(-1))).toContain("native-delegation-env-ok");
+        await session.close();
+        expect(await temporarySkills()).toEqual(before);
+        if (phase !== "resume-again") {
+          const nativeRef = snapshot.value.state?.nativeRef;
+          if (!nativeRef) throw new Error("Missing native Hermes Session reference");
+          const resumed = await adapter.open({
+            kind: "resume",
+            cwd: home,
+            nativeRef,
+          });
+          if (!resumed.ok) throw new Error(resumed.error.message);
+          session = resumed.value;
+        }
+      }
       expect(
-        (await readdir(path.join(home, "skills"))).filter((name) =>
-          name.startsWith("codexhost-runtime-"),
-        ),
-      ).toEqual([]);
+        (await readdir(skills, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name),
+      ).toEqual(["existing-guide"]);
     } finally {
       await adapter.close();
       server.closeAllConnections();
@@ -441,7 +491,7 @@ describe.skipIf(!python)("Hermes native outgoing delegation discovery", () => {
 });
 
 describe.skipIf(!python)("Hermes native discovery resource lifetime", () => {
-  it("removes its native preload skill when gateway spawning fails", async () => {
+  it("cleans its private Skill without touching the user's home when spawning fails", async () => {
     if (!python) throw new Error("Missing native Hermes interpreter");
     const home = await mkdtemp(path.join(os.tmpdir(), "hermes-startup-native-test-"));
     const environment = {
@@ -452,24 +502,22 @@ describe.skipIf(!python)("Hermes native discovery resource lifetime", () => {
       CODEXHOST_RUNTIME_ENDPOINT: "test-endpoint",
       CODEXHOST_RUNTIME_TOKEN: "test-token",
     };
+    const temporarySkills = async () =>
+      (await readdir(os.tmpdir()))
+        .filter((name) => name.startsWith("codexhost-hermes-delegation-"))
+        .sort();
+    const before = await temporarySkills();
     const transport = new HermesGatewayTransport(python, home, environment, 1000);
     try {
       await transport.prepareSession();
-      expect(
-        (await readdir(path.join(home, "skills"))).some((name) =>
-          name.startsWith("codexhost-runtime-"),
-        ),
-      ).toBe(true);
-      // A real child_process spawn failure after successful native profile/skill
-      // setup must settle close and remove only this Session's temporary skill.
+      expect((await temporarySkills()).filter((name) => !before.includes(name))).toHaveLength(1);
+      expect(await readdir(home)).toEqual([]);
+      // The user's home stays untouched, including on spawn failure.
       Object.defineProperty(transport, "python", { value: path.join(home, "missing-python") });
       await expect(transport.start()).rejects.toThrow();
       await transport.close();
-      expect(
-        (await readdir(path.join(home, "skills"))).filter((name) =>
-          name.startsWith("codexhost-runtime-"),
-        ),
-      ).toEqual([]);
+      expect(await temporarySkills()).toEqual(before);
+      expect(await readdir(home)).toEqual([]);
     } finally {
       await transport.close();
       await rm(home, { recursive: true, force: true });

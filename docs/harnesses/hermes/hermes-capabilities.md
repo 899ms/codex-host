@@ -40,7 +40,7 @@ Gateway 原生 `session.branch(count)` 只复制显示文本并丢弃工具关�
 
 ## 跨 Harness 协作发现
 
-Gateway 保留 `CODEXHOST_CLI_PATH`、`CODEXHOST_RUNTIME_ENDPOINT`、`CODEXHOST_RUNTIME_TOKEN`、`CODEXHOST_THREAD_ID`。仅 writable Session 且四者齐全时，在原生解析出的 active home/skills 下原子创建唯一 `codexhost-runtime-*` 临时技能目录，通过正式 `HERMES_TUI_SKILLS` 预加载到 system prompt，保留已有 preload 列表。内容只指导按 CLI --help 发现已授权的 delegate/thread 命令，不包含任何变量值或凭据。正常关闭和启动失败删除本进程独有目录；强制终止整个 Host 进程可能留下该无凭据的临时说明目录。inspection、gateway probe、history reader 不创建技能。
+Gateway 保留 `CODEXHOST_CLI_PATH`、`CODEXHOST_RUNTIME_ENDPOINT`、`CODEXHOST_RUNTIME_TOKEN`、`CODEXHOST_THREAD_ID`。仅 writable Session 且四者齐全时，在 OS 临时目录创建私有 Skill 文件，通过 Hermes 原生插件 API `PluginContext.register_skill` 仅在当前 gateway 进程注册 `codexhost-runtime:delegation`，追加到已有 `HERMES_TUI_SKILLS` 列表。说明沿原生 ephemeral system prompt 路径加载，新会话和已有历史的恢复会话均可用。内容只指导按 CLI --help 发现已授权的 delegate/thread 命令，不包含变量值或凭据。不安装插件、不修改用户配置、不向 active home/skills 写入临时技能；其他 Hermes 进程没有此项注册，不会发现它。正常关闭和启动失败清理私有临时目录；强杀整个 Host 至多残留 OS 临时文件，不会污染 Hermes 技能列表。inspection、gateway probe、history reader 不创建或注册技能。
 
 原生 Hermes delegate_task 仍可用。旧 ACP 会话保持原有环境/热进程兼容行为，尚无该 gateway 的跨 Harness CLI 自动发现，不将 ACP 原生子代理与跨 Harness 委派混称。
 
@@ -54,6 +54,6 @@ Gateway 保留 `CODEXHOST_CLI_PATH`、`CODEXHOST_RUNTIME_ENDPOINT`、`CODEXHOST_
 - [持久化数据库](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/hermes_state.py)、[导入导出](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/hermes_state_portability.py)
 - [ACP 命令](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/commands.py)、[ACP 协议](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/server.py)
 
-协议 fixture 测试覆盖 Question/审批/配置确认、diff 片段、命令与压缩失败/取消、迟到事件、重复回答、进程故障、旧 ACP 路由及 owner。可选原生测试用 `CODEXHOST_HERMES_NATIVE_TEST_PYTHON` 指向已安装的上述 Hermes Python；在隔离 HERMES_HOME 下真实执行 SessionDB 派生/回滚/压缩 lineage，运行本地 OpenAI 模拟服务驱动真实 gateway/clarify/terminal 与恢复，并验证临时技能及 Host CLI 环境。测试不调用付费模型；尚未进行真实外部模型压缩或 Desktop 端到端验收。
+协议 fixture 测试覆盖 Question/审批/配置确认、diff 片段、命令与压缩失败/取消、迟到事件、重复回答、进程故障、旧 ACP 路由及 owner。可选原生测试用 `CODEXHOST_HERMES_NATIVE_TEST_PYTHON` 指向已安装的上述 Hermes Python；在隔离 HERMES_HOME 下真实执行 SessionDB 派生/回滚/压缩 lineage，运行本地 OpenAI 模拟服务驱动真实 gateway/clarify/terminal 与恢复，并验证进程内技能预加载、用户已有技能保留、原先没有委派说明的会话恢复，以及 Host CLI 环境。测试不调用付费模型；尚未进行真实外部模型压缩或 Desktop 端到端验收。
 
 版本兼容回归在真实 Hermes 子进程中仅替换发布版本和 contract 元数据，验证创建、工具交互、历史读取、Fork 与恢复；不修改安装文件。另有 ACP stdio fixture 验证不同 protocolVersion 数值仍可执行命令，以及旧、新和缺少 contract 的 gateway 引用可恢复。实际接口缺失、响应格式错误、会话身份不一致或历史校验失败仍会报错；这些检查不依赖版本号。元数据替换测试不代表已经验证其他发布版本的全部接口行为。
