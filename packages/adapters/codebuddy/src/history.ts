@@ -1,6 +1,7 @@
 import { access, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   HostItemSnapshot,
   HostThreadSnapshot,
@@ -12,7 +13,7 @@ import {
   nativeTurnRefSchema,
   type NativeSessionRef,
 } from "@codexhost/shared-contracts";
-import { CODEBUDDY_ID, CodeBuddyError, record, text } from "./common.js";
+import { CODEBUDDY_ID, CodeBuddyError, nativeError, record, text } from "./common.js";
 import { modelRef } from "./configuration.js";
 import { contentText, toolItem, toolOutcome, toolOutput } from "./projection.js";
 import { codeBuddyChildId, codeBuddyDelegation } from "./subagent-tool.js";
@@ -52,8 +53,9 @@ export async function codeBuddyNativeHistory(
   cwd: string,
   ref: NativeSessionRef,
   environment: NodeJS.ProcessEnv,
+  verifiedCopySource?: string,
 ): Promise<CodeBuddyHistorySource> {
-  return codeBuddyHistory(cwd, ref, environment, false);
+  return codeBuddyHistory(cwd, ref, environment, false, verifiedCopySource);
 }
 
 /** Live child observation may see one final record before CodeBuddy appends its newline. */
@@ -70,6 +72,7 @@ async function codeBuddyHistory(
   ref: NativeSessionRef,
   environment: NodeJS.ProcessEnv,
   tolerateIncompleteTail: boolean,
+  verifiedCopySource?: string,
 ) {
   validateNativeRef(ref);
   const configRoot =
@@ -120,8 +123,21 @@ async function codeBuddyHistory(
     ),
     parsed = parseJsonl(source.contents, tolerateIncompleteTail);
   const checkedDirectories = new Set<string>();
+  // Only the private derivation transaction may inspect an intermediate native
+  // --fork-session copy. Each inherited row must exactly match the verified source.
+  const sourceRows = new Map<string, Record<string, unknown>[]>();
+  for (const row of verifiedCopySource ? parseRows(verifiedCopySource) : []) {
+    const id = text(row.id);
+    const candidates = sourceRows.get(id) ?? [];
+    candidates.push(row);
+    sourceRows.set(id, candidates);
+  }
   for (const row of parsed.rows) {
-    if (row.sessionId && row.sessionId !== ref.nativeSessionId)
+    if (
+      row.sessionId &&
+      row.sessionId !== ref.nativeSessionId &&
+      !sourceRows.get(text(row.id))?.some((source) => isDeepStrictEqual(source, row))
+    )
       throw new CodeBuddyError("protocolError", "Native history has a different Session identity");
     if (typeof row.cwd === "string" && !checkedDirectories.has(row.cwd)) {
       if (!(await sameCwd(row.cwd, cwd)))
@@ -181,6 +197,12 @@ export function nativeHistoryRows(contents: string) {
   const entries = new Map<string, Record<string, unknown>>();
   let leaf = "";
   for (const row of parseRows(contents)) {
+    if (row.type === "resend-fork-notice") {
+      // Native resend_edit atomically moves the durable lane to this parent.
+      // The append-only transcript deliberately retains the discarded branch.
+      leaf = text(row.parentId);
+      continue;
+    }
     if (!["message", "reasoning", "function_call", "function_call_result"].includes(text(row.type)))
       continue;
     if (!text(row.id))
@@ -239,7 +261,54 @@ export function snapshotFromHistory(
       snapshot.item.outputTruncated = Boolean(output.truncated);
     }
   };
-  for (const row of nativeHistoryRows(contents)) {
+  const history = nativeHistoryRows(contents);
+  // Only manual compaction creates a command Turn. Native automatic compaction
+  // also has an internal user prompt, which must not split the current user Turn.
+  const manualCompactions = new Set<string>();
+  let compactUser: string | undefined;
+  for (const row of history) {
+    const data = record(row.providerData);
+    if (row.type === "message" && row.role === "user")
+      compactUser = data.agent === "compact" ? text(row.id) : undefined;
+    if (compactUser && row.role === "assistant" && data.compactType === "user-command")
+      manualCompactions.add(compactUser);
+  }
+  for (const row of history) {
+    const data = record(row.providerData);
+    const body = contentText(row.content);
+    const localCommand =
+      data.skipRun === true
+        ? /^<command-name>([^<]+)<\/command-name>(?:\s*<command-args>([\s\S]*)<\/command-args>)?$/u.exec(
+            body,
+          )
+        : null;
+    const localOutput =
+      data.skipRun === true
+        ? /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/u.exec(body)
+        : null;
+    if (localOutput) {
+      if (current) {
+        current.items.push({
+          item: {
+            type: "agentMessage",
+            itemId: hostItemIdSchema.parse(`agentMessage-${text(row.id)}`),
+            text: localOutput[1] ?? "",
+          },
+          outcome: { status: "succeeded" },
+        });
+        current.outcome = { status: "succeeded" };
+      }
+      continue;
+    }
+    if (data.skipRun === true && body.startsWith('<system-reminder data-role="command-caveat">'))
+      continue;
+    if (
+      row.type === "message" &&
+      row.role === "user" &&
+      data.agent === "compact" &&
+      !manualCompactions.has(text(row.id))
+    )
+      continue;
     if (row.type === "message" && row.role === "user") {
       current = {
         nativeTurnRef: nativeTurnRefSchema.parse({
@@ -248,7 +317,17 @@ export function snapshotFromHistory(
           nativeTurnKey: row.id,
           formatVersion: 1,
         }),
-        input: [{ type: "text", text: contentText(row.content) }],
+        input: [
+          {
+            type: "text",
+            text:
+              data.agent === "compact"
+                ? "/compact"
+                : localCommand
+                  ? `${localCommand[1]}${localCommand[2] ? ` ${localCommand[2]}` : ""}`
+                  : body,
+          },
+        ],
         items: [],
         outcome: { status: "unknown", reason: "Native terminal outcome was not recorded" },
         ...(typeof row.timestamp === "number" ? { startedAtMs: row.timestamp } : {}),
@@ -259,6 +338,30 @@ export function snapshotFromHistory(
       continue;
     }
     if (!current) continue;
+    if (data.agent === "compact" || data.isCompactInternal === true) {
+      if (row.role === "assistant") {
+        const outcome: HostItemSnapshot["outcome"] =
+          row.status === "completed" && data.isCompacted === true
+            ? { status: "succeeded" }
+            : row.status === "cancelled" || row.status === "interrupted"
+              ? { status: "cancelled" }
+              : {
+                  status: "failed",
+                  error: nativeError(
+                    new CodeBuddyError("nativeFailure", "Native compaction did not complete"),
+                  ),
+                };
+        current.items.push({
+          item: {
+            type: "contextCompaction",
+            itemId: hostItemIdSchema.parse(`compact-${text(row.id)}`),
+          },
+          outcome,
+        });
+        if (data.compactType === "user-command") current.outcome = outcome;
+      }
+      continue;
+    }
     const model = text(record(row.providerData).model);
     if (model) current.model = modelRef(model);
     if ((row.type === "message" && row.role === "assistant") || row.type === "reasoning") {
@@ -307,6 +410,14 @@ export function snapshotFromHistory(
       if (snapshot) applyResult(snapshot, row);
       else earlyResults.set(callId, row);
     }
+  }
+  for (const turn of turns) {
+    turn.checkpoint = {
+      harnessId: CODEBUDDY_ID,
+      nativeSessionId: ref.nativeSessionId,
+      checkpointId: turn.nativeTurnRef.nativeTurnKey,
+      formatVersion: 1,
+    };
   }
   return { turns };
 }

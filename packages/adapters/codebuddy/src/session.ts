@@ -1,4 +1,6 @@
 import type {
+  HarnessCommandCapability,
+  HarnessCommandInvocation,
   HarnessOutput,
   HarnessResult,
   HarnessSession,
@@ -25,6 +27,7 @@ import type {
 import { HarnessOutputChannel } from "@codexhost/harness-adapter";
 import {
   nativeSessionRefSchema,
+  type HarnessCommandCatalog,
   type NativeTurnRef,
   type NativeSessionRef,
 } from "@codexhost/shared-contracts";
@@ -48,6 +51,7 @@ import { historyUsage, readNativeHistory, snapshotFromHistory } from "./history.
 import { CodeBuddyInteractions } from "./interactions.js";
 import { CodeBuddyTurnOutput } from "./projection.js";
 import { CodeBuddySubagents } from "./subagents.js";
+import { commandCatalog, commandPrompt, isExcludedInvocation } from "./slash-commands.js";
 
 type SessionInput = Extract<OpenSessionInput, { kind: "create" | "resume" }>;
 export type CodeBuddyHistoryReader = typeof readNativeHistory;
@@ -55,13 +59,23 @@ interface ActiveTurn {
   command: TurnStartCommand;
   output: CodeBuddyTurnOutput;
   before: Set<string>;
+  beforeItems: Set<string>;
   completion: Promise<void>;
+  nativeCommand: boolean;
   cancelled: boolean;
   done: boolean;
 }
 
 export class CodeBuddySession implements HarnessSession {
   readonly harnessId = CODEBUDDY_ID;
+  #commands: HarnessCommandCatalog = { commands: [] };
+  readonly commands: HarnessCommandCapability = {
+    list: async () =>
+      this.#closed || this.#fault
+        ? failure("invalidState", "Session is closed or faulted")
+        : { ok: true, value: structuredClone(this.#commands) },
+    execute: (command) => this.#executeCommand(command),
+  };
   readonly capabilities = CODEBUDDY_CAPABILITIES;
   initialState: HarnessSessionState = {};
   initialUsage: HostUsage | null = null;
@@ -116,10 +130,15 @@ export class CodeBuddySession implements HarnessSession {
           if (generation === this.#generation) this.#onFault(error);
         },
         update: (notification) => {
-          if (generation !== this.#generation || this.#replaying || this.#closed) return;
+          if (generation !== this.#generation || this.#closed) return;
           if (this.#ref && notification.sessionId !== this.#ref.nativeSessionId) return;
           try {
             const update = record(notification.update);
+            if (update.sessionUpdate === "available_commands_update") {
+              this.#commands = commandCatalog(update.availableCommands);
+              return;
+            }
+            if (this.#replaying) return;
             if (this.subagents.update(update)) return;
             if (update.sessionUpdate === "config_option_update" && this.#config)
               this.#apply(configuration(update.configOptions));
@@ -163,6 +182,10 @@ export class CodeBuddySession implements HarnessSession {
   }
 
   async initialize() {
+    const saved =
+      this.input.kind === "resume"
+        ? record(record(this.input.nativeRef.locator).configuration)
+        : {};
     if (this.input.kind === "resume") {
       this.#ref = this.input.nativeRef;
       const history = await this.readHistory(this.input.cwd, this.#ref, this.environment);
@@ -178,16 +201,21 @@ export class CodeBuddySession implements HarnessSession {
       harnessId: CODEBUDDY_ID,
       nativeSessionId: sessionId,
       formatVersion: 1,
+      ...(this.#ref?.locator ? { locator: this.#ref.locator } : {}),
     });
     this.#apply(configuration(opened.configOptions), false);
     if (this.input.kind === "create" && this.input.executionPolicy === "unattended-full-access") {
       // Unlike bypassPermissions, the native fullAccess option also covers HIGH/CRITICAL actions.
       await this.#configure("mode", "fullAccess");
-    } else if (this.input.permissionModeId)
-      await this.#configure("mode", this.input.permissionModeId);
-    if (this.input.model) await this.#configure("model", nativeModel(this.input.model));
-    if (this.input.thinkingOptionId)
-      await this.#configure("thought_level", this.input.thinkingOptionId);
+    } else if (this.input.permissionModeId || text(saved.mode))
+      await this.#configure("mode", this.input.permissionModeId ?? text(saved.mode));
+    if (this.input.model || text(saved.model))
+      await this.#configure(
+        "model",
+        this.input.model ? nativeModel(this.input.model) : text(saved.model),
+      );
+    if (this.input.thinkingOptionId || text(saved.thinking))
+      await this.#configure("thought_level", this.input.thinkingOptionId ?? text(saved.thinking));
     if (this.#fault || this.#closed)
       throw new CodeBuddyError("invalidState", "Native Session failed while opening");
     this.initialState = { ...this.#state };
@@ -199,6 +227,19 @@ export class CodeBuddySession implements HarnessSession {
   }
   #apply(config: ReturnType<typeof configuration>, emit = true) {
     this.#config = config;
+    if (this.#ref && record(this.#ref.locator).codebuddyDerived === 1) {
+      this.#ref = nativeSessionRefSchema.parse({
+        ...this.#ref,
+        locator: {
+          codebuddyDerived: 1,
+          configuration: {
+            model: config.state.effectiveModel ? nativeModel(config.state.effectiveModel) : "",
+            mode: config.state.effectivePermissionModeId ?? "",
+            thinking: config.state.effectiveThinkingOptionId ?? "",
+          },
+        },
+      });
+    }
     this.#state = { ...config.state, ...(this.#ref ? { nativeRef: this.#ref } : {}) };
     if (emit) this.#emit({ type: "session.state.changed", state: this.#state });
   }
@@ -252,6 +293,18 @@ export class CodeBuddySession implements HarnessSession {
     }
   }
 
+  async #executeCommand(
+    command: HarnessCommandInvocation,
+  ): Promise<HarnessResult<TurnStartAccepted>> {
+    const parsed = commandPrompt(command, this.#commands);
+    if (!parsed.ok) return parsed;
+    const result = await this.#execute(
+      { type: "turn.start", turnId: command.turnId, input: [{ type: "text", text: parsed.value }] },
+      true,
+    );
+    return result.ok ? { ok: true, value: { turnId: command.turnId } } : result;
+  }
+
   execute(command: TurnStartCommand): Promise<HarnessResult<TurnStartAccepted>>;
   execute(command: TurnCancelCommand): Promise<HarnessResult<TurnCancelAccepted>>;
   execute(command: InteractionRespondCommand): Promise<HarnessResult<InteractionRespondAccepted>>;
@@ -262,6 +315,30 @@ export class CodeBuddySession implements HarnessSession {
   ): Promise<HarnessResult<PermissionModeSelectCompleted>>;
   async execute(
     command: HostCommand,
+  ): Promise<
+    HarnessResult<
+      TurnStartAccepted | TurnCancelAccepted | InteractionRespondAccepted | ModelSelectCompleted
+    >
+  > {
+    const invocation =
+      command.type === "turn.start"
+        ? command.input
+            .map((item) => item.text)
+            .join("\n")
+            .trim()
+            .split(/\s/u)[0]
+        : undefined;
+    if (isExcludedInvocation(invocation))
+      return failure("unsupported", "CodeBuddy command is not available in this Session");
+    return this.#execute(
+      command,
+      this.#commands.commands.some((entry) => entry.invocation === invocation),
+    );
+  }
+
+  async #execute(
+    command: HostCommand,
+    nativeCommand = false,
   ): Promise<
     HarnessResult<
       TurnStartAccepted | TurnCancelAccepted | InteractionRespondAccepted | ModelSelectCompleted
@@ -306,24 +383,28 @@ export class CodeBuddySession implements HarnessSession {
             .trim()
         )
           return failure("invalidRequest", "A nonempty text prompt is required");
-        const before = new Set(
-          (await this.#snapshot()).turns.map((turn) => turn.nativeTurnRef.nativeTurnKey),
+        const snapshot = await this.#snapshot();
+        const before = new Set(snapshot.turns.map((turn) => turn.nativeTurnRef.nativeTurnKey));
+        const beforeItems = new Set(
+          snapshot.turns.flatMap((turn) => turn.items.map((snapshot) => snapshot.item.itemId)),
         );
         if (this.#closed || this.#fault)
           return failure("invalidState", "Session closed before Turn start");
         const active: ActiveTurn = {
           command,
           before,
+          beforeItems,
           output: new CodeBuddyTurnOutput(command.turnId, this.input.cwd, (event) =>
             this.#emit(event),
           ),
+          nativeCommand,
           cancelled: false,
           done: false,
           completion: Promise.resolve(),
         };
         this.#active = active;
         this.subagents.begin(command.turnId);
-        this.#hasTurn = true;
+        if (!nativeCommand) this.#hasTurn = true;
         this.#emit({ type: "turn.started", turnId: command.turnId });
         active.completion = this.#run(active);
         return { ok: true, value: { turnId: command.turnId } };
@@ -381,19 +462,33 @@ export class CodeBuddySession implements HarnessSession {
       const added = snapshot.turns.filter(
         (turn) => !active.before.has(turn.nativeTurnRef.nativeTurnKey),
       );
-      if (added.length > 1 || (outcome.status === "succeeded" && added.length !== 1))
+      if (
+        added.length > 1 ||
+        (!active.nativeCommand && outcome.status === "succeeded" && added.length !== 1)
+      )
         throw new CodeBuddyError(
           "protocolError",
           "Could not identify exactly one persisted Native Turn",
         );
+      active.output.confirmCompaction(
+        snapshot.turns
+          .flatMap((turn) => turn.items)
+          .filter((snapshot) => !active.beforeItems.has(snapshot.item.itemId)),
+      );
+      if (active.nativeCommand) active.output.replayCommandResult(added[0]?.items ?? []);
       const nativeTurnRef = added[0]?.nativeTurnRef;
+      if (nativeTurnRef) this.#hasTurn = true;
       if (response.userMessageId && nativeTurnRef?.nativeTurnKey !== response.userMessageId)
         throw new CodeBuddyError(
           "protocolError",
           "ACP terminal and native history disagree on Turn identity",
         );
       if (outcome.status === "cancelled") await this.#resumeAfterCancel();
-      this.#finish(active, outcome, nativeTurnRef);
+      this.#finish(
+        active,
+        { ...outcome, ...(added[0]?.checkpoint ? { checkpoint: added[0].checkpoint } : {}) },
+        nativeTurnRef,
+      );
       if (this.#usage)
         this.#emit({ type: "session.usage.changed", usage: { ...this.#usage, ...this.#context } });
     } catch (error) {
