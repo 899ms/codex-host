@@ -290,12 +290,25 @@ import { fileURLToPath } from "node:url";
 
 const version = ${JSON.stringify(version)};
 const userArguments = process.argv.slice(2);
+const repositoryUrl = "https://github.com/BytePioneer-AI/codex-host";
 const startupTraceStartedAt = Date.now();
 function startupTrace(stage) {
   if (process.env.CODEXHOST_STARTUP_TRACE !== "1") return;
   console.error(
     "[codexhost startup +" + (Date.now() - startupTraceStartedAt) + "ms] npm: " + stage,
   );
+}
+function printStarPrompt() {
+  const prompt = "⭐ Like codexhost? Star us on GitHub:";
+  const useColor =
+    process.stdout.isTTY && process.env.NO_COLOR === undefined && process.env.TERM !== "dumb";
+  if (useColor) {
+    console.log(
+      "\\u001B[33m" + prompt + "\\u001B[0m \\u001B[36m" + repositoryUrl + "\\u001B[0m",
+    );
+    return;
+  }
+  console.log(prompt + " " + repositoryUrl);
 }
 if (
   userArguments.length === 1 &&
@@ -675,6 +688,7 @@ if (delegationArguments !== null) {
       ready = true;
       launcherOutput = "";
       startupTrace("received Launcher ready");
+      printStarPrompt();
       if (!keepLauncherForeground) finish(0);
       return;
     }
