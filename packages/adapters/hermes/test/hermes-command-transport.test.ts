@@ -7,9 +7,9 @@ import { HermesAcpTransport, type HermesTransportEvent } from "../src/acp-transp
 // Real stdio framing verifies that command advertisements are retained outside
 // an active prompt, including advertisements delivered before newSession resolves.
 describe("Hermes ACP command negotiation", () => {
-  it.skipIf(process.platform === "win32")(
-    "retains session command advertisements and dispatches native prompts",
-    async () => {
+  it.skipIf(process.platform === "win32").each([1, 999])(
+    "dispatches native commands when the ACP peer reports protocol version %i",
+    async (protocolVersion) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "hermes-command-protocol-"));
       const command = path.join(root, "hermes");
       await writeFile(
@@ -21,7 +21,7 @@ const update = (value) => send({ method: "session/update", params: { sessionId: 
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   let result;
-  if (request.method === "initialize") result = { protocolVersion: 1, agentCapabilities: { loadSession: true } };
+  if (request.method === "initialize") result = { protocolVersion: ${protocolVersion}, agentCapabilities: { loadSession: true } };
   else if (request.method === "session/new") {
     update({ sessionUpdate: "available_commands_update", availableCommands: [{ name: "compress", description: "Compress context" }] });
     result = { sessionId: "native" };

@@ -213,7 +213,7 @@ export class HermesAdapter implements HarnessAdapter {
       if (nativeRef)
         return failure(
           "unavailable",
-          "Hermes gateway Session requires the verified 0.21.3 / contract 7 backend",
+          "Hermes gateway Session requires an available gateway with exclusive turn support",
         );
     }
     let transportOpen: HermesOpenInput;

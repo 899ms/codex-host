@@ -84,7 +84,7 @@ describe("Hermes durable gateway history", () => {
 });
 
 // Optional real installed SDK exercise; no downloaded code or user state is used
-// by default. Run with a verified Hermes 0.21.3 interpreter to test native storage.
+// by default. Point the environment variable at an installed Hermes interpreter.
 const python = process.env.CODEXHOST_HERMES_NATIVE_TEST_PYTHON;
 describe.skipIf(!python)("Hermes installed SessionDB integration", () => {
   it("creates, reads, forks and rolls back complete tool history without changing its source", async () => {

@@ -2,12 +2,38 @@ import { createServer, type ServerResponse } from "node:http";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import type { SpawnOptions } from "node:child_process";
+import type * as ChildProcess from "node:child_process";
+import { describe, expect, it, vi } from "vitest";
 import { hostTurnIdSchema } from "@codexhost/shared-contracts";
 import type { HarnessOutput, HarnessSession } from "@codexhost/harness-adapter";
 import { HermesGatewayTransport } from "../src/gateway-transport.js";
 import { openGatewaySession } from "../src/gateway-open.js";
 import { HermesAdapter } from "../src/hermes-adapter.js";
+
+const nativeMetadata = vi.hoisted(() => ({ release: "" }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return {
+    ...actual,
+    spawn(command: string, args: readonly string[] = [], options: SpawnOptions = {}) {
+      const patched = [...args];
+      const script = patched.indexOf("-c") + 1;
+      if (nativeMetadata.release && script > 0 && patched[script]) {
+        // Change only version metadata in this child. Run the installed native
+        // gateway/storage code unchanged, without editing the Hermes installation.
+        const metadata = `import hermes_cli\nfrom tui_gateway import server\nhermes_cli.__version__ = ${JSON.stringify(nativeMetadata.release)}\nserver.DESKTOP_BACKEND_CONTRACT = 999\n`;
+        // Preserve each entry point's import-time stream ownership: history
+        // redirects native logs; the gateway binds its RPC writer to stdout.
+        const redirect = "sys.stdout = sys.stderr";
+        patched[script] = patched[script].includes(redirect)
+          ? patched[script].replace(redirect, `${redirect}\n${metadata}`)
+          : metadata + patched[script];
+      }
+      return actual.spawn(command, patched, options);
+    },
+  };
+});
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue =>
@@ -19,7 +45,7 @@ const python = process.env.CODEXHOST_HERMES_NATIVE_TEST_PYTHON;
 // Runs the installed, verified gateway and real clarify tool against a local
 // deterministic OpenAI-compatible server. No external model or user state.
 describe.skipIf(!python)("Hermes installed gateway roundtrip", () => {
-  it("streams a real turn, answers native clarify and reloads durable tool output", async () => {
+  it("creates, forks and resumes with different release and contract metadata through the real gateway", async () => {
     if (!python) throw new Error("Missing native Hermes interpreter");
     const home = await mkdtemp(path.join(os.tmpdir(), "hermes-gateway-native-test-"));
     const requests: ObjectValue[] = [];
@@ -114,6 +140,7 @@ describe.skipIf(!python)("Hermes installed gateway roundtrip", () => {
     let session: HarnessSession | undefined;
     let resumedTransport: HermesGatewayTransport | undefined;
     let questionCount = 0;
+    nativeMetadata.release = "99.0.0-compatibility-test";
     try {
       session = await openGatewaySession({ kind: "create", cwd: home }, transport, () => undefined);
       const active = session;
@@ -242,6 +269,7 @@ describe.skipIf(!python)("Hermes installed gateway roundtrip", () => {
       expect(resumed.value.turns[0]?.nativeTurnRef).toEqual(snapshot.value.turns[0]?.nativeTurnRef);
       expect(resumed.value.turns[0]?.items).toEqual(snapshot.value.turns[0]?.items);
     } finally {
+      nativeMetadata.release = "";
       await session?.close();
       await transport.close();
       await resumedTransport?.close();

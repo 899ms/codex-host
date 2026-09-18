@@ -1,4 +1,4 @@
-// Hermes 0.21.3 / desktop contract 7. Use the installed native storage API;
+// Use the installed native storage API regardless of the reported release/contract;
 // never rewrite the source transcript or send a model prompt to derive history.
 export const GATEWAY_HISTORY_SCRIPT = String.raw`
 import sys
@@ -7,13 +7,10 @@ sys.stdout = sys.stderr
 import hashlib, json, sqlite3
 from pathlib import Path
 from urllib.parse import quote
-from hermes_cli import __version__
-from tui_gateway.server import DESKTOP_BACKEND_CONTRACT, _history_to_messages
+from tui_gateway.server import _history_to_messages
 from agent.context_compressor import user_originated_turn_view
 from hermes_state import SessionDB
 from hermes_state_ids import new_session_id
-if __version__ != '0.21.3' or DESKTOP_BACKEND_CONTRACT != 7:
-    raise RuntimeError('Unsupported Hermes history version/contract')
 p = json.load(sys.stdin)
 sid = p['sessionId']
 public_sid = sid

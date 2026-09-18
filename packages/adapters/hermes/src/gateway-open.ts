@@ -60,7 +60,7 @@ export async function openGatewaySession(
 ): Promise<HermesSession> {
   const source =
     input.kind === "create" ? null : input.kind === "resume" ? input.nativeRef : input.sourceRef;
-  if (source && (!isGatewayRef(source) || gatewayRecord(source.locator).contract !== 7))
+  if (source && !isGatewayRef(source))
     throw new HermesGatewayHistoryError(
       "unsupported",
       "This Hermes native reference is not a supported gateway Session",
@@ -166,7 +166,6 @@ export async function openGatewaySession(
         formatVersion: 1,
         locator: {
           transport: "gateway",
-          contract: 7,
           cwd: input.cwd,
           permissionModeId: open.session.modes?.currentModeId,
         },

@@ -16,8 +16,8 @@ export function gatewayString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-// This gateway's wire schema is not ACP. Fail closed on unverified backend contracts.
-const GATEWAY_LAUNCH = `import runpy\nfrom hermes_cli import __version__\nfrom tui_gateway.server import DESKTOP_BACKEND_CONTRACT\nif __version__ != '0.21.3' or DESKTOP_BACKEND_CONTRACT != 7:\n raise RuntimeError('Unsupported Hermes gateway version/contract')\nrunpy.run_module('tui_gateway.entry', run_name='__main__')`;
+// Compatibility is determined by native capabilities and RPC results, not version numbers.
+const GATEWAY_LAUNCH = `import runpy\nrunpy.run_module('tui_gateway.entry', run_name='__main__')`;
 
 export class HermesGatewayTransport {
   onEvent: (event: GatewayRecord) => void = () => undefined;
@@ -71,7 +71,7 @@ export class HermesGatewayTransport {
         await transport.start();
         return candidate;
       } catch {
-        /* Older installations keep their ACP path. */
+        /* Installations without a usable gateway keep their ACP path. */
       } finally {
         await transport.close();
       }

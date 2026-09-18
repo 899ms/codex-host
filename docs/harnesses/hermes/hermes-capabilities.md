@@ -4,7 +4,7 @@
 
 ## 原生传输与兼容性
 
-新会话优先使用 Hermes **0.21.3 / desktop backend contract 7** 的正式 `tui_gateway` JSON-RPC stdio。启动先核对版本和 `gateway.capabilities.per_session_exclusive_submit`，使用 Hermes 安装自身的 Python，以 `-I` 隔离工作区模块覆盖。未满足版本检查的新会话保留 ACP 后备路径。已有不带 gateway locator 的 Native Ref 始终使用 `hermes acp`；保存的 gateway Ref 若缺少兼容后端则明确失败，不能交给 ACP 打开。两种协议不混用同一会话。每个 gateway Session 使用独立进程，Adapter 拒绝为同一会话重复创建 owner。
+新会话优先使用 Hermes 的正式 `tui_gateway` JSON-RPC stdio，不要求特定 Hermes 发布版本。不比较发布版本、desktop backend contract 或 ACP protocolVersion 的数值；启动验证实际的 `gateway.capabilities.per_session_exclusive_submit` 能力，使用 Hermes 安装自身的 Python，以 `-I` 隔离工作区模块覆盖。缺少可用 gateway 的新会话保留 ACP 后备路径。已有不带 gateway locator 的 Native Ref 始终使用 `hermes acp`；保存的 gateway Ref 若缺少兼容后端则明确失败，不能交给 ACP 打开。旧 gateway locator 中的 `contract` 字段被忽略，新引用不再写入该字段。两种协议不混用同一会话。每个 gateway Session 使用独立进程，Adapter 拒绝为同一会话重复创建 owner。
 
 Gateway 区分 runtime ID 与持久化 ID。Host 保存持久化根 ID；恢复时核对原生当前物理 ID，压缩生成 continuation 后仍由 Hermes 官方 lineage 解析读取，保持先前 Turn 身份。工作目录使用真实路径比较；Fork 不支持跨工作目录。Model、Provider、Thinking 使用原生配置及实际确认值；选择不会修改全局配置。YOLO 是原生进程内权限状态，因此确认后的选择保存在 Hermes 自有 Native Ref locator，支持关闭源会话后的派生和恢复。`default` 表示关闭会话 YOLO 并遵循原生全局审批策略；全局策略仍导致 YOLO 时，不能把关闭会话开关误报为恢复审批。ACP 独有的 `accept_edits` 不在 gateway 权限目录中。
 
@@ -40,13 +40,13 @@ Gateway 原生 `session.branch(count)` 只复制显示文本并丢弃工具关�
 
 ## 跨 Harness 协作发现
 
-Gateway 保留 `CODEXHOST_CLI_PATH`、`CODEXHOST_RUNTIME_ENDPOINT`、`CODEXHOST_RUNTIME_TOKEN`、`CODEXHOST_THREAD_ID`。仅 writable Session 且四者齐全时，在原生解析出的 active home/skills 下原子创建唯一 `codexhost-runtime-*` 临时技能目录，通过正式 `HERMES_TUI_SKILLS` 预加载到 system prompt，保留已有 preload 列表。内容只指导按 CLI --help 发现已授权的 delegate/thread 命令，不包含任何变量值或凭据。正常关闭和启动失败删除本进程独有目录；强制终止整个 Host 进程可能留下该无凭据的临时说明目录。inspection、版本 probe、history reader 不创建技能。
+Gateway 保留 `CODEXHOST_CLI_PATH`、`CODEXHOST_RUNTIME_ENDPOINT`、`CODEXHOST_RUNTIME_TOKEN`、`CODEXHOST_THREAD_ID`。仅 writable Session 且四者齐全时，在原生解析出的 active home/skills 下原子创建唯一 `codexhost-runtime-*` 临时技能目录，通过正式 `HERMES_TUI_SKILLS` 预加载到 system prompt，保留已有 preload 列表。内容只指导按 CLI --help 发现已授权的 delegate/thread 命令，不包含任何变量值或凭据。正常关闭和启动失败删除本进程独有目录；强制终止整个 Host 进程可能留下该无凭据的临时说明目录。inspection、gateway probe、history reader 不创建技能。
 
 原生 Hermes delegate_task 仍可用。旧 ACP 会话保持原有环境/热进程兼容行为，尚无该 gateway 的跨 Harness CLI 自动发现，不将 ACP 原生子代理与跨 Harness 委派混称。
 
 ## 原生依据与验证范围
 
-固定依据为 NousResearch/hermes-agent `1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0`（0.21.3）：
+实现与原生验证依据为 NousResearch/hermes-agent `1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0`（0.21.3）；该发布版本是测试记录，不是安装或恢复门槛：
 
 - [正式程序化协议与 owner 约束](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/website/docs/developer-guide/programmatic-integration.md)
 - [Gateway Session 创建、恢复、压缩](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/tui_gateway/methods_session.py)、[实际配置设置](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/tui_gateway/methods_config_set.py)
@@ -55,3 +55,5 @@ Gateway 保留 `CODEXHOST_CLI_PATH`、`CODEXHOST_RUNTIME_ENDPOINT`、`CODEXHOST_
 - [ACP 命令](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/commands.py)、[ACP 协议](https://github.com/NousResearch/hermes-agent/blob/1450c7fcfb5cca740e9b76545bd2ecdec94f4aa0/acp_adapter/server.py)
 
 协议 fixture 测试覆盖 Question/审批/配置确认、diff 片段、命令与压缩失败/取消、迟到事件、重复回答、进程故障、旧 ACP 路由及 owner。可选原生测试用 `CODEXHOST_HERMES_NATIVE_TEST_PYTHON` 指向已安装的上述 Hermes Python；在隔离 HERMES_HOME 下真实执行 SessionDB 派生/回滚/压缩 lineage，运行本地 OpenAI 模拟服务驱动真实 gateway/clarify/terminal 与恢复，并验证临时技能及 Host CLI 环境。测试不调用付费模型；尚未进行真实外部模型压缩或 Desktop 端到端验收。
+
+版本兼容回归在真实 Hermes 子进程中仅替换发布版本和 contract 元数据，验证创建、工具交互、历史读取、Fork 与恢复；不修改安装文件。另有 ACP stdio fixture 验证不同 protocolVersion 数值仍可执行命令，以及旧、新和缺少 contract 的 gateway 引用可恢复。实际接口缺失、响应格式错误、会话身份不一致或历史校验失败仍会报错；这些检查不依赖版本号。元数据替换测试不代表已经验证其他发布版本的全部接口行为。

@@ -621,12 +621,6 @@ export class HermesAcpTransport {
       this.#options.commandTimeoutMs,
       "Hermes ACP initialize",
     );
-    if (initialize.protocolVersion !== PROTOCOL_VERSION) {
-      throw new HermesTransportError(
-        "protocolError",
-        `Hermes ACP negotiated unsupported protocol version ${initialize.protocolVersion}`,
-      );
-    }
     this.#initialize = initialize;
     return initialize;
   }

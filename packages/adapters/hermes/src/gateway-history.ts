@@ -207,7 +207,7 @@ export class HermesGatewayHistory {
       harnessId: "hermes",
       nativeSessionId: data.sessionId,
       formatVersion: 1,
-      locator: { transport: "gateway", contract: 7 },
+      locator: { transport: "gateway" },
     });
     if (typeof data.digest !== "string") throw new Error("Missing Hermes derived-history proof");
     this.#derived.set(ref.nativeSessionId, data.digest);

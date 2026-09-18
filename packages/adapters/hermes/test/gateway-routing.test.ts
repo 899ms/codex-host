@@ -3,9 +3,49 @@ import { HermesAdapter } from "../src/hermes-adapter.js";
 import { HermesAcpTransport } from "../src/acp-transport.js";
 import { HermesGatewayTransport } from "../src/gateway-transport.js";
 import { nativeSessionRefSchema } from "@codexhost/shared-contracts";
+import { openGatewaySession } from "../src/gateway-open.js";
+import { HermesGatewayHistory } from "../src/gateway-history.js";
 
 afterEach(() => vi.restoreAllMocks());
 describe("Hermes persisted transport ownership", () => {
+  it.each([undefined, 7, 999])("resumes saved gateway contract metadata %s", async (contract) => {
+    const cwd = process.cwd();
+    const transport = new HermesGatewayTransport("unused", cwd, {});
+    vi.spyOn(transport, "prepareSession").mockResolvedValue();
+    vi.spyOn(transport, "start").mockResolvedValue();
+    vi.spyOn(transport, "close").mockResolvedValue();
+    const request = vi.spyOn(transport, "request").mockImplementation(async (method) => {
+      if (method === "session.resume")
+        return {
+          session_id: "runtime",
+          info: { stored_session_id: "saved", cwd, model: "test", provider: "custom" },
+        };
+      return { value: "low" };
+    });
+    vi.spyOn(HermesGatewayHistory.prototype, "resolvePhysicalSessionId").mockResolvedValue("saved");
+    const nativeRef = nativeSessionRefSchema.parse({
+      harnessId: "hermes",
+      nativeSessionId: "saved",
+      formatVersion: 1,
+      locator: { transport: "gateway", ...(contract === undefined ? {} : { contract }) },
+    });
+    const session = await openGatewaySession(
+      { kind: "resume", nativeRef, cwd },
+      transport,
+      () => {},
+    );
+    try {
+      expect(request).toHaveBeenCalledWith("session.resume", {
+        session_id: "saved",
+        eager_build: true,
+        omit_messages: true,
+      });
+      expect(session.initialState.nativeRef?.nativeSessionId).toBe("saved");
+      expect(session.initialState.nativeRef?.locator).not.toHaveProperty("contract");
+    } finally {
+      await session.close();
+    }
+  });
   it("does not start a Session when the Adapter closes during gateway discovery", async () => {
     let finishProbe: (python: string | null) => void = () => undefined;
     const pendingProbe = new Promise<string | null>((resolve) => {
@@ -57,7 +97,7 @@ describe("Hermes persisted transport ownership", () => {
     expect(probe).not.toHaveBeenCalled();
     await adapter.close();
   });
-  it("never falls back to ACP for a saved gateway Session when its verified backend is unavailable", async () => {
+  it("never falls back to ACP for a saved gateway Session when its backend is unavailable", async () => {
     vi.spyOn(HermesGatewayTransport, "probe").mockResolvedValue(null);
     const acp = vi.spyOn(HermesAcpTransport.prototype, "open");
     const adapter = new HermesAdapter({ command: process.execPath });
