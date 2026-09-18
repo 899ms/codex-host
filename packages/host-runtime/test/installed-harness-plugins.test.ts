@@ -95,7 +95,7 @@ describe("installed Harness composition", () => {
   it("provides every built-in command catalog before inspection or Session creation", async () => {
     const expected = {
       codebuddy: ["/compact", "/cost"],
-      "cursor-cli": [],
+      "cursor-cli": ["/copy-request-id"],
       pi: ["/compact"],
       "claude-code": ["/compact", "/init", "/recap"],
       "deepseek-harness": ["/compact", "/dsh-goal", "/plan"],
