@@ -80,7 +80,8 @@ describe("platform packagers", () => {
     expect(workflow).toContain("release:npm:meta");
     expect(workflow).toContain("release:npm:publish");
     expect(workflow).toContain('--tag "$NPM_TAG"');
-    expect(workflow).toContain("secrets.NPM_TOKEN");
+    expect(workflow).not.toContain("secrets.NPM_TOKEN");
+    expect(workflow).not.toContain("NODE_AUTH_TOKEN");
     expect(workflow).toContain("id-token: write");
 
     expect(workflow).not.toContain("smoke-npm:");
