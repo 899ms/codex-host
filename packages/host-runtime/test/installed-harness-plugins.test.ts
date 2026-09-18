@@ -120,7 +120,7 @@ describe("installed Harness composition", () => {
         "/kiro-spec",
         "/kiro-vibe",
       ],
-      hermes: [],
+      hermes: ["/help", "/tools", "/context", "/version", "/compress"],
       qoder: ["/compact"],
       "qoder-cn": ["/compact"],
     };

@@ -1,5 +1,5 @@
+import { HERMES_GATEWAY_COMMANDS } from "./hermes-commands.js";
 import type {
-  AvailableCommand,
   PermissionOption,
   RequestPermissionResponse,
   ToolCallContent,
@@ -40,17 +40,7 @@ export const hermesGatewayThinkingOptions: HarnessThinkingOption[] = [
   "max",
   "ultra",
 ].map((id) => ({ id: harnessThinkingOptionIdSchema.parse(id), label: id }));
-const gatewayCommands: AvailableCommand[] = [
-  ...["help", "tools", "context", "version"].map((name) => ({
-    name,
-    description: `Hermes /${name}`,
-  })),
-  {
-    name: "compress",
-    description: "Compress conversation context",
-    input: { hint: "Optional compression focus" },
-  },
-];
+
 type Active = {
   emit(event: HermesTransportEvent): void;
   permission(request: HermesPermissionRequest): Promise<RequestPermissionResponse>;
@@ -134,7 +124,7 @@ function gatewayDiff(text: string): ToolCallContent[] {
 
 export class HermesGatewaySessionTransport implements HermesSessionTransport {
   onFault: (error: HermesTransportError) => void = () => undefined;
-  readonly availableCommands = gatewayCommands;
+  readonly availableCommands = HERMES_GATEWAY_COMMANDS;
   readonly history: HermesGatewayHistory;
   #active: Active | null = null;
   #requests = new Map<string, AbortController>();
