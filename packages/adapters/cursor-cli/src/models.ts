@@ -6,6 +6,7 @@ import type { HarnessModelCatalog, HarnessSessionCapabilities } from "@codexhost
 import type { CursorSessionInfo, CursorNativeModel } from "./transport.js";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { cursorThinking, cursorThinkingState } from "./thinking.js";
+import { cursorForkAvailable } from "./fork-support.js";
 
 export const CURSOR_CAPABILITIES: HarnessSessionCapabilities = {
   configuration: {
@@ -14,7 +15,7 @@ export const CURSOR_CAPABILITIES: HarnessSessionCapabilities = {
     selectPermissionMode: true,
     permissionModeScope: "live",
   },
-  history: { fork: false, forkAcrossCwd: false, rollbackLastTurn: false },
+  history: { fork: cursorForkAvailable(), forkAcrossCwd: false, rollbackLastTurn: false },
   subagents: { observe: true, readTranscript: false },
 };
 export const CURSOR_MODES = harnessPermissionModeCatalogSchema.parse({

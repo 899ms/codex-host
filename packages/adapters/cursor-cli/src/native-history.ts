@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -6,6 +6,28 @@ import { DatabaseSync } from "node:sqlite";
 export interface CursorNativeTurn {
   id: string;
   text: string;
+}
+
+export function cursorConfigDirectory(environment: NodeJS.ProcessEnv): string {
+  const home = environment.HOME ?? environment.USERPROFILE ?? os.homedir();
+  return environment.CURSOR_CONFIG_DIR?.trim()
+    ? path.resolve(environment.CURSOR_CONFIG_DIR)
+    : environment.XDG_CONFIG_HOME?.trim()
+      ? path.resolve(environment.XDG_CONFIG_HOME, "cursor")
+      : path.join(home, ".cursor");
+}
+
+export function cursorSessionDirectory(sessionId: string, environment: NodeJS.ProcessEnv): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(sessionId))
+    throw new Error("Unsupported Cursor native session ID");
+  return path.join(cursorConfigDirectory(environment), "acp-sessions", sessionId);
+}
+
+export function cursorSameWorkspace(left: string, right: string): boolean {
+  return (
+    path.resolve(left) === path.resolve(right) ||
+    (existsSync(left) && existsSync(right) && realpathSync(left) === realpathSync(right))
+  );
 }
 
 /** Minimal, bounded wire decoder for the observed 2026.09.08 native store.
@@ -60,9 +82,7 @@ export function readCursorNativeTurns(
   environment: NodeJS.ProcessEnv,
   allowMissing = false,
 ): CursorNativeTurn[] {
-  if (!/^[0-9a-f-]{36}$/iu.test(sessionId)) throw new Error("Unsupported Cursor native session ID");
-  const home = environment.HOME ?? environment.USERPROFILE ?? os.homedir();
-  const directory = path.join(home, ".cursor", "acp-sessions", sessionId);
+  const directory = cursorSessionDirectory(sessionId, environment);
   const filename = path.join(directory, "store.db");
   if (allowMissing && !existsSync(filename)) return [];
   const info: unknown = JSON.parse(readFileSync(path.join(directory, "meta.json"), "utf8"));
@@ -71,7 +91,7 @@ export function readCursorNativeTurns(
     typeof info !== "object" ||
     !("cwd" in info) ||
     typeof info.cwd !== "string" ||
-    path.resolve(info.cwd) !== path.resolve(cwd)
+    !cursorSameWorkspace(info.cwd, cwd)
   )
     throw new Error("Cursor session workspace does not match");
   const db = new DatabaseSync(filename, { readOnly: true });

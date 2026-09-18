@@ -130,10 +130,12 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 | 权限模式 | 原生 | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Agent 间任务协作 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ | ✅ |
 | Usage | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ |
-| Fork | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | ✅ |
+| Fork | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | 末尾* | — | ✅ |
 | 上下文压缩 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | — | ✅ |
 | 斜杠命令 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | ✅ |
 | 修订上一条消息 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | ✅ |
+
+Cursor 的 Fork 仅支持 macOS/Linux 同工作目录的当前最后一轮；修订上一条仍不支持。详见[接入说明](docs/harnesses/cursor/cursor-cli-experimental.md#native-cli-fork-bridge)。
 
 ## 跨 Agent 协作
 
