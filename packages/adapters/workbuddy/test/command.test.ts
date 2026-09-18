@@ -339,3 +339,53 @@ describe("WorkBuddy command invocation", () => {
     });
   });
 });
+
+describe("WorkBuddy model-free history copy startup", () => {
+  const copyArguments = [
+    "--resume",
+    "source",
+    "--fork-session",
+    "--session-id",
+    "target",
+    "--print",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+  ];
+  const dependencies = { platform: "darwin" as const, isExecutable: isBundledExecutable };
+
+  it("skips telemetry initialization only for the bundled print-copy process", () => {
+    const environment = { HOME: "/Users/test" };
+    const copy = workBuddyInvocation(environment, false, dependencies, copyArguments);
+    expect(copy.environment.DISABLE_TELEMETRY).toBe("1");
+    expect(copy.arguments).toEqual([WORKBUDDY_MACOS_CLI, ...copyArguments]);
+    expect(environment).not.toHaveProperty("DISABLE_TELEMETRY");
+    for (const args of [undefined, ["--acp", "--serve"], ["--print"], ["--fork-session"]]) {
+      expect(
+        workBuddyInvocation(environment, false, dependencies, args).environment,
+      ).not.toHaveProperty("DISABLE_TELEMETRY");
+    }
+  });
+
+  it.each(["", "0", "1"])("preserves explicit telemetry setting %j", (value) => {
+    expect(
+      workBuddyInvocation(
+        { HOME: "/Users/test", DISABLE_TELEMETRY: value },
+        false,
+        dependencies,
+        copyArguments,
+      ).environment.DISABLE_TELEMETRY,
+    ).toBe(value);
+  });
+
+  it("does not assume that a custom runtime supports the bundled telemetry switch", () => {
+    const copy = workBuddyInvocation(
+      { HOME: "/Users/test", CODEXHOST_WORKBUDDY_COMMAND: "/custom/workbuddy" },
+      false,
+      { platform: "darwin", isExecutable: (candidate) => candidate === "/custom/workbuddy" },
+      copyArguments,
+    );
+    expect(copy.environment).not.toHaveProperty("DISABLE_TELEMETRY");
+  });
+});

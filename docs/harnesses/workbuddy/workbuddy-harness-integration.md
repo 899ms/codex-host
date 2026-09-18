@@ -96,6 +96,8 @@ WorkBuddy 插件复用经过验证的 CodeBuddy ACP Session 语义，但保持�
 
 WorkBuddy 2.137.1 对标准 ACP `session/fork` 返回 `Method not found`，所以本集成不会虚构一个标准 ACP Fork。派生流程组合该版本公开 CLI 的 `--resume ... --fork-session` 管理模式、原生 `/fork` 和公开 `_codebuddy.ai/session/rollback` 扩展：先生成不调用模型的临时原生副本，再由目标目录中的 WorkBuddy ACP Session 执行原生 Fork，最后回滚到请求的精确 Turn 边界。所有模型工作仍由最终的 WorkBuddy Native Session 承担。
 
+无模型复制阶段（`--print --fork-session`，stdin 直接 EOF）在自动发现的 App 内置 CLI 上默认设置 `DISABLE_TELEMETRY=1`，避免在复制前等待原生遥测通道初始化。该设置仅传给临时复制进程；调用方显式设置的同名环境变量保留，显式覆盖的自定义 CLI 不自动应用。正常 ACP、原生 `/fork`、rollback、源历史校验和临时副本删除流程保持原有语义；仍等待复制进程正常退出后再验证落盘结果。
+
 原生 `session/load` 只在当前项目存储中按 Session ID 查找，不能直接跨项目加载来源 Session。跨目录 Fork 因此把上述原生临时副本的完整字节，以排他创建和仅当前用户可读写权限桥接到目标项目；目标 `/fork` 成功后，只在文件仍与适配器创建内容完全一致时删除这份桥接文件。原生 CLI 在来源项目创建的临时副本没有公开删除 API，可能保留在 WorkBuddy 数据目录中；适配器不会绕过原生所有权直接删除它。
 
 `--fork-session` 和原生 `/fork` 都不会复制 `<sessionId>/subagents/*.jsonl`。对于保留前缀中的 Agent 结果，适配器按 `callId` 关联调用，通过结构化的 `subAgent.sessionId` 与包含式 `lastId` 确定子 Transcript 边界，再把精确前缀以排他创建和 `0600` 权限复制到最终 Session。它不会依赖跨 Session 全局扫描到来源 sidecar；来源删除后派生 Session 仍可独立读取。源文件、目标文件、内部 Session 身份、字节数、行数、SHA-256 与历史 cwd 均被复验，符号链接、歧义、越界范围、并发变化或非精确的已存在目标会使派生失败。
@@ -134,5 +136,7 @@ codexhost broker status --harness workbuddy
 - 核对公开 ACP 能力与私有 owner runtime/admission 的边界。
 
 2026-09-18 在本机 macOS 的 WorkBuddy App 内置 CLI 上，以现有原生认证和 Auto 模型完成了真实 create → 空历史读取 → 首条 Turn → close → 同 Session resume → 第二条 Turn → 两轮历史读取。执行目录包含大小写、点号、中文和空格；两个 Turn 都成功，没有请求工具或文件修改。另验证了真实跨目录 Fork 到第一轮：派生会话恰好保留一轮，源会话仍保留两轮，派生会话关闭后可在目标 cwd 恢复。此前失败任务的原生空历史也已通过修正后的只读目录校验。
+
+2026-09-18 的性能复测确认，无模型复制阶段跳过遥测通道等待后，本机两轮历史的 Fork 从约 6.7–7.5 秒降至 5.3–5.6 秒；精确保留前缀、修订及关闭后恢复通过。但历史 Fork 恢复后继续对话报 `Could not identify exactly one persisted Native Turn`，关闭该优化的对照路径同样复现。这个既有历史问题尚未修复，不能将当前历史 Fork 的继续写入视为已通过完整在线验收。
 
 危险权限、真实跨 Harness 委派、压缩及子 Agent 的在线行为尚未在本轮验收。Fork、修订、命令、委派、Adapter、插件加载、发行 Bundle、Host 路由和 Desktop 的自动化验证使用受控 fixture；实际结果以对应验证报告为准，不能由本文替代。

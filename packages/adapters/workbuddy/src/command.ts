@@ -145,6 +145,13 @@ export function workBuddyInvocation(
   const childEnvironment = bundle
     ? {
         ...configuredEnvironment,
+        // EOF-only native Fork copies do no model work. The bundled CLI otherwise
+        // waits for its telemetry channel before copying; normal ACP keeps its policy.
+        ...(nativeArguments?.includes("--print") &&
+        nativeArguments.includes("--fork-session") &&
+        configuredEnvironment.DISABLE_TELEMETRY === undefined
+          ? { DISABLE_TELEMETRY: "1" }
+          : {}),
         ...(productConfigPath ? { [WORKBUDDY_PRODUCT_CONFIG_PATH_ENV]: productConfigPath } : {}),
         ELECTRON_RUN_AS_NODE: "1",
       }
