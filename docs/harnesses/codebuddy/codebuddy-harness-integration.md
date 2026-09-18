@@ -45,7 +45,7 @@ CodeBuddy 2.148.0 can retain cancellation state after returning a cancelled prom
 | Fork / rollback | Native derived Sessions at a Turn boundary, in the same cwd. A model-free CLI copy isolates the source; native `/fork` gives the final Session independent native identities, then `_codebuddy.ai/session/rollback` retains the exact requested prefix. See the version-specific lifecycle below. |
 | Native Agent subagents | Running/completed collaboration cards and read-only child Threads, with real child messages/tools read from the native transcript. Native Agent IDs survive resume. A background launch acknowledgement completes its tool Item but not the child lifecycle; observation continues without mutating that completed Item, and becomes interrupted when the parent exits without a proven native child-completion signal. |
 | Cross-Harness delegation | Uses the shared persistent Thread/delegation path, native `fullAccess` for unattended creation, and per-Session environment forwarding. When all four Runtime/CLI/Thread variables are present, the plugin passes discovery instructions through native `--append-system-prompt`; the native shell invokes the configured CLI and inherits the correct parent identity. Runtime tokens are never expanded into process arguments or prompt text. CodeBuddy-native Agent subagents retain their separate behavior. |
-| Commands and compact | The Session command catalog follows native ACP `available_commands_update`, including argument hints and skill commands. Execution sends the advertised slash text through `session/prompt`; `/compact` supports native summarization instructions and projects a `contextCompaction` Item. Commands that replace the Session, detach work, create autonomous queues, or require a native UI are excluded. No speculative RPC or hardcoded fallback command catalog is used. |
+| Commands and compact | The Session command catalog follows native ACP `available_commands_update`, including argument hints and skill commands. Execution sends the advertised slash text through `session/prompt`; `/compact` supports native summarization instructions and projects a `contextCompaction` Item. Commands that replace the Session, detach work, create autonomous queues, or require a native UI are excluded. The Desktop menu reads a static Adapter catalog of verified `/compact` and `/cost` commands; execution still requires the command to be advertised by the live native Session. |
 | Teams | No dedicated Host coordination capability. Member-tagged output is not mixed into the parent's answer. Native CodeBuddy configuration is not rewritten to disable Teams. |
 | Images | Current public Turn input remains text. Native ACP image capability is not advertised as Host image support. |
 
@@ -124,6 +124,13 @@ The [native ACP documentation](https://www.codebuddy.cn/docs/cli/acp) describes
 `available_commands_update`; [slash commands](https://www.codebuddy.cn/docs/cli/slash-commands)
 describe `/compact`. The installed CLI's native ACP implementation and help were
 also checked for command execution, compaction markers, and `--append-system-prompt`.
+
+The Desktop command button reads `HarnessAdapter.commandCatalog`, not the
+Session's dynamic catalog. The Adapter exposes verified `/compact` and `/cost`
+metadata without inspection, native process startup, or a persisted Session.
+The menu also opens before a Thread exists, with direct execution disabled until
+there is a conversation. Other native commands and skills remain available through
+typed invocations when advertised by the Session.
 
 Commands share normal Turn busy/cancel/fault handling. Local commands may complete
 without a persisted user Turn; the adapter then omits Native Turn identity instead
