@@ -27,6 +27,7 @@ import {
 } from "./acp-transport.js";
 import {
   catalogModelsFromInventory,
+  HermesInventoryTimeoutError,
   readHermesModelInventory,
   type HermesInventory,
 } from "./hermes-inventory.js";
@@ -83,6 +84,8 @@ export class HermesAdapter implements HarnessAdapter {
 
   #options: HermesAdapterOptions;
   #inspectionCache: HarnessInspection | null = null;
+  #lastInventory: HermesInventory | null = null;
+  #inventoryRead: Promise<HermesInventory> | null = null;
   #inspectionCacheScope: string | null = null;
   #sessions = new Set<HermesSession>();
   #warmTransports = new Map<string, Promise<HermesAcpTransport | null>>();
@@ -175,13 +178,29 @@ export class HermesAdapter implements HarnessAdapter {
   }
 
   async #readInventory(): Promise<HermesInventory> {
+    if (this.#inventoryRead) return this.#inventoryRead;
     const executable = resolveHermesExecutable({
       ...(this.#options.command ? { command: this.#options.command } : {}),
       ...(this.#options.environment ? { environment: this.#options.environment } : {}),
     });
-    return readHermesModelInventory(executable, 20_000, {
+    this.#inventoryRead = readHermesModelInventory(executable, 20_000, {
       ...(this.#options.environment ? { environment: this.#options.environment } : {}),
-    });
+    })
+      .then((inventory) => {
+        if (!this.#closed) this.#lastInventory = inventory;
+        return inventory;
+      })
+      .catch((error: unknown) => {
+        // A slow catalog refresh does not invalidate a previously read native catalog.
+        // Other failures, including invalid output, must still reach the caller.
+        if (error instanceof HermesInventoryTimeoutError && this.#lastInventory)
+          return this.#lastInventory;
+        throw error;
+      })
+      .finally(() => {
+        this.#inventoryRead = null;
+      });
+    return this.#inventoryRead;
   }
 
   async open(input: OpenSessionInput): Promise<HarnessResult<HarnessSession>> {
@@ -426,6 +445,7 @@ export class HermesAdapter implements HarnessAdapter {
     if (this.#closed) return;
     this.#closed = true;
     this.#inspectionCache = null;
+    this.#lastInventory = null;
     const sessions = [...this.#sessions];
     this.#sessions.clear();
     this.#warmTransports.clear();
