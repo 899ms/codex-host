@@ -5,9 +5,9 @@
 ## 各 Harness 的接入方式
 
 - **OMP**：现有原生提问与工具审批已接入。选择题使用原生逐项说明，超时与主动取消分别回传 `timedOut` / `cancelled`，详见 [OMP 交互](omp/omp-interactions.md)。
-- **CodeBuddy**：从 ACP 动态目录读取斜杠命令，按原生压缩事件及持久化结果确认上下文压缩；通过原生附加系统提示让会话发现 Host 委派 CLI。Fork 和修订通过无模型的原生复制、原生 `/fork` 与仅作用于新副本的 rollback 完成，校验完整历史前缀与源会话不变；派生配置随原生引用恢复。原生 ACP 未提供删除入口，因此内部临时副本会保留在 CodeBuddy 会话列表中。详见 [CodeBuddy 接入](codebuddy/codebuddy-harness-integration.md)。
+- **CodeBuddy**：从 ACP 动态目录读取斜杠命令，按原生压缩事件及持久化结果确认上下文压缩；通过原生附加系统提示让会话发现 Host 委派 CLI。Fork 和修订通过无模型的原生复制、原生 `/fork` 与仅作用于新副本的 rollback 完成，校验完整历史前缀与源会话不变；派生配置随原生引用恢复。成功派生后通过同一临时 ACP 进程的原生 HTTP 接口删除中间副本；早期失败或强杀仍可能残留，详见专属文档。详见 [CodeBuddy 接入](codebuddy/codebuddy-harness-integration.md)。
 - **Cursor**：参数化模型目录提供 Thinking 组合；ACP 原生命令目录提供命令；每会话的原生 HTTP MCP 连接提供向外委派。详见 [Cursor 接入](cursor/cursor-cli-experimental.md)。
-- **Hermes**：新会话使用已验证的官方 gateway，接入提问、Thinking、命令、压缩、原生 Diff，以及未压缩历史的独立 Fork/修订；通过临时预加载 Skill 发现 Host CLI 并保留父任务环境。旧 ACP 引用仍由 ACP 恢复。详见 [Hermes 能力与边界](hermes/hermes-capabilities.md)。
+- **Hermes**：新会话优先使用可用的官方 gateway，不以版本数值差异阻断，接入提问、Thinking、命令、压缩、原生 Diff，以及未压缩历史的独立 Fork/修订；通过进程内注册的私有临时 Skill 发现 Host CLI 并保留父任务环境，不向共享技能目录写入临时 Skill。旧 ACP 引用仍由 ACP 恢复。详见 [Hermes 能力与边界](hermes/hermes-capabilities.md)。
 
 以上实现归各 Harness 插件所有，不在公共 Adapter、Host 或 Renderer 中添加 Harness 专用分支。跨插件参考实现不等于共用原生协议；各自保留配置确认、取消、持久化和权限语义。
 

@@ -136,7 +136,7 @@ Fully quit Codex Desktop, open a new terminal, and start codexhost.
 
 Cursor supports outbound cross-Agent delegation; unattended inbound execution remains blocked by native permission confirmation. See [capability boundaries](../harnesses/capability-boundaries.md) for remaining gaps and prerequisites.
 
-Hermes * capabilities require the verified native gateway (0.21.3 / contract 7); existing ACP sessions retain their transport. Fork and revision require uncompressed history that can be preserved completely.
+Hermes * capabilities require an available native gateway; 0.21.3 / contract 7 is the tested baseline, not a version requirement. Existing ACP sessions retain their transport. Fork and revision require uncompressed history that can be preserved completely.
 
 ## Cross-Agent collaboration
 

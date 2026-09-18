@@ -136,7 +136,7 @@ Codex Desktop을 완전히 종료한 뒤, 새 터미널을 열고 codexhost를 �
 
 Cursor는 다른 Harness로 작업을 위임할 수 있지만, 무인 수신 실행은 원생 권한 확인의 제약으로 지원하지 않습니다. 남은 기능과 지원 조건은 [기능 경계](../harnesses/capability-boundaries.md)를 참고하세요.
 
-Hermes의 * 기능은 검증된 원생 gateway(0.21.3 / contract 7)가 필요하며 기존 ACP 세션은 원래 방식을 유지합니다. Fork와 수정은 완전히 보존할 수 있는 압축 전 기록에 한정됩니다.
+Hermes의 * 기능은 사용 가능한 원생 gateway가 필요합니다. 0.21.3 / contract 7은 테스트 기준이며 필수 버전이 아닙니다. 기존 ACP 세션은 원래 방식을 유지합니다. Fork와 수정은 완전히 보존할 수 있는 압축 전 기록에 한정됩니다.
 
 ## Agent 간 협업
 

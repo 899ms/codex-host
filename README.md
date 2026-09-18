@@ -137,7 +137,7 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 
 Cursor 的 Agent 间任务协作目前仅支持向外委派；无人值守入站执行仍受原生权限确认限制。其余保留的缺口及接入条件见[能力边界](docs/harnesses/capability-boundaries.md)。
 
-Hermes 的 * 项需要已验证的原生 gateway（0.21.3 / contract 7）；旧 ACP 会话保持原接入方式。Fork 和修订仅支持可完整保留的未压缩历史。
+Hermes 的 * 项需要可用的原生 gateway；0.21.3 / contract 7 是测试基线，不是版本门槛。旧 ACP 会话保持原接入方式。Fork 和修订仅支持可完整保留的未压缩历史。
 
 ## 跨 Agent 协作
 
