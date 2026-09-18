@@ -77,6 +77,11 @@ for row in payload.get("providers") or []:
             available = slug.lower() != "moa" or bool(moa_availability.get(model_id, False))
             rows.append({
                 "modelId": slug + ":" + model_id,
+                "modelIdAliases": [
+                    alias.strip() + ":" + model_id
+                    for alias in row.get("aliases") or []
+                    if isinstance(alias, str) and alias.strip()
+                ],
                 "label": model_id,
                 "provider": provider,
                 "available": available,
@@ -90,6 +95,8 @@ print(json.dumps({"models": rows, "currentModelId": current_model_id}))
 export interface HermesInventoryModel {
   /** Native Hermes choice id, e.g. `zai:glm-5-turbo`. */
   modelId: string;
+  /** Alternate native identities advertised by Hermes, including custom:<provider>. */
+  modelIdAliases?: string[];
   label: string;
   provider: string;
   /** False when a virtual model depends on providers Hermes cannot currently use. */
@@ -256,7 +263,11 @@ export function catalogModelsFromInventory(inventory: HermesInventory): {
     if (model.available === false) continue;
     const ref = encodeHermesModelRef(model.modelId);
     if (!ref) continue;
-    if (inventory.currentModelId && model.modelId === inventory.currentModelId) {
+    if (
+      inventory.currentModelId &&
+      (model.modelId === inventory.currentModelId ||
+        model.modelIdAliases?.includes(inventory.currentModelId))
+    ) {
       defaultModel = ref;
     }
     models.push({
