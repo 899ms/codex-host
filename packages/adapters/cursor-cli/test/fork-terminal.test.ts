@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -106,5 +107,48 @@ it.skipIf(!cursorForkAvailable())(
       ),
     ).rejects.toThrow("timed out");
     expect(await readFile(path.join(options.cwd, "input"), "utf8")).toBe("/fork");
+  },
+);
+
+it.skipIf(!cursorForkAvailable()).each([false, true])(
+  "uses only conversation restore, including degraded checkpoints (%s)",
+  async (degraded) => {
+    const options = await fixture();
+    await writeFile(
+      options.command,
+      `#!${process.execPath}
+const fs = require('node:fs');
+process.stdin.setRawMode(true);
+process.stdin.resume();
+process.stdout.write('Add a follow-up');
+let received = '';
+process.stdin.on('data', chunk => {
+ received += chunk.toString();
+ fs.appendFileSync('input', chunk);
+ if (received === '/fork') process.stdout.write('Fork the current chat into a new session');
+ if (received === '/fork\\r') process.stdout.write('This conversation has been forked.');
+ if (received === '/fork\\r/rewind') process.stdout.write('Jump back to a previous message');
+ if (received === '/fork\\r/rewind\\r') process.stdout.write('Pick a past turn to rewind to. Enter for details');
+ if (chunk.toString() === '\\x1b[A') process.stdout.write('Enter for details');
+ if (received.endsWith('\\x1b[A\\r')) process.stdout.write(${degraded} ? '→ 1. Restore conversation\\n2. Cancel' : '→ 1. Restore files and conversation\\n2. Restore conversation\\n3. Cancel');
+ if (chunk.toString() === '\\x1b[B') process.stdout.write('→ 2. Restore conversation');
+ const expected = '/fork\\r/rewind\\r\\x1b[A\\x1b[A\\r' + (${degraded} ? '' : '\\x1b[B') + '\\r';
+ if (received === expected) fs.writeFileSync('restored', 'yes');
+});
+`,
+      { mode: 0o700 },
+    );
+    await runCursorForkTerminal(
+      options,
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      new AbortController().signal,
+      {
+        steps: 2,
+        complete: () => existsSync(path.join(options.cwd, "restored")),
+      },
+    );
+    expect(await readFile(path.join(options.cwd, "input"), "utf8")).toBe(
+      "/fork\r/rewind\r\x1b[A\x1b[A\r" + (degraded ? "" : "\x1b[B") + "\r",
+    );
   },
 );

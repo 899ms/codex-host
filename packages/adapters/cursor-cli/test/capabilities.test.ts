@@ -16,6 +16,10 @@ function required<T>(value: T | undefined): T {
 const history = vi.hoisted(() => ({ turns: [] as Array<{ id: string; text: string }> }));
 vi.mock("../src/native-history.js", () => ({
   readCursorNativeTurns: () => structuredClone(history.turns),
+  readCursorNativeHistory: () => ({
+    revision: JSON.stringify(history.turns),
+    turns: structuredClone(history.turns),
+  }),
 }));
 const select = (
   id: string,

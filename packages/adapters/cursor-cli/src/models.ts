@@ -15,7 +15,11 @@ export const CURSOR_CAPABILITIES: HarnessSessionCapabilities = {
     selectPermissionMode: true,
     permissionModeScope: "live",
   },
-  history: { fork: cursorForkAvailable(), forkAcrossCwd: false, rollbackLastTurn: false },
+  history: {
+    fork: cursorForkAvailable(),
+    forkAcrossCwd: false,
+    rollbackLastTurn: cursorForkAvailable(),
+  },
   subagents: { observe: true, readTranscript: false },
 };
 export const CURSOR_MODES = harnessPermissionModeCatalogSchema.parse({

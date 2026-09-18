@@ -18,7 +18,7 @@ import {
 } from "@codexhost/shared-contracts";
 import type { CursorNativeTurn } from "./native-history.js";
 import { CursorSubagents, cursorTaskAddress } from "./subagents.js";
-import { cursorForkAvailable, cursorTailCheckpoint } from "./fork-support.js";
+import { cursorForkAvailable, cursorCheckpoint } from "./fork-support.js";
 
 const TOOL_OUTPUT_LIMIT = 100_000;
 
@@ -259,8 +259,8 @@ export function cursorSnapshot(
         formatVersion: 1,
       }),
       input: [{ type: "text", text: group.text }],
-      ...(cursorForkAvailable() && index === native.length - 1
-        ? { checkpoint: cursorTailCheckpoint(sessionId, identity.id) }
+      ...(cursorForkAvailable() && (index === native.length - 1 || native[index + 1]?.rewindRoot)
+        ? { checkpoint: cursorCheckpoint(sessionId, identity.id) }
         : {}),
       items,
       outcome: {

@@ -6,6 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 export interface CursorNativeTurn {
   id: string;
   text: string;
+  /** Native conversation root immediately before this user turn, when available. */
+  rewindRoot?: string;
 }
 
 export function cursorConfigDirectory(environment: NodeJS.ProcessEnv): string {
@@ -76,15 +78,15 @@ function one(fields: Map<number, Buffer[]>, field: number): Buffer {
   return values[0];
 }
 
-export function readCursorNativeTurns(
+export function readCursorNativeHistory(
   sessionId: string,
   cwd: string,
   environment: NodeJS.ProcessEnv,
   allowMissing = false,
-): CursorNativeTurn[] {
+): { revision: string | undefined; turns: CursorNativeTurn[] } {
   const directory = cursorSessionDirectory(sessionId, environment);
   const filename = path.join(directory, "store.db");
-  if (allowMissing && !existsSync(filename)) return [];
+  if (allowMissing && !existsSync(filename)) return { revision: undefined, turns: [] };
   const info: unknown = JSON.parse(readFileSync(path.join(directory, "meta.json"), "utf8"));
   if (
     !info ||
@@ -98,7 +100,7 @@ export function readCursorNativeTurns(
   try {
     db.exec("BEGIN");
     const row = db.prepare("SELECT value FROM meta WHERE key = ?").get("0");
-    if (!row && allowMissing) return [];
+    if (!row && allowMissing) return { revision: undefined, turns: [] };
     if (typeof row?.value !== "string" || row.value.length > 1_000_000)
       throw new Error("Unsupported Cursor native metadata");
     const metadata = JSON.parse(Buffer.from(row.value, "hex").toString("utf8")) as {
@@ -124,11 +126,31 @@ export function readCursorNativeTurns(
         const id = one(user, 2).toString("utf8");
         if (!/^[0-9a-f-]{36}$/iu.test(id) || result.some((existing) => existing.id === id))
           throw new Error("Cursor native turn ID is invalid or duplicated");
-        result.push({ id, text: one(user, 1).toString("utf8") });
+        const anchor = user.get(10)?.[0];
+        const rewindRoot =
+          anchor?.length === 32 &&
+          db.prepare("SELECT 1 FROM blobs WHERE id = ?").get(anchor.toString("hex"))
+            ? anchor.toString("hex")
+            : undefined;
+        result.push({
+          id,
+          text: one(user, 1).toString("utf8"),
+          ...(rewindRoot ? { rewindRoot } : {}),
+        });
       }
     }
-    return result;
+    return { revision: metadata.latestRootBlobId, turns: result };
   } finally {
     db.close();
   }
+}
+
+/** Keep turn-only callers independent of snapshot cache revisions. */
+export function readCursorNativeTurns(
+  sessionId: string,
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+  allowMissing = false,
+): CursorNativeTurn[] {
+  return readCursorNativeHistory(sessionId, cwd, environment, allowMissing).turns;
 }

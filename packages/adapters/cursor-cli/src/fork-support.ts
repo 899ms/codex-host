@@ -8,12 +8,12 @@ export function cursorForkAvailable(): boolean {
   );
 }
 
-export function cursorTailCheckpoint(sessionId: string, turnId: string) {
+export function cursorCheckpoint(sessionId: string, turnId: string) {
   return nativeCheckpointRefSchema.parse({
     harnessId: "cursor-cli",
     nativeSessionId: sessionId,
     checkpointId: turnId,
-    locator: { kind: "cursor-tail" },
+    locator: { kind: "cursor-turn" },
     formatVersion: 1,
   });
 }

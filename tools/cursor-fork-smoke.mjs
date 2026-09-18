@@ -8,7 +8,6 @@ import os from "node:os";
 import path from "node:path";
 import { CursorAdapter } from "../packages/adapters/cursor-cli/dist/index.js";
 import { cursorConfigDirectory } from "../packages/adapters/cursor-cli/dist/native-history.js";
-import { cursorTailCheckpoint } from "../packages/adapters/cursor-cli/dist/fork-support.js";
 import { loadHarnessPlugins } from "../packages/host-runtime/dist/index.js";
 
 const retry = process.argv[2] === "--resume-fixture";
@@ -142,17 +141,74 @@ try {
   const sourceHash = createHash("sha256")
     .update(await readFile(sourceDb))
     .digest("hex");
-  const stale = await adapter.open({
+  // A historical checkpoint retains exactly one turn, including its native tool records.
+  opened = await adapter.open({
     kind: "fork",
     sourceRef,
     cwd,
-    checkpoint: cursorTailCheckpoint(
-      sourceRef.nativeSessionId,
-      before.turns[0].nativeTurnRef.nativeTurnKey,
-    ),
+    checkpoint: before.turns[0].checkpoint,
   });
-  assert.equal(stale.ok, false);
-  assert.equal(stale.error.code, "unsupported");
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  const historical = opened.value;
+  assert.deepEqual(
+    turnsContent(await snapshot(historical)),
+    turnsContent({ turns: before.turns.slice(0, 1) }),
+  );
+  report.historicalForkExactPrefix = true;
+  const historicalRef = historical.initialState.nativeRef;
+  await attach(historical)(
+    "What exact marker did the subagent read? Reply with that marker only. Do not use tools.",
+  );
+  const continuedHistory = await snapshot(historical);
+  assert.equal(continuedHistory.turns.length, 2);
+  assert.ok(
+    continuedHistory.turns
+      .at(-1)
+      .items.some(
+        ({ item }) => item.type === "agentMessage" && item.text.trim() === "CURSOR_NATIVE_FORK_918",
+      ),
+  );
+  report.historicalContinuationRemembersMarker = true;
+  opened = await adapter.open({ kind: "rollbackLastTurn", sourceRef: historicalRef, cwd });
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  const revised = opened.value;
+  assert.deepEqual(
+    turnsContent(await snapshot(revised)),
+    turnsContent({ turns: before.turns.slice(0, 1) }),
+  );
+  report.rollbackExactPrefix = true;
+  opened = await adapter.open({
+    kind: "rollbackLastTurn",
+    sourceRef: revised.initialState.nativeRef,
+    cwd,
+  });
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  const empty = opened.value;
+  assert.equal((await snapshot(empty)).turns.length, 0);
+  report.singleTurnRollbackIsEmpty = true;
+  const noHistory = await adapter.open({
+    kind: "rollbackLastTurn",
+    sourceRef: empty.initialState.nativeRef,
+    cwd,
+  });
+  assert.equal(noHistory.ok, false);
+  assert.equal(noHistory.error.code, "checkpointNotFound");
+  const emptyRef = empty.initialState.nativeRef;
+  await attach(empty)("Reply exactly EDITED_FIRST_TURN. Use no tools.");
+  await empty.close();
+  opened = await adapter.open({ kind: "resume", nativeRef: emptyRef, cwd });
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  const edited = await snapshot(opened.value);
+  assert.equal(edited.turns.length, 1);
+  assert.ok(
+    edited.turns[0].items.some(
+      ({ item }) => item.type === "agentMessage" && item.text.trim() === "EDITED_FIRST_TURN",
+    ),
+  );
+  report.revisedFirstTurnSurvivesReload = true;
+  await opened.value.close();
+  await revised.close();
+  await historical.close();
   opened = await adapter.open({
     kind: "fork",
     sourceRef,
@@ -227,9 +283,17 @@ try {
   report.sourceDatabaseUnchanged = true;
   assert.deepEqual(
     (await readdir(path.join(config, "acp-sessions"))).sort(),
-    [sourceRef.nativeSessionId, forkRef.nativeSessionId].sort(),
+    [
+      sourceRef.nativeSessionId,
+      forkRef.nativeSessionId,
+      historicalRef.nativeSessionId,
+      revised.initialState.nativeRef.nativeSessionId,
+      emptyRef.nativeSessionId,
+    ].sort(),
   );
-  report.onlySourceAndFinalSession = true;
+  report.onlySourceAndRequestedDerivedSessions = true;
+  assert.equal(await readFile(path.join(cwd, "marker.txt"), "utf8"), "CURSOR_NATIVE_FORK_918\n");
+  report.workspaceFileUnchanged = true;
   report.pass = true;
 } catch (error) {
   report.error = error.message;

@@ -37,10 +37,11 @@ integration. [CLI ACP](https://cursor.com/docs/cli/acp) is the selected interfac
 - Native tool approvals and Cursor's blocking question/plan extensions, with
   exact interaction correlation, response validation and cancellation cleanup.
 - Session resume and read-only snapshots, with strict native turn identity checks.
-- Full-history Fork at the current last turn on macOS/Linux, using the native CLI
-  `/fork` command in an isolated terminal and then resuming through ACP.
+- Historical and tail Fork, plus revision of the last turn, on macOS/Linux using
+  native CLI `/fork` and conversation-only `/rewind`, followed by ACP resume.
+  Historical boundaries require native rewind anchors.
 - Negative discovery caching and bounded startup/configuration/close. There is no
-  polling timer, automatic provider substitution or Codex fallback.
+  background discovery polling, automatic provider substitution or Codex fallback.
 - Direct Windows bundle invocation avoids leaving a PowerShell/cmd launcher owner
   in between Host and the ACP process. Configuration may select an executable via
   `CODEXHOST_CURSOR_COMMAND`. User authentication is never copied into the plugin.
@@ -53,7 +54,8 @@ prompt text from its native `~/.cursor/acp-sessions/<id>/store.db`, using a read
 SQLite connection. A small bounded decoder follows the observed native root/turn
 references. This is an undocumented native format, not a supported Cursor API.
 
-The snapshot body comes from a fresh native ACP `session/load`. It is accepted only
+The snapshot body comes from native ACP `session/load` and is reused only while the
+native history root is unchanged. It is accepted only
 when session, workspace, turn count, order and exact prompt text match native
 history. A successful live turn must introduce exactly one native user-turn ID.
 Missing/ambiguous history is an error; generated UUIDs, array positions and text
@@ -75,9 +77,10 @@ contract investigation before release acceptance.
 - The Desktop Agent Picker is still based on a static Harness list. This integration
   adds Cursor explicitly and uses the shared plugin carrier. Its independent model
   and mode preferences do not inherit another Harness's Thinking selection.
-- Historical-position Fork, rollback, context compaction, usage/account reporting,
-  native session import and unattended inbound delegation are not
-  advertised. Image/audio prompt inputs are outside the current Host text contract.
+- Context compaction, usage/account reporting, native session import and unattended
+  inbound delegation are not advertised. Historical Fork/revision require the native
+  CLI bridge described below. Image/audio prompt inputs are outside the current Host
+  text contract.
 - Edit Diff is partial: it requires native ACP diff content. Delete/rename semantics,
   shell edits and missing historical diffs are not inferred. Other Cursor notification
   extensions are not all implemented.
@@ -91,20 +94,50 @@ contract investigation before release acceptance.
 
 ## Native CLI Fork bridge
 
-Fork is restricted to a nonempty session's current last turn, in the same workspace.
-The source is locked against concurrent Host turns/configuration for the operation.
-Only the last snapshot turn receives a Fork checkpoint; an older saved checkpoint
-is rejected once the source advances. Editing the previous message requires native
-truncation semantics and remains unsupported.
+Fork retains history through the selected turn in the same workspace. Historical
+boundaries require a native rewind anchor on the first user turn to discard;
+the current last turn can be copied without rewind. Snapshots expose checkpoints
+for these boundaries. Previously saved tail checkpoints remain valid after the
+source advances if the boundary has a native rewind anchor.
+
+Editing the previous message uses the same derivation transaction to discard the
+last complete turn, including the single-turn case that leaves an empty writable
+session. Empty history is rejected. Current model, thinking and permission selections
+are applied before adoption. The source is locked against concurrent Host turns and
+configuration changes throughout the operation.
 
 The adapter uses SQLite's backup API to stage the ACP database in a private temporary
 CLI configuration directory. CLI and ACP use the same store representation: no
 messages or blob contents are rewritten. The CLI workspace key hashes the resolved
 working directory. The native CLI runs `/fork` in a PTY provided by `/usr/bin/script`;
 Enter is sent only after its command menu advertises the native Fork action. The
-new identity and metadata are produced by Cursor itself. The adapter checks the
-new identity, root blob and all blob contents, copies the result to the ACP store,
-and verifies native turn identity and ACP replay before returning a session.
+new identity and metadata are produced by Cursor itself. For a historical boundary,
+the same CLI process runs `/rewind` and explicitly selects **Restore conversation**,
+never file restoration. Rewind is enabled only in the private temporary CLI config.
+The adapter checks that the persisted root is exactly the target's native pre-turn
+anchor and that the source blob contents are preserved, copies the result to the ACP
+store, then verifies the exact retained turn IDs/text and ACP replay before adoption.
+A changed menu, missing anchor, wrong boundary or replay mismatch fails the operation
+and discards the owned copy. The adapter never writes a synthetic root or transcript.
+
+The target ACP process starts and authenticates concurrently with CLI staging; it
+loads the derived session only after the CLI transaction succeeds. Both operations
+are joined before cleanup, and failure or cancellation closes the owned ACP process
+and cancels staging. An active source can supply its full model parameter catalog
+when the effective environment is identical and the target's freshly loaded model
+IDs and labels match. Otherwise the target fetches a fresh catalog. Live selection
+and current-model configuration always come from the target's native load response;
+this reuse is limited to derivation, not a global account cache. Cursor's internal
+model queries during authentication/load are unchanged.
+
+Snapshot reads reuse the validated ACP replay while the native content-addressed
+history root remains unchanged. A changed root (including changes without a new user
+turn) or a new local turn invalidates reuse. Resume seeds the cache only when the
+root is identical before and after ACP load; cache misses validate the root across
+replay as well. Returned snapshots are copied and carry current configuration state.
+Read-only replay skips the account model catalog. Configuration restoration sends
+only values that differ from the latest native-confirmed configuration, checking
+after each response because model selection can reset other parameters.
 
 Source databases remain read-only. CLI settings are temporarily copied to preserve
 native authentication/network configuration; staging is private and removed on
@@ -116,7 +149,7 @@ directory, as with other interrupted filesystem operations.
 This bridge depends on Cursor's native store layout and interactive command output,
 not an ACP Fork API. Unknown output or incompatible storage fails the operation;
 there is no version equality gate or fallback that submits a synthetic history
-prompt. Windows Fork is not advertised because this adapter has no Windows PTY
+prompt. Windows Fork/revision is not advertised because this adapter has no Windows PTY
 runner. macOS/Linux require `/usr/bin/script`.
 
 The opt-in smoke exercises real model calls in an isolated store:
@@ -126,8 +159,9 @@ npx tsc -b packages/adapters/cursor-cli
 node tools/cursor-fork-smoke.mjs
 ```
 
-It checks tool/child history replay, continuation, a new child under the fork,
-fresh-process recovery, source database preservation and final session count.
+It checks historical and tail Fork, tool/child history replay, continuation, multi-turn
+and single-turn revision, empty-history rejection, a new child under the fork,
+fresh-process recovery, source/file preservation and final session count.
 Set `CURSOR_FORK_PLUGIN_ROOT` to an independently built plugin directory to run
 the same checks through the public Loader. The native bridge has been exercised
 on macOS arm64 with Cursor `2026.09.15-d2fe57e`; Linux has not been tested live here.
@@ -146,7 +180,7 @@ native extensions, not fabricated RPC methods.
 | Slash commands | `available_commands_update` plus native `session/prompt` slash parsing; implemented for advertised commands only. |
 | Cross-Harness collaboration | Native HTTP MCP passed to `session/new` / `session/load`; outbound tools implemented. Inbound unattended execution remains unsupported. |
 | Usage | The native ACP agent emits neither usage updates nor prompt usage; remains unknown. Shared SDK schemas alone are not evidence that Cursor emits these fields. |
-| Fork / edit previous message | ACP has no Fork or rollback operation. A CLI store bridge supports full-history tail Fork on macOS/Linux; historical-position Fork and edit previous message remain unsupported. |
+| Fork / edit previous message | ACP has no Fork or rollback operation. A native CLI `/fork` + conversation-only `/rewind` bridge supports historical Fork and edit previous message on macOS/Linux at available native anchors. |
 | Context compaction | The interactive CLI command is not part of the ACP slash-command handler; no native ACP compaction operation is implemented. Sending `/compact` as plain model text is not compaction. |
 
 The model catalog comes from native configuration, including each model's own

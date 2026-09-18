@@ -1,14 +1,16 @@
 import { spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { cursorInvocation } from "./command.js";
 import type { CursorTransportOptions } from "./transport.js";
 
 const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
 
-/** Run only the native interactive /fork command. Never forward terminal output to Host. */
+/** Drive native commands in an isolated store. Never forward terminal output to Host. */
 export async function runCursorForkTerminal(
   options: CursorTransportOptions,
   sessionId: string,
   signal: AbortSignal,
+  rewind?: { steps: number; complete: () => boolean },
 ): Promise<void> {
   signal.throwIfAborted();
   const invocation = cursorInvocation(options.environment, options.command, [
@@ -40,56 +42,70 @@ export async function runCursorForkTerminal(
   });
   child.stderr.resume();
   child.stdin.on("error", () => {});
-  let state: "loading" | "selecting" | "submitted" = "loading";
   let tail = "";
+  let failure: Error | undefined;
+  child.once("error", () => {
+    failure = new Error("Cursor fork terminal could not start");
+  });
+  child.once("exit", () => {
+    failure = new Error("Cursor fork terminal exited before completion");
+  });
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (data: string) => {
+    tail = (tail + data).slice(-64_000);
+  });
+  const deadline = Date.now() + (options.timeoutMs ?? 60_000);
+  const plain = () => tail.replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "");
+  const waitFor = async (ready: () => boolean) => {
+    for (;;) {
+      if (signal.aborted) throw new Error("Cursor fork cancelled");
+      if (failure) throw failure;
+      if (Date.now() >= deadline) throw new Error("Cursor native fork/rewind timed out");
+      if (ready()) return;
+      await delay(50);
+    }
+  };
+  const send = (text: string) => {
+    tail = "";
+    child.stdin.write(text);
+  };
+  const submitCommand = async (name: string, description: string) => {
+    send(name);
+    await waitFor(() => plain().includes(description));
+    // Only Enter after native command discovery, never submit a command as a prompt.
+    send("\r");
+  };
   try {
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (error?: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        signal.removeEventListener("abort", abort);
-        if (error) reject(error);
-        else resolve();
-      };
-      const abort = () => finish(new Error("Cursor fork cancelled"));
-      const timer = setTimeout(
-        () => finish(new Error("Cursor native /fork timed out")),
-        options.timeoutMs ?? 60_000,
-      );
-      signal.addEventListener("abort", abort, { once: true });
-      if (signal.aborted) abort();
-      child.once("error", () => finish(new Error("Cursor fork terminal could not start")));
-      child.once("exit", () => finish(new Error("Cursor fork terminal exited before completion")));
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (data: string) => {
-        if (settled) return;
-        // Bound the buffer; ANSI and terminal redraws are not a protocol or a transcript.
-        tail = (tail + data).slice(-64_000);
-        const plain = tail.replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "");
-        if (state === "loading" && plain.includes("Add a follow-up")) {
-          state = "selecting";
-          tail = "";
-          child.stdin.write("/fork");
-        } else if (
-          state === "selecting" &&
-          plain.includes("Fork the current chat into a new session")
-        ) {
-          // Wait for native command discovery before Enter: never submit /fork as a model prompt.
-          state = "submitted";
-          tail = "";
-          child.stdin.write("\r");
-        } else if (state === "submitted" && plain.includes("This conversation has been forked.")) {
-          finish();
-        } else if (
-          plain.includes("Failed to fork the conversation:") ||
-          plain.includes("Nothing to fork yet.")
-        ) {
-          finish(new Error("Cursor rejected the native fork"));
-        }
-      });
+    await waitFor(() => plain().includes("Add a follow-up"));
+    await submitCommand("/fork", "Fork the current chat into a new session");
+    await waitFor(() => {
+      if (
+        plain().includes("Failed to fork the conversation:") ||
+        plain().includes("Nothing to fork yet.")
+      )
+        throw new Error("Cursor rejected the native fork");
+      return plain().includes("This conversation has been forked.");
     });
+    if (rewind) {
+      await submitCommand("/rewind", "Jump back to a previous message");
+      await waitFor(() => plain().includes("Pick a past turn to rewind to."));
+      // The native list starts at (current). Each key must be a separate input event.
+      for (let i = 0; i < rewind.steps; i++) {
+        send("\x1b[A");
+        await waitFor(() => plain().includes("Enter for details"));
+      }
+      send("\r");
+      await waitFor(() => /[12]\. Restore conversation/u.test(plain()));
+      if (plain().includes("2. Restore conversation")) {
+        send("\x1b[B");
+        await waitFor(() => /[→❯›>]\s*2\. Restore conversation/u.test(plain()));
+      } else if (!plain().includes("1. Restore conversation")) {
+        throw new Error("Cursor did not expose conversation-only restore");
+      }
+      send("\r");
+      // Native rewind has no reliable success toast. Verify the persisted root instead.
+      await waitFor(rewind.complete);
+    }
   } finally {
     child.stdin.destroy();
     if (child.pid) {
