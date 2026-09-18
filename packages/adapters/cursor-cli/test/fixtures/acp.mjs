@@ -15,6 +15,8 @@ lines.on("line", (line) => {
   } else if (message.method === "authenticate") send({ id: message.id, result: {} });
   else if (message.method === "session/new" || message.method === "session/load") {
     send({ id: message.id, result: { sessionId, configOptions: [] } });
+  } else if (message.method === "cursor/list_available_models") {
+    send({ id: message.id, error: { code: -32601, message: "Method not found" } });
   } else if (message.method === "session/set_config_option") {
     if (scenario !== "hang-config") send({ id: message.id, result: { configOptions: [] } });
   } else if (message.method === "session/prompt") {
