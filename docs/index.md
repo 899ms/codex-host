@@ -82,6 +82,12 @@
 | --- | --- |
 | [`harnesses/grok/subagent-status-and-model.md`](harnesses/grok/subagent-status-and-model.md) | Grok Subagent 状态、Model、Transcript 与 Desktop 投影；修改 Grok Subagent 时阅读。 |
 
+### ZCode
+
+| 文档 | 内容与阅读时机 |
+| --- | --- |
+| [`harnesses/zcode/zcode-harness-integration.md`](harnesses/zcode/zcode-harness-integration.md) | ZCode 原生 app-server 插件、Provider 桥、能力与验收边界；维护 ZCode 接入时阅读。 |
+
 ## 账号与 Desktop 产品接入
 
 | 文档 | 内容与阅读时机 |
