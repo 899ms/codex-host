@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { HostEvent } from "@codexhost/harness-adapter";
 import { hostItemIdSchema, hostTurnIdSchema } from "@codexhost/shared-contracts";
-import { CODEBUDDY_ID } from "../src/common.js";
+import { CODEBUDDY_ID, CODEBUDDY_RUNTIME_PROFILE } from "../src/common.js";
 import { configuration, modelRef, nativeModel } from "../src/configuration.js";
 import { historyUsage, snapshotFromHistory } from "../src/history.js";
 import { CodeBuddyTurnOutput } from "../src/projection.js";
 import { configOptions } from "./fixtures.js";
 
 const ref = { harnessId: CODEBUDDY_ID, nativeSessionId: "session", formatVersion: 1 as const };
+const nativeCommandProfile = { ...CODEBUDDY_RUNTIME_PROFILE, nativeCommands: true };
+const commandsDisabledProfile = { ...CODEBUDDY_RUNTIME_PROFILE, nativeCommands: false };
 const user = {
   type: "message",
   role: "user",
@@ -25,6 +27,44 @@ const assistant = {
 const lines = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join("\n");
 
 describe("CodeBuddy native history and output projection", () => {
+  it("honors a runtime profile that disables native command projection", () => {
+    const snapshot = snapshotFromHistory(
+      lines([
+        user,
+        {
+          ...user,
+          id: "compact",
+          parentId: "user",
+          providerData: { agent: "compact" },
+          content: "native internal prompt",
+        },
+        { ...assistant, parentId: "compact" },
+      ]),
+      ref,
+      process.cwd(),
+      commandsDisabledProfile,
+    );
+    expect(snapshot.turns).toHaveLength(2);
+    expect(JSON.stringify(snapshot)).not.toContain("contextCompaction");
+
+    const events: HostEvent[] = [];
+    const output = new CodeBuddyTurnOutput(
+      hostTurnIdSchema.parse("codebuddy-compact-marker"),
+      process.cwd(),
+      (event) => events.push(event),
+      commandsDisabledProfile,
+    );
+    output.update({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "summary",
+      content: { type: "text", text: "summary" },
+      _meta: { "codebuddy.ai/isCompactInternal": true },
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({ item: expect.objectContaining({ type: "agentMessage" }) }),
+    );
+  });
+
   it("groups native local command records and hides compaction prompts and summaries", () => {
     const snapshot = snapshotFromHistory(
       lines([
@@ -77,6 +117,7 @@ describe("CodeBuddy native history and output projection", () => {
       ]),
       ref,
       process.cwd(),
+      nativeCommandProfile,
     );
     expect(snapshot.turns).toHaveLength(2);
     expect(snapshot.turns[0]).toMatchObject({
@@ -118,6 +159,7 @@ describe("CodeBuddy native history and output projection", () => {
       ]),
       ref,
       process.cwd(),
+      nativeCommandProfile,
     );
     expect(snapshot.turns).toHaveLength(1);
     expect(snapshot.turns[0]).toMatchObject({
@@ -137,6 +179,7 @@ describe("CodeBuddy native history and output projection", () => {
         hostTurnIdSchema.parse("compact-status"),
         process.cwd(),
         (event) => events.push(event),
+        nativeCommandProfile,
       );
       output.update({
         sessionUpdate: "agent_message_chunk",
@@ -204,6 +247,7 @@ describe("CodeBuddy native history and output projection", () => {
         ]),
         ref,
         process.cwd(),
+        nativeCommandProfile,
       );
       const expected = ["cancelled", "interrupted"].includes(status) ? "cancelled" : "failed";
       expect(snapshot.turns).toHaveLength(1);

@@ -42,6 +42,7 @@ export type CodeBuddyClientFactory = (options: {
   temporarySessionId?: string;
   handlers: CodeBuddyClientHandlers;
 }) => CodeBuddyClient;
+export type CodeBuddyInvocationFactory = typeof codeBuddyInvocation;
 
 /** One native process per Session; all tool execution stays in CodeBuddy. */
 export class CodeBuddyAcpClient implements CodeBuddyClient {
@@ -61,12 +62,13 @@ export class CodeBuddyAcpClient implements CodeBuddyClient {
   constructor(
     readonly options: Parameters<CodeBuddyClientFactory>[0],
     readonly operationTimeoutMs = 15_000,
+    readonly invocationFactory: CodeBuddyInvocationFactory = codeBuddyInvocation,
   ) {
     void this.#failed.catch(() => {});
     this.#copyCleanup = options.temporarySessionId
       ? new CodeBuddyCopyCleanup(options.temporarySessionId, options.cwd)
       : undefined;
-    const invocation = codeBuddyInvocation(
+    const invocation = invocationFactory(
       this.#copyCleanup?.environment(options.environment) ?? options.environment,
       options.ephemeral,
       this.#copyCleanup?.arguments,
@@ -234,7 +236,7 @@ export class CodeBuddyAcpClient implements CodeBuddyClient {
           decision: answers === null ? "deny" : "allow",
           ...(answers ? { answers } : {}),
         }),
-      "CodeBuddy question response",
+      "ACP question response",
     );
     if (record(response).resolved !== true)
       throw new CodeBuddyError("protocolError", "Native question is no longer pending");

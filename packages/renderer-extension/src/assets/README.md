@@ -30,6 +30,11 @@ mark, 40×40 viewBox and rounded clipping are preserved without modification.
 It matches `packages/adapters/codebuddy/assets/icon.svg` byte for byte; both
 copies are bundled locally so no network request is needed.
 
+`workbuddy-agent.svg` uses the PWA mark bundled with WorkBuddy AI 5.5.2 at
+`cli/dist/web-ui/pwa-icon.svg`, preserving the same vector artwork. It matches
+the WorkBuddy Harness plugin icon; both copies are bundled locally so the
+Renderer does not depend on an installed application path or a network request.
+
 `cursor-agent.svg` is the unmodified official Cursor Cube favicon from
 `https://cursor.com/favicon.svg`, with its original 512×512 viewBox, dark rounded
 plate and light mark. It matches `packages/adapters/cursor-cli/assets/icon.svg`

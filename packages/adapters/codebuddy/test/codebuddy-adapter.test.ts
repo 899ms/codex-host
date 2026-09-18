@@ -102,6 +102,20 @@ describe("CodeBuddy native Adapter", () => {
     },
   );
 
+  it("keeps the CodeBuddy native commands distinct from the WorkBuddy catalog", async () => {
+    const { adapter } = setup();
+    const session = await create(adapter);
+    expect(adapter.commandCatalog?.commands.map((command) => command.invocation)).toEqual([
+      "/compact",
+      "/cost",
+    ]);
+    const available = await session.commands?.list();
+    if (!available?.ok) throw Error("CodeBuddy command catalog is unavailable");
+    const invocations = available.value.commands.map((command) => command.invocation);
+    expect(invocations).toEqual(expect.arrayContaining(["/compact", "/cost", "/review"]));
+    expect(invocations).not.toContain("/init");
+  });
+
   it("completes PARTIAL_SUCCESS while retaining a recovered diagnostic Tool failure", async () => {
     const { adapter, native } = setup();
     const session = await create(adapter),

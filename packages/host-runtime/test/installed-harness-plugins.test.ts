@@ -20,6 +20,7 @@ const classes = {
   antigravity: "AntigravityAdapter",
   "kiro-cli": "KiroAdapter",
   codebuddy: "CodeBuddyAdapter",
+  workbuddy: "WorkBuddyAdapter",
   "cursor-cli": "CursorAdapter",
   hermes: "HermesAdapter",
   qoder: "QoderAdapter",
@@ -96,6 +97,7 @@ describe("installed Harness composition", () => {
   it("provides every built-in command catalog before inspection or Session creation", async () => {
     const expected = {
       codebuddy: ["/compact", "/cost"],
+      workbuddy: ["/compact", "/init"],
       "cursor-cli": ["/copy-request-id"],
       pi: ["/compact"],
       "claude-code": ["/compact", "/init", "/recap"],
@@ -151,6 +153,7 @@ describe("installed Harness composition", () => {
     ["antigravity", "CODEXHOST_ANTIGRAVITY_COMMAND"],
     ["kiro-cli", "CODEXHOST_KIRO_COMMAND"],
     ["codebuddy", "CODEXHOST_CODEBUDDY_COMMAND"],
+    ["workbuddy", "CODEXHOST_WORKBUDDY_COMMAND"],
     ["cursor-cli", "CODEXHOST_CURSOR_COMMAND"],
     ["hermes", "CODEXHOST_HERMES_COMMAND"],
     ["qoder", "CODEXHOST_QODER_COMMAND"],

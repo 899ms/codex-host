@@ -1,69 +1,49 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { CodeBuddyInvocationFactory } from "../src/acp-client.js";
 import { copyCodeBuddySession } from "../src/derivation.js";
-import { codeBuddyInvocation } from "../src/command.js";
-vi.mock("../src/command.js", () => ({
-  codeBuddyInvocation: vi.fn(
-    (environment: NodeJS.ProcessEnv, _ephemeral: boolean, args: string[]) => ({
-      command: process.execPath,
-      arguments: [path.resolve("packages/adapters/codebuddy/test/fixtures/copy.mjs"), ...args],
-      environment,
-      windowsVerbatimArguments: false,
-    }),
-  ),
-}));
+
+const invocationImplementation: CodeBuddyInvocationFactory = (
+  environment,
+  _ephemeral,
+  args = [],
+) => ({
+  command: process.execPath,
+  arguments: [path.resolve("packages/adapters/codebuddy/test/fixtures/copy.mjs"), ...args],
+  environment,
+  windowsVerbatimArguments: false,
+});
+const invocation = vi.fn(invocationImplementation);
+
+const run = (environment: NodeJS.ProcessEnv = process.env, signal = new AbortController().signal) =>
+  copyCodeBuddySession(process.cwd(), "source", "target", environment, signal, invocation);
+
 describe("native EOF history copy process", () => {
   it("rejects an already cancelled copy before preparing or spawning a process", async () => {
     const controller = new AbortController();
     controller.abort();
-    vi.mocked(codeBuddyInvocation).mockClear();
-    await expect(
-      copyCodeBuddySession(process.cwd(), "source", "target", process.env, controller.signal),
-    ).rejects.toMatchObject({ code: "invalidState" });
-    expect(codeBuddyInvocation).not.toHaveBeenCalled();
+    invocation.mockClear();
+    await expect(run(process.env, controller.signal)).rejects.toMatchObject({
+      code: "invalidState",
+    });
+    expect(invocation).not.toHaveBeenCalled();
   });
-  it("closes stdin without sending any prompt and checks the confirmed target identity", async () => {
-    await expect(
-      copyCodeBuddySession(
-        process.cwd(),
-        "source",
-        "target",
-        process.env,
-        new AbortController().signal,
-      ),
-    ).resolves.toBeUndefined();
+
+  it("closes stdin without a prompt and confirms a model-free target identity", async () => {
+    await expect(run()).resolves.toBeUndefined();
   });
+
   it.each(["identity", "model", "invalid", "exit"])("rejects %s evidence", async (mode) => {
-    await expect(
-      copyCodeBuddySession(
-        process.cwd(),
-        "source",
-        "target",
-        { ...process.env, COPY_TEST_MODE: mode },
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow();
+    await expect(run({ ...process.env, COPY_TEST_MODE: mode })).rejects.toThrow();
   });
-  it("accepts replayed historical usage without treating it as a new model request", async () => {
-    await expect(
-      copyCodeBuddySession(
-        process.cwd(),
-        "source",
-        "target",
-        { ...process.env, COPY_TEST_MODE: "usage" },
-        new AbortController().signal,
-      ),
-    ).resolves.toBeUndefined();
+
+  it("accepts replayed historical usage without treating it as a model request", async () => {
+    await expect(run({ ...process.env, COPY_TEST_MODE: "usage" })).resolves.toBeUndefined();
   });
-  it("kills and waits for the process on shutdown", async () => {
+
+  it("kills and waits for the copy process on shutdown", async () => {
     const controller = new AbortController();
-    const pending = copyCodeBuddySession(
-      process.cwd(),
-      "source",
-      "target",
-      { ...process.env, COPY_TEST_MODE: "hang" },
-      controller.signal,
-    );
+    const pending = run({ ...process.env, COPY_TEST_MODE: "hang" }, controller.signal);
     setTimeout(() => controller.abort(), 50);
     await expect(pending).rejects.toThrow("interrupted");
   });

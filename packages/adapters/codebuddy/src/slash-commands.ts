@@ -3,7 +3,14 @@ import {
   harnessCommandCatalogSchema,
   type HarnessCommandCatalog,
 } from "@codexhost/shared-contracts";
-import { failure, record, rows, text } from "./common.js";
+import {
+  CODEBUDDY_RUNTIME_PROFILE,
+  failure,
+  record,
+  rows,
+  text,
+  type CodeBuddyRuntimeProfile,
+} from "./common.js";
 
 // These native commands switch Session identity, detach work, or require a native UI.
 // They cannot execute through the Host's current-Session command contract.
@@ -37,7 +44,16 @@ export function isExcludedInvocation(invocation: string | undefined): boolean {
   return invocation?.startsWith("/") === true && excluded.has(invocation.slice(1));
 }
 
-export function commandCatalog(value: unknown): HarnessCommandCatalog {
+export function nativeCommandsEnabled(
+  profile: CodeBuddyRuntimeProfile = CODEBUDDY_RUNTIME_PROFILE,
+) {
+  return profile.nativeCommands ?? profile.harnessId === CODEBUDDY_RUNTIME_PROFILE.harnessId;
+}
+
+export function commandCatalog(
+  value: unknown,
+  profile: CodeBuddyRuntimeProfile = CODEBUDDY_RUNTIME_PROFILE,
+): HarnessCommandCatalog {
   const seen = new Set<string>();
   return {
     commands: rows(value).flatMap((entry) => {
@@ -46,7 +62,7 @@ export function commandCatalog(value: unknown): HarnessCommandCatalog {
       const parsed = harnessCommandCatalogSchema.safeParse({
         commands: [
           {
-            id: `codebuddy.${name}`,
+            id: `${profile.harnessId}.${name}`,
             invocation: `/${name}`,
             label: name,
             ...(text(entry.description).trim()
@@ -79,10 +95,11 @@ export const CODEBUDDY_COMMAND_CATALOG: HarnessCommandCatalog = commandCatalog([
 export function commandPrompt(
   command: HarnessCommandInvocation,
   catalog: HarnessCommandCatalog,
+  profile: CodeBuddyRuntimeProfile = CODEBUDDY_RUNTIME_PROFILE,
 ): HarnessResult<string> {
   const descriptor = catalog.commands.find((entry) => entry.id === command.commandId);
   if (!descriptor)
-    return failure("unsupported", "CodeBuddy command is not available in this Session");
+    return failure("unsupported", "Command is not available in this Session", profile);
   const args = command.arguments;
   if (
     args &&
@@ -90,7 +107,7 @@ export function commandPrompt(
       (args.text !== undefined && typeof args.text !== "string") ||
       (descriptor.argumentMode === "none" && Object.keys(args).length > 0))
   )
-    return failure("invalidRequest", "CodeBuddy command arguments must match the native command");
+    return failure("invalidRequest", "Command arguments must match the native command", profile);
   const argument = typeof args?.text === "string" ? args.text.trim() : "";
   return { ok: true, value: `${descriptor.invocation}${argument ? ` ${argument}` : ""}` };
 }

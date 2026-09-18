@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
+import { lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type {
   HarnessSessionState,
@@ -7,36 +9,63 @@ import type {
   ResumeSessionInput,
 } from "@codexhost/harness-adapter";
 import {
-  harnessThinkingOptionIdSchema,
   harnessPermissionModeIdSchema,
+  harnessThinkingOptionIdSchema,
   nativeSessionRefSchema,
   type NativeSessionRef,
 } from "@codexhost/shared-contracts";
-import type { CodeBuddyClientFactory } from "./acp-client.js";
+import type { CodeBuddyClientFactory, CodeBuddyInvocationFactory } from "./acp-client.js";
 import { codeBuddyInvocation } from "./command.js";
-import { bounded, CODEBUDDY_ID, CodeBuddyError, record, text } from "./common.js";
+import {
+  bounded,
+  CODEBUDDY_RUNTIME_PROFILE,
+  CodeBuddyError,
+  record,
+  text,
+  type CodeBuddyRuntimeProfile,
+} from "./common.js";
 import { configuration, modelRef } from "./configuration.js";
 import {
   codeBuddyNativeHistory,
+  codeBuddyCanonicalCwd,
+  codeBuddyPrimaryHistoryPath,
+  codeBuddyProjectSlug,
   nativeHistoryRows,
+  nativeRawHistoryRows,
+  nativeRowsDigest,
   snapshotFromHistory,
   validateNativeRef,
 } from "./history.js";
+import {
+  CODEBUDDY_CHILD_MAX_BYTES,
+  codeBuddyChildPrefixThrough,
+  codeBuddyInheritedChildDescriptor,
+  type CodeBuddyInheritedChild,
+  validateCodeBuddyChildContents,
+} from "./child-provenance.js";
+import {
+  codeBuddyFileVersion,
+  readCodeBuddyVersionedText,
+  sameCodeBuddyFileVersion,
+} from "./file-observation.js";
+import { validCodeBuddyChildId } from "./subagent-tool.js";
 
 type DeriveInput = Extract<OpenSessionInput, { kind: "fork" | "rollbackLastTurn" }>;
 type Row = Record<string, unknown>;
+type OwnedCopy = { file: string; expected: Buffer };
 
-/** Only native administrative operations: EOF requests replay, never an empty model prompt. */
+/** EOF requests native replay/copy only; this path never sends an empty model prompt. */
 export async function copyCodeBuddySession(
   cwd: string,
   sourceId: string,
   targetId: string,
   environment: NodeJS.ProcessEnv,
   signal: AbortSignal,
+  invocationFactory: CodeBuddyInvocationFactory = codeBuddyInvocation,
 ): Promise<void> {
   if (signal.aborted)
     throw new CodeBuddyError("invalidState", "Adapter closed before history copy");
-  const invocation = codeBuddyInvocation(environment, false, [
+  const invocation = invocationFactory(environment, false, [
     "--resume",
     sourceId,
     "--fork-session",
@@ -69,14 +98,14 @@ export async function copyCodeBuddySession(
         child.stdout.destroy();
         child.stderr.destroy();
       } else if (process.platform === "win32" && child.pid) {
-        termination = new Promise<void>((resolve) => {
+        termination = new Promise<void>((done) => {
           execFile(
             "taskkill",
             ["/PID", String(child.pid), "/T", "/F"],
             { windowsHide: true, timeout: 3_000 },
             () => {
               child.kill();
-              resolve();
+              done();
             },
           );
         });
@@ -176,9 +205,14 @@ function commandCaveat(row: Row | undefined) {
   );
 }
 
-export function retainedRowCount(input: DeriveInput, contents: string) {
+export function retainedRowCount(
+  input: DeriveInput,
+  contents: string,
+  sourceCwd = input.cwd,
+  profile: CodeBuddyRuntimeProfile = CODEBUDDY_RUNTIME_PROFILE,
+) {
   const rows = nativeHistoryRows(contents);
-  const turns = snapshotFromHistory(contents, input.sourceRef, input.cwd).turns;
+  const turns = snapshotFromHistory(contents, input.sourceRef, sourceCwd, profile).turns;
   let excluded: string | undefined;
   if (input.kind === "rollbackLastTurn") {
     if (!turns.length)
@@ -190,7 +224,7 @@ export function retainedRowCount(input: DeriveInput, contents: string) {
       (turn) => turn.nativeTurnRef.nativeTurnKey === checkpoint.checkpointId,
     );
     if (
-      checkpoint.harnessId !== CODEBUDDY_ID ||
+      checkpoint.harnessId !== profile.harnessId ||
       checkpoint.nativeSessionId !== input.sourceRef.nativeSessionId ||
       checkpoint.formatVersion !== 1 ||
       index < 0
@@ -206,77 +240,465 @@ export function retainedRowCount(input: DeriveInput, contents: string) {
 
 export interface DerivationOptions {
   input: DeriveInput;
+  sourceCwd?: string;
   environment: NodeJS.ProcessEnv;
   factory: CodeBuddyClientFactory;
+  invocationFactory?: CodeBuddyInvocationFactory;
+  profile?: CodeBuddyRuntimeProfile;
   signal: AbortSignal;
   state?: HarnessSessionState;
   copy?: typeof copyCodeBuddySession;
 }
 
-/** Keep the broken print-copy runtime identity away from model work and subagents. */
+function sameResolvedPath(left: string, right: string) {
+  const a = codeBuddyCanonicalCwd(left),
+    b = codeBuddyCanonicalCwd(right);
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * Create a target-project copy without inventing a cross-project native locator.
+ * The bytes originate in the official --fork-session operation and are used only
+ * as input to the target cwd's official /fork command.
+ */
+async function bridgeCopyToTarget(
+  sourceCwd: string,
+  targetCwd: string,
+  ref: NativeSessionRef,
+  contents: string,
+  environment: NodeJS.ProcessEnv,
+  profile: CodeBuddyRuntimeProfile,
+) {
+  const sourceFile = codeBuddyPrimaryHistoryPath(sourceCwd, ref, environment, profile);
+  const targetFile = codeBuddyPrimaryHistoryPath(targetCwd, ref, environment, profile);
+  if (sameResolvedPath(sourceFile, targetFile)) return undefined;
+  const targetDirectory = path.dirname(targetFile);
+  const projectsDirectory = path.dirname(targetDirectory);
+  await mkdir(targetDirectory, { recursive: true });
+  const [realProjects, realTargetDirectory] = await Promise.all([
+    realpath(projectsDirectory),
+    realpath(targetDirectory),
+  ]);
+  if (
+    !sameResolvedPath(realTargetDirectory, path.join(realProjects, codeBuddyProjectSlug(targetCwd)))
+  )
+    throw new CodeBuddyError(
+      "invalidRequest",
+      "Cross-directory history bridge target escaped the native projects root",
+    );
+  const expected = Buffer.from(contents, "utf8");
+  await writeFile(targetFile, expected, { flag: "wx", mode: 0o600 });
+  const bridge = { file: targetFile, expected };
+  try {
+    const persisted = await readFile(targetFile);
+    if (!isDeepStrictEqual(persisted, expected))
+      throw new CodeBuddyError(
+        "nativeFailure",
+        "Cross-directory history bridge changed native bytes",
+      );
+    return bridge;
+  } catch (error) {
+    return failAfterBridgeCleanup(error, bridge);
+  }
+}
+
+async function cleanupBridge(bridge: OwnedCopy | undefined) {
+  if (!bridge) return;
+  try {
+    const info = await lstat(bridge.file);
+    if (!info.isFile() || (info.mode & 0o077) !== 0) return;
+    if (!isDeepStrictEqual(await readFile(bridge.file), bridge.expected)) return;
+    await unlink(bridge.file);
+  } catch (error) {
+    if (record(error).code !== "ENOENT") throw error;
+  }
+}
+
+async function failAfterBridgeCleanup(
+  failure: unknown,
+  bridge: OwnedCopy | undefined,
+): Promise<never> {
+  try {
+    await cleanupBridge(bridge);
+  } catch (cleanupFailure) {
+    throw new AggregateError(
+      [failure, cleanupFailure],
+      "Native derivation and bridge cleanup both failed",
+    );
+  }
+  throw failure;
+}
+
+interface ChildRange {
+  afterId?: string;
+  lastId: string;
+}
+
+interface ReferencedChild {
+  childId: string;
+  ranges: ChildRange[];
+}
+
+function argumentsRecord(value: unknown) {
+  if (typeof value !== "string") return record(value);
+  try {
+    return record(JSON.parse(value));
+  } catch {
+    return {};
+  }
+}
+
+/** Agent call/result correlation is native callId-based; parentId adjacency is not stable. */
+function referencedChildren(rows: Row[]): ReferencedChild[] {
+  const calls = new Map<string, string | undefined>();
+  const children = new Map<string, ReferencedChild>();
+  for (const row of rows) {
+    if (row.type === "function_call" && row.name === "Agent") {
+      const callId = text(row.callId);
+      if (!callId || calls.has(callId))
+        throw new CodeBuddyError("protocolError", "Agent delegation identity is ambiguous");
+      const resumed = text(argumentsRecord(row.arguments).resume);
+      if (resumed && !validCodeBuddyChildId(resumed))
+        throw new CodeBuddyError("protocolError", "Agent delegation has an invalid child identity");
+      calls.set(callId, resumed || undefined);
+      continue;
+    }
+    if (row.type !== "function_call_result") continue;
+    const callId = text(row.callId);
+    if (!calls.has(callId)) continue;
+    const subagent = record(record(record(row.providerData).toolResult).subAgent);
+    const childId = text(subagent.sessionId);
+    if (!validCodeBuddyChildId(childId))
+      throw new CodeBuddyError(
+        "unsupported",
+        "Retained Agent result has no verified native child identity",
+      );
+    const resumed = calls.get(callId);
+    if (resumed && resumed !== childId)
+      throw new CodeBuddyError("protocolError", "Agent result changed its child identity");
+    const lastId = text(subagent.lastId);
+    const afterId = text(subagent.afterId);
+    if (!lastId)
+      throw new CodeBuddyError(
+        "unsupported",
+        "Retained Agent result has no bounded child transcript range",
+      );
+    const child = children.get(childId) ?? { childId, ranges: [] };
+    child.ranges.push({ ...(afterId ? { afterId } : {}), lastId });
+    children.set(childId, child);
+    if (children.size > 256)
+      throw new CodeBuddyError("unsupported", "Too many retained Subagent transcripts");
+    calls.delete(callId);
+  }
+  if (calls.size)
+    throw new CodeBuddyError("unsupported", "Retained Agent delegation is incomplete");
+  return [...children.values()];
+}
+
+function assertChildRanges(rows: Row[], child: ReferencedChild) {
+  const positions = new Map<string, number[]>();
+  for (const [index, row] of rows.entries()) {
+    const id = text(row.id);
+    if (!id) continue;
+    const matches = positions.get(id) ?? [];
+    matches.push(index);
+    positions.set(id, matches);
+  }
+  let previous = -1;
+  for (const range of child.ranges) {
+    const last = positions.get(range.lastId);
+    const after = range.afterId ? positions.get(range.afterId) : undefined;
+    if (
+      last?.length !== 1 ||
+      (after && after.length !== 1) ||
+      (range.afterId && !after) ||
+      (after && (after[0] ?? -1) >= (last[0] ?? -1)) ||
+      (last[0] ?? -1) < previous
+    )
+      throw new CodeBuddyError("protocolError", "Agent result child range is inconsistent");
+    previous = last[0] ?? -1;
+  }
+}
+
+async function plainDirectory(parent: string, name: string) {
+  const directory = path.join(parent, name);
+  await mkdir(directory, { mode: 0o700 }).catch((error) => {
+    if (record(error).code !== "EEXIST") throw error;
+  });
+  const info = await lstat(directory);
+  if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o022) !== 0)
+    throw new CodeBuddyError("invalidRequest", "Redirected native Subagent directory");
+  const actual = await realpath(directory);
+  if (!sameResolvedPath(actual, directory))
+    throw new CodeBuddyError("invalidRequest", "Redirected native Subagent directory");
+  return directory;
+}
+
+async function verifiedChildFile(file: string, expected: Buffer) {
+  const info = await lstat(file);
+  if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0)
+    throw new CodeBuddyError("invalidRequest", "Unsafe derived Subagent transcript");
+  if (!sameResolvedPath(await realpath(file), file))
+    throw new CodeBuddyError("invalidRequest", "Redirected derived Subagent transcript");
+  const before = await codeBuddyFileVersion(file);
+  const actual = await readCodeBuddyVersionedText(
+    file,
+    CODEBUDDY_CHILD_MAX_BYTES,
+    "Subagent transcript exceeds 8 MB",
+    before,
+  );
+  if (
+    !actual.reusableVersion ||
+    !sameCodeBuddyFileVersion(before, actual.reusableVersion) ||
+    !isDeepStrictEqual(Buffer.from(actual.contents, "utf8"), expected)
+  )
+    throw new CodeBuddyError(
+      "nativeFailure",
+      "Native Fork produced a different Subagent transcript",
+    );
+}
+
+async function persistChildCopy(file: string, expected: Buffer): Promise<OwnedCopy | undefined> {
+  try {
+    await writeFile(file, expected, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (record(error).code !== "EEXIST") throw error;
+    await verifiedChildFile(file, expected);
+    return undefined;
+  }
+  const copy = { file, expected };
+  try {
+    await verifiedChildFile(file, expected);
+    return copy;
+  } catch (error) {
+    return failAfterBridgeCleanup(error, copy);
+  }
+}
+
+async function copyInheritedChildren(options: {
+  references: ReferencedChild[];
+  sourceRef: NativeSessionRef;
+  sourceCwd: string;
+  sourceHistoryFile: string;
+  targetRef: NativeSessionRef;
+  targetHistoryFile: string;
+}) {
+  const { references } = options;
+  if (!references.length)
+    return { descriptors: [] as CodeBuddyInheritedChild[], created: [] as OwnedCopy[] };
+
+  const sourceHistoryFile = await realpath(options.sourceHistoryFile);
+  const sourceProject = path.dirname(sourceHistoryFile);
+  if (
+    !sameResolvedPath(
+      sourceHistoryFile,
+      path.join(sourceProject, `${options.sourceRef.nativeSessionId}.jsonl`),
+    )
+  )
+    throw new CodeBuddyError("invalidRequest", "Unexpected source history location");
+  const sourceDirectory = path.join(sourceProject, options.sourceRef.nativeSessionId, "subagents");
+  const sourceDirectoryInfo = await lstat(sourceDirectory);
+  if (!sourceDirectoryInfo.isDirectory() || sourceDirectoryInfo.isSymbolicLink())
+    throw new CodeBuddyError("invalidRequest", "Redirected source Subagent directory");
+  if (!sameResolvedPath(await realpath(sourceDirectory), sourceDirectory))
+    throw new CodeBuddyError("invalidRequest", "Redirected source Subagent directory");
+
+  const targetHistoryFile = await realpath(options.targetHistoryFile);
+  const targetProject = path.dirname(targetHistoryFile);
+  if (
+    !sameResolvedPath(
+      targetHistoryFile,
+      path.join(targetProject, `${options.targetRef.nativeSessionId}.jsonl`),
+    )
+  )
+    throw new CodeBuddyError("invalidRequest", "Unexpected target history location");
+  const targetSessionDirectory = await plainDirectory(
+    targetProject,
+    options.targetRef.nativeSessionId,
+  );
+  const targetDirectory = await plainDirectory(targetSessionDirectory, "subagents");
+
+  const descriptors: CodeBuddyInheritedChild[] = [];
+  const created: OwnedCopy[] = [];
+  try {
+    for (const reference of references) {
+      const sourceFile = path.join(sourceDirectory, `${reference.childId}.jsonl`);
+      const sourceInfo = await lstat(sourceFile);
+      if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink())
+        throw new CodeBuddyError("invalidRequest", "Redirected source Subagent transcript");
+      const before = await codeBuddyFileVersion(sourceFile);
+      if (!sameResolvedPath(before.realFile, sourceFile))
+        throw new CodeBuddyError("invalidRequest", "Redirected source Subagent transcript");
+      if (before.size > CODEBUDDY_CHILD_MAX_BYTES)
+        throw new CodeBuddyError("unsupported", "Subagent transcript exceeds 8 MB");
+      const source = await readCodeBuddyVersionedText(
+        sourceFile,
+        CODEBUDDY_CHILD_MAX_BYTES,
+        "Subagent transcript exceeds 8 MB",
+        before,
+      );
+      if (!source.reusableVersion)
+        throw new CodeBuddyError("sessionBusy", "Source Subagent changed during Fork");
+      const validated = await validateCodeBuddyChildContents(
+        source.contents,
+        options.sourceRef,
+        reference.childId,
+        options.sourceCwd,
+        false,
+      );
+      assertChildRanges(validated.entries, reference);
+      const last = reference.ranges.at(-1)?.lastId;
+      if (!last) throw new CodeBuddyError("protocolError", "Missing Agent result child range");
+      const prefix = await codeBuddyChildPrefixThrough(source.contents, last, validated);
+      const expected = Buffer.from(prefix.contents, "utf8");
+      const targetFile = path.join(targetDirectory, `${reference.childId}.jsonl`);
+      const copy = await persistChildCopy(targetFile, expected);
+      if (copy) created.push(copy);
+
+      const after = await readCodeBuddyVersionedText(
+        sourceFile,
+        CODEBUDDY_CHILD_MAX_BYTES,
+        "Subagent transcript exceeds 8 MB",
+        before,
+      );
+      if (
+        !after.reusableVersion ||
+        !sameCodeBuddyFileVersion(before, after.reusableVersion) ||
+        after.contents !== source.contents
+      )
+        throw new CodeBuddyError("sessionBusy", "Source Subagent changed during Fork");
+      descriptors.push(
+        codeBuddyInheritedChildDescriptor(reference.childId, prefix.contents, prefix.child),
+      );
+    }
+    return { descriptors, created };
+  } catch (failure) {
+    const cleanupFailures: unknown[] = [];
+    for (const copy of created.toReversed()) {
+      try {
+        await cleanupBridge(copy);
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
+    }
+    if (cleanupFailures.length)
+      throw new AggregateError(
+        [failure, ...cleanupFailures],
+        "Subagent copy and cleanup both failed",
+      );
+    throw failure;
+  }
+}
+
+/** Keep the print-copy runtime identity away from model work and subagents. */
 export async function deriveCodeBuddySession(
   options: DerivationOptions,
 ): Promise<ResumeSessionInput> {
   const { input, environment, factory, signal } = options;
-  validateNativeRef(input.sourceRef);
-  const source = await codeBuddyNativeHistory(input.cwd, input.sourceRef, environment);
-  const retained = retainedRowCount(input, source.contents);
+  const sourceCwd = options.sourceCwd ?? input.cwd;
+  const profile = options.profile ?? CODEBUDDY_RUNTIME_PROFILE;
+  const strictHistoryBinding = profile.historyCapabilities?.forkAcrossCwd === true;
+  validateNativeRef(input.sourceRef, profile);
+  const source = await codeBuddyNativeHistory(sourceCwd, input.sourceRef, environment, profile);
+  const retained = retainedRowCount(input, source.contents, sourceCwd, profile);
   const sourceRows = nativeHistoryRows(source.contents);
+  const childReferences = referencedChildren(sourceRows.slice(0, retained));
   const temporary = nativeSessionRefSchema.parse({
-    harnessId: CODEBUDDY_ID,
+    harnessId: profile.harnessId,
     nativeSessionId: randomUUID(),
     formatVersion: 1,
   });
   await (options.copy ?? copyCodeBuddySession)(
-    input.cwd,
+    sourceCwd,
     input.sourceRef.nativeSessionId,
     temporary.nativeSessionId,
     environment,
     signal,
+    options.invocationFactory ?? codeBuddyInvocation,
   );
-  const copy = await codeBuddyNativeHistory(input.cwd, temporary, environment, source.contents);
-  if (!isDeepStrictEqual(nativeHistoryRows(copy.contents), sourceRows))
+  const nativeCopy = await codeBuddyNativeHistory(sourceCwd, temporary, environment, profile, {
+    ...(strictHistoryBinding ? { requirePrimary: true as const } : {}),
+    inheritedContents: source.contents,
+  });
+  if (!isDeepStrictEqual(nativeHistoryRows(nativeCopy.contents), sourceRows))
     throw new CodeBuddyError("unsupported", "Native history copy changed the source prefix");
+  const bridge = strictHistoryBinding
+    ? await bridgeCopyToTarget(
+        sourceCwd,
+        input.cwd,
+        temporary,
+        nativeCopy.contents,
+        environment,
+        profile,
+      )
+    : undefined;
+  if (strictHistoryBinding) {
+    let targetCopy;
+    try {
+      targetCopy = await codeBuddyNativeHistory(input.cwd, temporary, environment, profile, {
+        requirePrimary: true,
+        inheritedContents: nativeCopy.contents,
+      });
+    } catch (error) {
+      return failAfterBridgeCleanup(error, bridge);
+    }
+    if (targetCopy.contents !== nativeCopy.contents) {
+      return failAfterBridgeCleanup(
+        new CodeBuddyError("nativeFailure", "Cross-directory history bridge changed native bytes"),
+        bridge,
+      );
+    }
+  }
+
   let derivedId: string | undefined;
   let failure: unknown;
+  let inheritedChildCopies: OwnedCopy[] = [];
+  let derivationSucceeded = false;
   let receiveCommands!: (commands: unknown) => void;
   const commands = new Promise<unknown>((resolve) => {
     receiveCommands = resolve;
   });
-  const client = factory({
-    cwd: input.cwd,
-    environment,
-    ephemeral: false,
-    temporarySessionId: temporary.nativeSessionId,
-    handlers: {
-      permission: async () => ({ outcome: { outcome: "cancelled" } }),
-      question: async () => ({ outcome: "cancelled" }),
-      fault: (error) => {
-        failure = error;
+  let client;
+  try {
+    client = factory({
+      cwd: input.cwd,
+      environment,
+      ephemeral: false,
+      temporarySessionId: temporary.nativeSessionId,
+      handlers: {
+        permission: async () => ({ outcome: { outcome: "cancelled" } }),
+        question: async () => ({ outcome: "cancelled" }),
+        fault: (error) => {
+          failure = error;
+        },
+        update: ({ sessionId, update }) => {
+          if (record(update).sessionUpdate === "available_commands_update")
+            receiveCommands(record(update).availableCommands);
+          const meta = record(record(update)._meta);
+          if (
+            meta["codebuddy.ai/sessionReset"] === true &&
+            meta["codebuddy.ai/newSessionId"] === sessionId
+          )
+            derivedId = sessionId;
+        },
       },
-      update: ({ sessionId, update }) => {
-        if (record(update).sessionUpdate === "available_commands_update")
-          receiveCommands(record(update).availableCommands);
-        const meta = record(record(update)._meta);
-        if (
-          meta["codebuddy.ai/sessionReset"] === true &&
-          meta["codebuddy.ai/newSessionId"] === sessionId
-        )
-          derivedId = sessionId;
-      },
-    },
-  });
+    });
+  } catch (error) {
+    return failAfterBridgeCleanup(error, bridge);
+  }
   const abort = () => {
     void client.close();
   };
   signal.addEventListener("abort", abort, { once: true });
-  let cleanupAttempted = false;
+  let primaryFailure: unknown;
   try {
     if (!client.removeCopy)
       throw new CodeBuddyError("unsupported", "Native temporary Session cleanup is unavailable");
     if (signal.aborted) throw new CodeBuddyError("invalidState", "Adapter closed during Fork");
     await client.initialize();
     const opened = await client.open(input.cwd, temporary.nativeSessionId);
+    if (opened.sessionId && opened.sessionId !== temporary.nativeSessionId)
+      throw new CodeBuddyError("protocolError", "ACP loaded a different temporary Session");
     const nativeState = configuration(opened.configOptions).state;
     const available = await bounded(commands, 5_000, "Native command discovery", abort);
     if (!Array.isArray(available) || !available.some((entry) => record(entry).name === "fork"))
@@ -294,28 +716,92 @@ export async function deriveCodeBuddySession(
       [input.sourceRef.nativeSessionId, temporary.nativeSessionId].includes(derivedId)
     )
       throw new CodeBuddyError("unsupported", "Native Fork did not report a separate Session");
-    const ref: NativeSessionRef = nativeSessionRefSchema.parse({
-      harnessId: CODEBUDDY_ID,
+    const preliminaryRef = nativeSessionRefSchema.parse({
+      harnessId: profile.harnessId,
       nativeSessionId: derivedId,
       formatVersion: 1,
-      locator: { codebuddyDerived: 1 },
     });
-    const forked = await codeBuddyNativeHistory(input.cwd, ref, environment);
+    const historicalCwds = [
+      ...new Set([
+        ...sourceRows.flatMap((row) => (typeof row.cwd === "string" ? [row.cwd] : [])),
+        ...source.historicalCwds,
+        sourceCwd,
+        input.cwd,
+      ]),
+    ];
+    const historyTransaction = strictHistoryBinding
+      ? ({ requirePrimary: true, allowedHistoricalCwds: historicalCwds } as const)
+      : undefined;
+    const forked = await codeBuddyNativeHistory(
+      input.cwd,
+      preliminaryRef,
+      environment,
+      profile,
+      historyTransaction,
+    );
     const forkRows = nativeHistoryRows(forked.contents);
     assertCopiedPrefix(sourceRows, forkRows);
+    const marker = strictHistoryBinding
+      ? nativeRawHistoryRows(forked.contents).findLast(
+          (row) =>
+            Boolean(text(row.id)) &&
+            row.sessionId === derivedId &&
+            typeof row.cwd === "string" &&
+            sameResolvedPath(row.cwd, input.cwd),
+        )
+      : undefined;
+    if (strictHistoryBinding && !marker)
+      throw new CodeBuddyError(
+        "unsupported",
+        "Native Fork did not persist a target binding marker",
+      );
     if (!client.rollback)
       throw new CodeBuddyError("unsupported", "Native history rewind is unavailable");
     const point = retained ? text(forkRows[retained - 1]?.id) : null;
     const rewound = await client.rollback(derivedId, point);
     if (rewound.applied !== true || (rewound.actualForkPointId ?? null) !== point)
       throw new CodeBuddyError("nativeFailure", "Native history rewind was not confirmed");
-    const verified = await codeBuddyNativeHistory(input.cwd, ref, environment);
-    if (!isDeepStrictEqual(nativeHistoryRows(verified.contents), forkRows.slice(0, retained)))
+    const verified = await codeBuddyNativeHistory(
+      input.cwd,
+      preliminaryRef,
+      environment,
+      profile,
+      historyTransaction,
+    );
+    const finalRows = nativeHistoryRows(verified.contents);
+    if (!isDeepStrictEqual(finalRows, forkRows.slice(0, retained)))
       throw new CodeBuddyError(
         "nativeFailure",
         "Native history rewind did not persist the exact prefix",
       );
-    const after = await codeBuddyNativeHistory(input.cwd, input.sourceRef, environment);
+    const inheritedChildren = await copyInheritedChildren({
+      references: childReferences,
+      sourceRef: input.sourceRef,
+      sourceCwd,
+      sourceHistoryFile: source.file,
+      targetRef: preliminaryRef,
+      targetHistoryFile: verified.file,
+    });
+    inheritedChildCopies = inheritedChildren.created;
+    const inheritedChildLocator = inheritedChildren.descriptors.length
+      ? { codebuddyInheritedChildren: inheritedChildren.descriptors }
+      : {};
+    const ref = nativeSessionRefSchema.parse({
+      ...preliminaryRef,
+      locator: strictHistoryBinding
+        ? {
+            codebuddyDerived: 1,
+            boundCwd: codeBuddyCanonicalCwd(input.cwd),
+            targetProjectSlug: codeBuddyProjectSlug(input.cwd),
+            inheritedPrefixRows: finalRows.length,
+            inheritedPrefixSha256: nativeRowsDigest(finalRows),
+            bindingMarkerId: text(marker?.id),
+            ...inheritedChildLocator,
+          }
+        : { codebuddyDerived: 1, ...inheritedChildLocator },
+    });
+    await codeBuddyNativeHistory(input.cwd, ref, environment, profile);
+    const after = await codeBuddyNativeHistory(sourceCwd, input.sourceRef, environment, profile);
     if (after.contents !== source.contents)
       throw new CodeBuddyError("sessionBusy", "Source history changed during Fork");
     if (signal.aborted) throw new CodeBuddyError("invalidState", "Adapter closed during Fork");
@@ -340,9 +826,7 @@ export async function deriveCodeBuddySession(
           (text(saved.mode)
             ? harnessPermissionModeIdSchema.parse(saved.mode)
             : state.effectivePermissionModeId));
-    cleanupAttempted = true;
-    await client.removeCopy();
-    return {
+    const resume: ResumeSessionInput = {
       kind: "resume",
       nativeRef: ref,
       cwd: input.cwd,
@@ -351,21 +835,53 @@ export async function deriveCodeBuddySession(
       ...(thinking ? { thinkingOptionId: thinking } : {}),
       ...(mode ? { permissionModeId: mode } : {}),
     };
+    derivationSucceeded = true;
+    return resume;
   } catch (error) {
-    if (!cleanupAttempted && client.removeCopy) {
-      try {
-        await client.removeCopy();
-      } catch {
-        throw new CodeBuddyError(
-          "nativeFailure",
-          `${error instanceof Error ? error.message : "Native Fork failed"}; temporary Session ${temporary.nativeSessionId} could not be removed`,
-        );
-      }
-    }
+    primaryFailure = error;
     throw error;
   } finally {
     signal.removeEventListener("abort", abort);
-    await client.close();
+    const cleanupFailures: unknown[] = [];
+    let temporaryCleanupFailed = false;
+    try {
+      if (client.removeCopy) await client.removeCopy();
+    } catch (error) {
+      temporaryCleanupFailed = true;
+      cleanupFailures.push(error);
+    }
+    try {
+      await client.close();
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+    try {
+      await cleanupBridge(bridge);
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+    if (!derivationSucceeded || cleanupFailures.length) {
+      for (const copy of inheritedChildCopies.toReversed()) {
+        try {
+          await cleanupBridge(copy);
+        } catch (error) {
+          cleanupFailures.push(error);
+        }
+      }
+    }
+    if (cleanupFailures.length) {
+      if (primaryFailure)
+        throw new AggregateError(
+          [primaryFailure, ...cleanupFailures],
+          `${primaryFailure instanceof Error ? primaryFailure.message : "Native derivation failed"}; ${
+            temporaryCleanupFailed
+              ? `temporary Session ${temporary.nativeSessionId} could not be removed`
+              : "native derivation cleanup also failed"
+          }`,
+        );
+      if (cleanupFailures.length === 1) throw cleanupFailures[0];
+      throw new AggregateError(cleanupFailures, "Native derivation cleanup failed");
+    }
     // The native HTTP endpoint exits with this same administrative ACP process.
   }
 }
