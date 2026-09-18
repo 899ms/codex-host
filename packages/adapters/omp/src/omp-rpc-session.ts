@@ -1430,8 +1430,14 @@ export class OmpRpcSession {
 
   #updateTool(active: ActiveTurn, value: Record<string, unknown>): void {
     const callId = value.toolCallId;
-    const outputResult = jsonValueSchema.safeParse(value.partialResult);
-    if (typeof callId !== "string" || !active.tools.has(callId) || !outputResult.success) {
+    if (typeof callId !== "string" || callId.length === 0) {
+      throw new OmpRpcFaultError("protocolError", "Omp RPC returned an invalid Tool update");
+    }
+    // Omp reports background job progress after `tool_execution_end`, so an
+    // update for an already-completed or unknown call is not a protocol fault.
+    if (!active.tools.has(callId)) return;
+    const outputResult = jsonValueSchema.safeParse(value.partialResult ?? null);
+    if (!outputResult.success) {
       throw new OmpRpcFaultError("protocolError", "Omp RPC returned an invalid Tool update");
     }
     active.onEvent({ type: "tool.updated", callId, output: outputResult.data });
@@ -1440,10 +1446,15 @@ export class OmpRpcSession {
   #completeTool(active: ActiveTurn, value: Record<string, unknown>): void {
     const callId = value.toolCallId;
     const toolName = value.toolName;
+    if (typeof callId !== "string" || callId.length === 0) {
+      throw new OmpRpcFaultError("protocolError", "Omp RPC returned an invalid Tool end");
+    }
+    const expectedName = active.tools.get(callId);
+    // Background jobs can finish again after their call or parent Turn ended.
+    // Ignore untracked calls before validating payloads intended for active Tools.
+    if (expectedName === undefined) return;
     const result = jsonValueSchema.safeParse(value.result);
-    const expectedName = typeof callId === "string" ? active.tools.get(callId) : undefined;
     if (
-      typeof callId !== "string" ||
       typeof toolName !== "string" ||
       expectedName !== toolName ||
       (value.isError !== undefined && typeof value.isError !== "boolean") ||
