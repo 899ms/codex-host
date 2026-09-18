@@ -1,8 +1,10 @@
 # OMP 原生提问与工具审批
 
-OMP 使用原生 RPC `extension_ui_request` / `extension_ui_response`，所有转换位于 `packages/adapters/omp`，不修改公共 Adapter 或 Host。
+OMP 以原生 `--mode rpc-ui` 启动，使用 `extension_ui_request` / `extension_ui_response`，所有转换位于 `packages/adapters/omp`，不修改公共 Adapter 或 Host。
 
 ## 提问
+
+必须使用 `rpc-ui`：普通 `rpc` 虽能转发扩展产生的 UI 请求，但启动时不创建内置 `ask` 工具，也不连接该工具的 UI Context。只验证扩展提问事件不能证明模型可调用 `ask`。`rpc-ui` 使用同一 RPC 协议，并启用原生交互工具；同时按 OMP 自身规则禁用 PTY，适配外部 UI。
 
 原生 `select`、`confirm`、`input`、`editor` 分别映射为单选、确认、单行文本、多行文本问题。`select.options` 保留原生字符串作为响应值；对齐的 `optionDetails[].description` 作为选项说明展示，缺失时兼容旧版本。非法类型或长度不匹配属于协议错误，不能把说明绑定到错误选项。
 
@@ -25,3 +27,5 @@ OMP 的 `ask` 工具通过这些基础交互组合多问题、多选和 “Other
 - [权限说明](https://github.com/can1357/oh-my-pi/blob/main/docs/approval-mode.md)：权限策略属于 OMP。
 
 聚焦测试覆盖选项说明、非法元数据、有效/非法/重复答案、原生取消与超时回包，以及既有审批行为。另在隔离临时目录运行 OMP 18.0.6 原生 RPC 扩展命令，实际收到带 optionDetails 的 select，返回 JSON 选项后获得原生成功通知；该探针不发起模型请求。合成进程测试与原生 RPC 探针不等同于真实模型或 Desktop 全链路验收。
+
+原生回归测试通过 `CODEXHOST_OMP_NATIVE_TEST_COMMAND` 指向已安装的 OMP（当前测试包装器用于 macOS/Linux）。测试使用隔离 Agent 目录和 localhost 模型夹具，经公共 Adapter 创建 Session，检查真实模型请求中包含 `ask`，由原生工具触发 Host Question、保留选项说明，再把 Host 答案送回原生工具及下一次模型请求。此测试在普通 `rpc` 下因缺少 `ask` 失败，切换 `rpc-ui` 后通过；不调用外部模型。

@@ -238,7 +238,7 @@ describe("OMP RPC session", () => {
           isExecutable: () => true,
         },
       ),
-    ).toMatchObject({ arguments: ["--mode", "rpc", "--resume", "/tmp/omp.jsonl"] });
+    ).toMatchObject({ arguments: ["--mode", "rpc-ui", "--resume", "/tmp/omp.jsonl"] });
   });
 
   it("maps OMP Permission Modes to startup approval flags", () => {
@@ -252,7 +252,7 @@ describe("OMP RPC session", () => {
         { cwd: "/synthetic", environment: {}, permissionMode: "write" },
         dependencies,
       ),
-    ).toMatchObject({ arguments: ["--mode", "rpc", "--approval-mode", "write"] });
+    ).toMatchObject({ arguments: ["--mode", "rpc-ui", "--approval-mode", "write"] });
   });
 
   it("uses OMP's yolo approval mode for unattended full access", () => {
@@ -265,7 +265,7 @@ describe("OMP RPC session", () => {
           isExecutable: () => true,
         },
       ),
-    ).toMatchObject({ arguments: ["--mode", "rpc", "--approval-mode", "yolo"] });
+    ).toMatchObject({ arguments: ["--mode", "rpc-ui", "--approval-mode", "yolo"] });
   });
 
   it("uses OMP's --fork flag for forked sessions", () => {
@@ -278,7 +278,7 @@ describe("OMP RPC session", () => {
           isExecutable: () => true,
         },
       ),
-    ).toMatchObject({ arguments: ["--mode", "rpc", "--fork", "/tmp/omp.jsonl"] });
+    ).toMatchObject({ arguments: ["--mode", "rpc-ui", "--fork", "/tmp/omp.jsonl"] });
   });
 
   it("starts through ready/negotiation and settles a streamed text turn on agent_end", async () => {

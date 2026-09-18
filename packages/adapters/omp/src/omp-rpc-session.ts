@@ -471,7 +471,8 @@ export function ompRpcProcessCommand(
     : [];
   const arguments_ = [
     "--mode",
-    "rpc",
+    // OMP only creates ask and connects its tool UI in rpc-ui mode.
+    "rpc-ui",
     ...permissionArguments,
     ...modelArguments,
     ...sessionArguments,
