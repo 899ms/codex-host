@@ -1453,8 +1453,12 @@ export class AntigravityAdapter implements HarnessAdapter {
     this.#inspectTimeoutMs = options.inspectTimeoutMs ?? DEFAULT_INSPECT_TIMEOUT_MS;
     this.#printTimeout = options.printTimeout ?? DEFAULT_PRINT_TIMEOUT;
     this.#toolOutputLimit = options.toolOutputLimit ?? DEFAULT_TOOL_OUTPUT_LIMIT;
-    this.#subagentObservationTimeoutMs =
+    const subagentObservationTimeoutMs =
       options.subagentObservationTimeoutMs ?? DEFAULT_SUBAGENT_OBSERVATION_TIMEOUT_MS;
+    if (!Number.isFinite(subagentObservationTimeoutMs) || subagentObservationTimeoutMs <= 0) {
+      throw new RangeError("subagentObservationTimeoutMs must be a finite positive number");
+    }
+    this.#subagentObservationTimeoutMs = subagentObservationTimeoutMs;
   }
 
   async inspect(input: InspectHarnessInput = {}): Promise<HarnessInspection> {

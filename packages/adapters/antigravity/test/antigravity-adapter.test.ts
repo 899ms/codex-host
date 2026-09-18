@@ -117,6 +117,15 @@ const FAKE_MODELS = [
 ] as const;
 
 describe("Antigravity Adapter", () => {
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1])(
+    "rejects invalid Subagent observation timeout %s",
+    (subagentObservationTimeoutMs) => {
+      expect(() => new AntigravityAdapter({ subagentObservationTimeoutMs })).toThrow(
+        new RangeError("subagentObservationTimeoutMs must be a finite positive number"),
+      );
+    },
+  );
+
   it("reads account quota without a Thread and hides it after native authentication stops returning data", async () => {
     const fixture = await fakeAgy([
       JSON.stringify({ event: "command_result", command: USAGE_COMMAND }),
