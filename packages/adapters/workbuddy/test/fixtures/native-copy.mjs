@@ -28,10 +28,10 @@ process.stdin.on("end", () => {
   const root = process.env.WORKBUDDY_CONFIG_DIR || process.env.CODEBUDDY_CONFIG_DIR;
   const slug = path
     .resolve(process.cwd())
-    .replace(/[^a-z0-9]/giu, "-")
-    .replace(/-+/gu, "-")
-    .replace(/^-|-$/gu, "")
-    .toLowerCase();
+    .replace(/[/\\:]/gu, "-")
+    .replace(/^-+/u, "")
+    .replace(/-+$/u, "")
+    .replace(/-+/gu, "-");
   const directory = path.join(root, "projects", slug);
   mkdirSync(directory, { recursive: true });
   const source = readFileSync(path.join(directory, `${sourceId}.jsonl`), "utf8");

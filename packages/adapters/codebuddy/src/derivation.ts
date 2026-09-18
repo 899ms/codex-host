@@ -280,7 +280,10 @@ async function bridgeCopyToTarget(
     realpath(targetDirectory),
   ]);
   if (
-    !sameResolvedPath(realTargetDirectory, path.join(realProjects, codeBuddyProjectSlug(targetCwd)))
+    !sameResolvedPath(
+      realTargetDirectory,
+      path.join(realProjects, codeBuddyProjectSlug(targetCwd, profile)),
+    )
   )
     throw new CodeBuddyError(
       "invalidRequest",
@@ -792,7 +795,7 @@ export async function deriveCodeBuddySession(
         ? {
             codebuddyDerived: 1,
             boundCwd: codeBuddyCanonicalCwd(input.cwd),
-            targetProjectSlug: codeBuddyProjectSlug(input.cwd),
+            targetProjectSlug: codeBuddyProjectSlug(input.cwd, profile),
             inheritedPrefixRows: finalRows.length,
             inheritedPrefixSha256: nativeRowsDigest(finalRows),
             bindingMarkerId: text(marker?.id),

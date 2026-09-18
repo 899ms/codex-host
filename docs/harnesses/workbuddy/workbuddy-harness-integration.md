@@ -36,7 +36,13 @@ ELECTRON_RUN_AS_NODE=1 \
 "/Applications/WorkBuddy AI.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"
 ```
 
-进入 TUI 后输入 `/login`，完成浏览器认证再重试 Harness。这里使用的仍是 App 内置 CLI，不表示需要另装一个 CLI。不要使用 Desktop owner runtime 的凭据，也不要发明 `codebuddy auth login` 命令。本轮没有接受登录提示、发送模型 Prompt 或触发付费调用，因此认证后的真实 WorkBuddy Turn 仍待验收。
+进入 TUI 后输入 `/login`，完成浏览器认证再重试 Harness。这里使用的仍是 App 内置 CLI，不表示需要另装一个 CLI。不要使用 Desktop owner runtime 的凭据，也不要发明 `codebuddy auth login` 命令。
+
+## 工作目录与原生历史定位
+
+Session 的执行工作目录始终来自 Codex Desktop 传入的 `cwd`，包括 Desktop 选择的 worktree；配置根 `~/.workbuddy-ai` 只是原生状态目录，不替代执行目录。历史文件使用 WorkBuddy 内置 CLI 的 `PathUtils.canonicalizeStorePath` / `compressPath` 规则：先解析工作目录的真实路径，再将 `/`、`\`、`:` 转为连字符、去除首尾连字符并合并连续连字符，保留大小写、点号、空格、下划线及 Unicode 字符。
+
+WorkBuddy Profile 声明该目录编码；历史读取、跨目录 Fork 的临时桥接和派生 locator 校验均使用同一规则。普通会话仍拒绝只存在于其他项目目录的文件，并逐条验证历史中的 cwd 和 Session 身份；不以全局搜索结果或跳过归属校验来容错。此规则来自原生文件存储实现，不是 ACP 承诺的存储协议，升级时应以原生目录样本回归验证。测试使用独立目录样本覆盖首条 Turn、恢复、路径别名、跨目录 Fork 和错误归属，避免用被测路径函数生成全部输入。
 
 ## 动态产品快照与模型目录
 
@@ -113,7 +119,7 @@ codexhost broker status --harness workbuddy
 
 ## 验证状态
 
-本轮完成了以下无模型请求探测：
+初始接入完成了以下无模型请求探测：
 
 - 读取 WorkBuddy AI 5.5.2 内置产品元数据及 CodeBuddy 2.137.1 CLI 包版本；
 - 通过内置 CLI 启动 `--acp` 并成功完成 `initialize`；
@@ -121,4 +127,6 @@ codexhost broker status --harness workbuddy
 - 确认标准 ACP `session/fork` 不存在，并核对公开 CLI Fork、原生 `/fork` 与 rollback 扩展；
 - 核对公开 ACP 能力与私有 owner runtime/admission 的边界。
 
-没有执行登录确认、真实模型 Prompt、付费调用、危险权限、真实跨 Harness 委派、真实压缩、Fork、Resume、历史或子 Agent 的 WorkBuddy 在线验收。Fork、修订、命令、委派、Adapter、插件加载、发行 Bundle、Host 路由和 Desktop 的自动化验证使用受控 fixture；实际结果以对应变更的验证报告为准，不能由本文替代。
+2026-09-18 在本机 macOS 的 WorkBuddy App 内置 CLI 上，以现有原生认证和 Auto 模型完成了真实 create → 空历史读取 → 首条 Turn → close → 同 Session resume → 第二条 Turn → 两轮历史读取。执行目录包含大小写、点号、中文和空格；两个 Turn 都成功，没有请求工具或文件修改。另验证了真实跨目录 Fork 到第一轮：派生会话恰好保留一轮，源会话仍保留两轮，派生会话关闭后可在目标 cwd 恢复。此前失败任务的原生空历史也已通过修正后的只读目录校验。
+
+危险权限、真实跨 Harness 委派、压缩及子 Agent 的在线行为尚未在本轮验收。Fork、修订、命令、委派、Adapter、插件加载、发行 Bundle、Host 路由和 Desktop 的自动化验证使用受控 fixture；实际结果以对应验证报告为准，不能由本文替代。

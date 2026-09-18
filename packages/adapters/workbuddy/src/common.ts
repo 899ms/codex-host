@@ -28,6 +28,13 @@ export const WORKBUDDY_RUNTIME_PROFILE: CodeBuddyRuntimeProfile = {
   interactionIdPrefix: "workbuddy",
   configDirectoryEnvironmentVariables: ["WORKBUDDY_CONFIG_DIR"],
   defaultConfigDirectoryName: ".workbuddy-ai",
+  // WorkBuddy's native PathUtils.compressPath preserves case, dots, spaces and Unicode.
+  projectDirectoryName: (cwd) =>
+    cwd
+      .replace(/[/\\:]/gu, "-")
+      .replace(/^-+/u, "")
+      .replace(/-+$/u, "")
+      .replace(/-+/gu, "-"),
   staticCommandCatalog: WORKBUDDY_COMMAND_CATALOG,
   nativeCommands: true,
   historyCapabilities: { fork: true, forkAcrossCwd: true, rollbackLastTurn: true },
