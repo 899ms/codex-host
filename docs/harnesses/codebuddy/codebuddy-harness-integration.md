@@ -177,10 +177,23 @@ Snapshots and Turn completion expose checkpoints based on persisted native user
 message IDs. Cross-cwd Fork remains unsupported.
 
 This requires an extra temporary CLI and administrative ACP process before the
-final writable ACP Session starts. ACP currently has no Session-delete method,
-so the temporary native copy remains in CodeBuddy's own session list; failures
-may also leave an unreturned native derived Session. Only subprocesses are
-closed, including on timeout/shutdown; the plugin does not unlink native stores.
+final writable ACP Session starts. The administrative ACP process also starts
+CodeBuddy's native HTTP server on `127.0.0.1` with an OS-assigned port and a random
+per-process password. After validating the derived history, the plugin calls the
+native `DELETE /api/v1/sessions/{id}` endpoint for only its own temporary copy.
+Successful Fork/revision therefore leaves only the final derived Session. The
+server exits with that same administrative process; no additional process or
+long-lived server is introduced. HTTP startup banners, including the password,
+are removed before ACP parsing and are not logged or persisted by the plugin.
+The password is passed through the process environment, not CLI arguments or
+user configuration.
+
+Failure cleanup attempts the same native deletion. CodeBuddy refuses to delete
+the currently active Session, so failures before `/fork` changes the active
+Session, unavailable endpoints, and shutdown can still leave temporary data.
+Cleanup failure is reported with the temporary ID, and successful cleanup is
+required before exposing a writable result. Failures can also leave an
+unreturned final derived Session. The plugin never unlinks native stores.
 Unsupported commands, changed source history, altered native copies, or an
 unconfirmed/nonpersistent rewind return an error without exposing a writable
 result.
@@ -197,3 +210,16 @@ Session, exact native IDs across process restart, one-Turn revision to empty
 history, and restoration of `plan` / `high` configuration. Focused tests also
 cover Tool suffixes, invalid checkpoints, missing advertised commands, native
 copy/rewind failures, altered history, shutdown, and configuration overrides.
+
+An isolated live-model check on CLI 2.151.0 confirmed why the shorter print-copy
+plus rollback path is not used: although replay and rollback succeed, new live
+ACP events and newly persisted parent messages retain the source Session ID,
+and a real Agent subagent writes its transcript under the source's subagent
+directory. This is an observed runtime identity failure, not just a concern
+about inherited historical rows. Native HTTP cleanup was verified to reject an
+unauthenticated request and to remove only the intermediate copy.
+The cleaned final Session was also continued with a real model and Agent call:
+live events and new parent messages used the final ID, the child transcript
+was stored beneath the final Session's subagent directory, and the source
+transcript stayed byte-for-byte unchanged. Reload and last-Turn revision
+preserved the expected two-Turn and one-Turn histories respectively.

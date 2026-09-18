@@ -247,6 +247,7 @@ export async function deriveCodeBuddySession(
     cwd: input.cwd,
     environment,
     ephemeral: false,
+    temporarySessionId: temporary.nativeSessionId,
     handlers: {
       permission: async () => ({ outcome: { outcome: "cancelled" } }),
       question: async () => ({ outcome: "cancelled" }),
@@ -269,7 +270,10 @@ export async function deriveCodeBuddySession(
     void client.close();
   };
   signal.addEventListener("abort", abort, { once: true });
+  let cleanupAttempted = false;
   try {
+    if (!client.removeCopy)
+      throw new CodeBuddyError("unsupported", "Native temporary Session cleanup is unavailable");
     if (signal.aborted) throw new CodeBuddyError("invalidState", "Adapter closed during Fork");
     await client.initialize();
     const opened = await client.open(input.cwd, temporary.nativeSessionId);
@@ -336,6 +340,8 @@ export async function deriveCodeBuddySession(
           (text(saved.mode)
             ? harnessPermissionModeIdSchema.parse(saved.mode)
             : state.effectivePermissionModeId));
+    cleanupAttempted = true;
+    await client.removeCopy();
     return {
       kind: "resume",
       nativeRef: ref,
@@ -345,9 +351,21 @@ export async function deriveCodeBuddySession(
       ...(thinking ? { thinkingOptionId: thinking } : {}),
       ...(mode ? { permissionModeId: mode } : {}),
     };
+  } catch (error) {
+    if (!cleanupAttempted && client.removeCopy) {
+      try {
+        await client.removeCopy();
+      } catch {
+        throw new CodeBuddyError(
+          "nativeFailure",
+          `${error instanceof Error ? error.message : "Native Fork failed"}; temporary Session ${temporary.nativeSessionId} could not be removed`,
+        );
+      }
+    }
+    throw error;
   } finally {
     signal.removeEventListener("abort", abort);
     await client.close();
-    // ACP has no Session deletion method. Never unlink native stores behind its back.
+    // The native HTTP endpoint exits with this same administrative ACP process.
   }
 }

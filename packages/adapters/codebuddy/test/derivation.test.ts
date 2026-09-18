@@ -71,6 +71,7 @@ async function setup(
     forkFailure?: boolean;
     sourceRace?: boolean;
     copyFailure?: boolean;
+    cleanupFailure?: boolean;
   } = {},
 ) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "cb-derive-"));
@@ -92,7 +93,14 @@ async function setup(
       contents + jsonl([{ type: "session-meta", sessionId: target, meta: {} }]),
     );
   });
+  const removeCopy = vi.fn(async () => {});
   const factory: CodeBuddyClientFactory = (context) => ({
+    removeCopy: async () => {
+      removeCopy();
+      if (options.cleanupFailure) throw new Error("native cleanup failed");
+      if (!context.temporarySessionId) throw new Error("missing owned copy");
+      await rm(file(context.temporarySessionId), { force: true });
+    },
     initialize: async () => ({}),
     open: async () => {
       context.handlers.update({
@@ -179,7 +187,20 @@ async function setup(
       signal: new AbortController().signal,
       ...override,
     });
-  return { cwd, environment, file, contents, copy, prompt, close, rollback, run, input, factory };
+  return {
+    cwd,
+    environment,
+    file,
+    contents,
+    copy,
+    prompt,
+    close,
+    rollback,
+    removeCopy,
+    run,
+    input,
+    factory,
+  };
 }
 
 describe("native CodeBuddy derivation", () => {
@@ -189,6 +210,10 @@ describe("native CodeBuddy derivation", () => {
     expect(fixture.prompt).toHaveBeenCalledWith("/fork");
     expect(fixture.rollback).toHaveBeenCalledWith("new-result");
     expect(fixture.close).toHaveBeenCalledOnce();
+    expect(fixture.removeCopy).toHaveBeenCalledOnce();
+    await expect(
+      readFile(fixture.file(fixture.copy.mock.calls[0]?.[2] ?? "missing-copy"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(fixture.file("source"), "utf8")).toBe(fixture.contents);
     const history = await codeBuddyNativeHistory(
       fixture.cwd,
@@ -208,6 +233,32 @@ describe("native CodeBuddy derivation", () => {
     expect(
       await codeBuddyNativeHistory(fixture.cwd, derived.nativeRef, fixture.environment),
     ).toEqual(history);
+  });
+
+  it("removes the owned copy on a failure after native Fork", async () => {
+    const fixture = await setup({ corrupt: true });
+    await expect(fixture.run()).rejects.toThrow("exact history prefix");
+    expect(fixture.removeCopy).toHaveBeenCalledOnce();
+    await expect(
+      readFile(fixture.file(fixture.copy.mock.calls[0]?.[2] ?? "missing-copy"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(fixture.file("source"), "utf8")).toBe(fixture.contents);
+  });
+
+  it("does not return a successful derivation if native cleanup fails", async () => {
+    const fixture = await setup({ cleanupFailure: true });
+    await expect(fixture.run()).rejects.toThrow("native cleanup failed");
+    expect(fixture.removeCopy).toHaveBeenCalledOnce();
+    expect(fixture.close).toHaveBeenCalledOnce();
+  });
+
+  it("reports retained temporary data without hiding the original Fork failure", async () => {
+    const fixture = await setup({ forkFailure: true, cleanupFailure: true });
+    await expect(fixture.run()).rejects.toThrow(
+      /fork failed; temporary Session .* could not be removed/u,
+    );
+    expect(fixture.removeCopy).toHaveBeenCalledOnce();
+    expect(fixture.close).toHaveBeenCalledOnce();
   });
 
   it("uses explicit rollback configuration before inherited configuration", async () => {
