@@ -1,20 +1,18 @@
 import { lstatSync } from "node:fs";
 import { homedir } from "node:os";
-import path from "node:path";
 import { CodeBuddyError, type CodeBuddyInvocationFactory } from "@codexhost/adapter-codebuddy";
 import {
   commandInvocation,
   environmentValue,
   isExecutableFile,
   resolveHarnessExecutable,
+  targetPath,
   withNodeRuntimeOnPath,
   type HarnessDiscoverySpec,
 } from "@codexhost/harness-discovery";
 import { workBuddyDelegationArguments } from "./delegation.js";
-
-export const WORKBUDDY_MACOS_ELECTRON = "/Applications/WorkBuddy AI.app/Contents/MacOS/Electron";
-export const WORKBUDDY_MACOS_CLI =
-  "/Applications/WorkBuddy AI.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy";
+import { resolveWorkBuddyBundle, WORKBUDDY_MACOS_ELECTRON } from "./discovery.js";
+export { WORKBUDDY_MACOS_ELECTRON, WORKBUDDY_MACOS_CLI } from "./discovery.js";
 
 export const workBuddyDiscoverySpec: HarnessDiscoverySpec = {
   id: "workbuddy",
@@ -43,7 +41,6 @@ const WORKBUDDY_PRODUCT_CONFIG_INLINE_ENVS = [
   "ACC_PRODUCT_CONFIG_V2",
   "ACC_PRODUCT_CONFIG",
 ] as const;
-const WORKBUDDY_PRODUCT_CONFIG_CACHE = path.join("cache", "acc-product-config-v3.json");
 
 function bundledProductConfigPath(
   environment: NodeJS.ProcessEnv,
@@ -58,11 +55,12 @@ function bundledProductConfigPath(
 
   const root = environment.WORKBUDDY_CONFIG_DIR;
   if (!root) return;
-  const candidate = path.join(root, WORKBUDDY_PRODUCT_CONFIG_CACHE);
+  const paths = targetPath(platform);
+  const candidate = paths.join(root, "cache", "acc-product-config-v3.json");
   try {
     const inspect = dependencies.lstat ?? lstatSync;
     const uid = (dependencies.getuid ?? (() => process.getuid?.()))();
-    for (const directory of [root, path.dirname(candidate)]) {
+    for (const directory of [root, paths.dirname(candidate)]) {
       const metadata = inspect(directory);
       if (!metadata.isDirectory() || metadata.isSymbolicLink()) return;
       if (platform !== "win32") {
@@ -82,12 +80,16 @@ function bundledProductConfigPath(
   }
 }
 
-export function workBuddyEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function workBuddyEnvironment(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const paths = targetPath(platform);
   const configuredRoot = environment.WORKBUDDY_CONFIG_DIR;
-  const root = path.resolve(
+  const root = paths.resolve(
     configuredRoot?.trim()
       ? configuredRoot
-      : path.join(environment.HOME || environment.USERPROFILE || homedir(), ".workbuddy-ai"),
+      : paths.join(environment.HOME || environment.USERPROFILE || homedir(), ".workbuddy-ai"),
   );
   return {
     ...environment,
@@ -112,33 +114,35 @@ export function workBuddyInvocation(
   const platform = dependencies.platform ?? process.platform;
   const configured =
     environmentValue(environment, "CODEXHOST_WORKBUDDY_COMMAND")?.trim() || undefined;
-  if (!configured && platform !== "darwin")
+  if (!configured && platform !== "darwin" && platform !== "win32")
     throw new CodeBuddyError(
       "notInstalled",
-      "WorkBuddy CLI was not configured; set CODEXHOST_WORKBUDDY_COMMAND",
+      "WorkBuddy app discovery is available on macOS and Windows; set CODEXHOST_WORKBUDDY_COMMAND for a compatible native runtime on this platform",
     );
   const isExecutable =
     dependencies.isExecutable ?? ((candidate: string) => isExecutableFile(candidate, platform));
-  const resolved = resolveHarnessExecutable(
-    workBuddyDiscoverySpec,
-    { environment, platform, command: configured ?? WORKBUDDY_MACOS_ELECTRON },
-    { isExecutable },
-  );
-  if (!resolved)
+  const bundle = configured
+    ? undefined
+    : resolveWorkBuddyBundle(environment, platform, isExecutable);
+  const executable = configured
+    ? resolveHarnessExecutable(
+        workBuddyDiscoverySpec,
+        { environment, platform, command: configured },
+        { isExecutable },
+      )?.executable
+    : bundle?.executable;
+  if (!executable)
     throw new CodeBuddyError("notInstalled", "WorkBuddy AI app or its bundled CLI is unavailable");
 
-  const bundled = !configured;
-  if (bundled && !isExecutable(WORKBUDDY_MACOS_CLI))
-    throw new CodeBuddyError("notInstalled", "WorkBuddy AI bundled CLI is unavailable");
   const configuredEnvironment = withNodeRuntimeOnPath(
-    workBuddyEnvironment(environment),
+    workBuddyEnvironment(environment, platform),
     process.execPath,
     platform,
   );
-  const productConfigPath = bundled
+  const productConfigPath = bundle
     ? bundledProductConfigPath(configuredEnvironment, platform, dependencies)
     : undefined;
-  const childEnvironment = bundled
+  const childEnvironment = bundle
     ? {
         ...configuredEnvironment,
         ...(productConfigPath ? { [WORKBUDDY_PRODUCT_CONFIG_PATH_ENV]: productConfigPath } : {}),
@@ -147,9 +151,9 @@ export function workBuddyInvocation(
     : configuredEnvironment;
   return {
     ...commandInvocation(
-      resolved.executable,
+      executable,
       [
-        ...(bundled ? [WORKBUDDY_MACOS_CLI] : []),
+        ...(bundle ? [bundle.cli] : []),
         ...(nativeArguments ?? [
           "--acp",
           ...(ephemeral ? ["--no-session-persistence"] : []),
