@@ -9,6 +9,7 @@
     "packages/adapters/antigravity",
     "packages/adapters/kiro-cli",
     "packages/adapters/codebuddy",
+    "packages/adapters/workbuddy",
     "packages/adapters/cursor-cli",
     "packages/adapters/hermes",
     "packages/adapters/qoder",

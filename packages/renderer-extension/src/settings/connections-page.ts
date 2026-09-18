@@ -25,6 +25,7 @@ const HARNESS_INSTALL_URLS: Readonly<Record<ExternalRendererAgent, string>> = Ob
   antigravity: "https://antigravity.google/product/antigravity-cli",
   "kiro-cli": "https://kiro.dev/docs/cli/",
   codebuddy: "https://www.codebuddy.ai/docs/zh/cli/overview",
+  workbuddy: "https://www.workbuddy.ai/docs/workbuddy/Quickstart",
   "cursor-cli": "https://cursor.com/docs/cli/installation",
   hermes: "https://hermes-agent.nousresearch.com/docs",
   qoder: "https://docs.qoder.com/",

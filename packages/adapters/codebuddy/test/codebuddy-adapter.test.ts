@@ -50,6 +50,13 @@ async function create(adapter: CodeBuddyAdapter, environment = {}) {
 }
 
 describe("CodeBuddy native Adapter", () => {
+  it("does not opt CodeBuddy into the WorkBuddy command surface", async () => {
+    const { adapter } = setup();
+    const session = await create(adapter);
+    expect(adapter.commandCatalog).toBeUndefined();
+    expect(session.commands).toBeUndefined();
+  });
+
   it("completes PARTIAL_SUCCESS while retaining a recovered diagnostic Tool failure", async () => {
     const { adapter, native } = setup();
     const session = await create(adapter),

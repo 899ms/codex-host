@@ -23,7 +23,11 @@ export const codeBuddyDiscoverySpec: HarnessDiscoverySpec = {
   },
 };
 
-export function codeBuddyInvocation(environment: NodeJS.ProcessEnv, ephemeral: boolean) {
+export function codeBuddyInvocation(
+  environment: NodeJS.ProcessEnv,
+  ephemeral: boolean,
+  argumentsOverride?: string[],
+) {
   const resolved = resolveHarnessExecutable(codeBuddyDiscoverySpec, { environment });
   if (!resolved)
     throw new CodeBuddyError(
@@ -34,7 +38,7 @@ export function codeBuddyInvocation(environment: NodeJS.ProcessEnv, ephemeral: b
   return {
     ...commandInvocation(
       resolved.executable,
-      ["--acp", ...(ephemeral ? ["--no-session-persistence"] : [])],
+      argumentsOverride ?? ["--acp", ...(ephemeral ? ["--no-session-persistence"] : [])],
       env,
     ),
     environment: env,

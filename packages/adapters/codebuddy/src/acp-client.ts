@@ -24,6 +24,7 @@ export interface CodeBuddyClient {
   configure(sessionId: string, configId: string, value: string): Promise<Record<string, unknown>>;
   prompt(sessionId: string, input: string): Promise<Record<string, unknown>>;
   cancel(sessionId: string): Promise<void>;
+  rollback?(sessionId: string, forkPointId: string | null): Promise<Record<string, unknown>>;
   answer(
     sessionId: string,
     toolCallId: string,
@@ -38,6 +39,7 @@ export type CodeBuddyClientFactory = (options: {
   ephemeral: boolean;
   handlers: CodeBuddyClientHandlers;
 }) => CodeBuddyClient;
+export type CodeBuddyInvocationFactory = typeof codeBuddyInvocation;
 
 /** One native process per Session; all tool execution stays in CodeBuddy. */
 export class CodeBuddyAcpClient implements CodeBuddyClient {
@@ -56,9 +58,10 @@ export class CodeBuddyAcpClient implements CodeBuddyClient {
   constructor(
     readonly options: Parameters<CodeBuddyClientFactory>[0],
     readonly operationTimeoutMs = 15_000,
+    readonly invocationFactory: CodeBuddyInvocationFactory = codeBuddyInvocation,
   ) {
     void this.#failed.catch(() => {});
-    const invocation = codeBuddyInvocation(options.environment, options.ephemeral);
+    const invocation = invocationFactory(options.environment, options.ephemeral);
     this.#child = spawn(invocation.command, invocation.arguments, {
       cwd: options.cwd,
       env: invocation.environment,
@@ -189,6 +192,21 @@ export class CodeBuddyAcpClient implements CodeBuddyClient {
     await this.#request(() => this.#connection.cancel({ sessionId }), "ACP cancel");
   }
 
+  async rollback(sessionId: string, forkPointId: string | null) {
+    return record(
+      await this.#request(
+        () =>
+          this.#connection.extMethod("_codebuddy.ai/session/rollback", {
+            sessionId,
+            forkPointId,
+            reason: "resend_edit",
+            files: false,
+          }),
+        "ACP history rewind",
+      ),
+    );
+  }
+
   async answer(sessionId: string, toolCallId: string, answers: Record<string, string[]> | null) {
     const response = await this.#request(
       () =>
@@ -198,7 +216,7 @@ export class CodeBuddyAcpClient implements CodeBuddyClient {
           decision: answers === null ? "deny" : "allow",
           ...(answers ? { answers } : {}),
         }),
-      "CodeBuddy question response",
+      "ACP question response",
     );
     if (record(response).resolved !== true)
       throw new CodeBuddyError("protocolError", "Native question is no longer pending");

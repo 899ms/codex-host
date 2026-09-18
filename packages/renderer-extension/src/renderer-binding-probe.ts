@@ -97,6 +97,7 @@ const externalHarnessIds = {
   antigravity: harnessIdSchema.parse("antigravity"),
   "kiro-cli": harnessIdSchema.parse("kiro-cli"),
   codebuddy: harnessIdSchema.parse("codebuddy"),
+  workbuddy: harnessIdSchema.parse("workbuddy"),
   "cursor-cli": harnessIdSchema.parse("cursor-cli"),
   hermes: harnessIdSchema.parse("hermes"),
   qoder: harnessIdSchema.parse("qoder"),
@@ -113,6 +114,7 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "antigravity",
   "kiro-cli",
   "codebuddy",
+  "workbuddy",
   "cursor-cli",
   "hermes",
   "qoder",
@@ -470,6 +472,7 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
   if (
     inspection.harnessId === "kiro-cli" ||
     inspection.harnessId === "codebuddy" ||
+    inspection.harnessId === "workbuddy" ||
     inspection.harnessId === "cursor-cli"
   ) {
     const route = decodeHarnessPluginRoute(inspection.transportModelId);
@@ -753,6 +756,7 @@ export function installRendererBindingProbe(
       antigravity: undefined,
       "kiro-cli": undefined,
       codebuddy: undefined,
+      workbuddy: undefined,
       "cursor-cli": undefined,
       hermes: undefined,
       qoder: undefined,
