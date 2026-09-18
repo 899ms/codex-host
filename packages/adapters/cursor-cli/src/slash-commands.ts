@@ -23,6 +23,11 @@ export function cursorCommands(native: AvailableCommand[]): HarnessCommandCatalo
   return { commands: [...commands.values()] };
 }
 
+// Host reads this catalog without opening a Session; execution still validates native availability.
+export const CURSOR_COMMAND_CATALOG = cursorCommands([
+  { name: "copy-request-id", description: "Copy the current request ID", input: null },
+]);
+
 export function cursorCommandPrompt(
   command: HarnessCommandInvocation,
   catalog: HarnessCommandCatalog,

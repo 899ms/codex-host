@@ -50,7 +50,7 @@ import {
 import { readCursorNativeTurns, type CursorNativeTurn } from "./native-history.js";
 import { CursorTurnOutput, cursorSnapshot } from "./projection.js";
 import { cursorThinking, cursorThinkingState } from "./thinking.js";
-import { cursorCommands, cursorCommandPrompt } from "./slash-commands.js";
+import { CURSOR_COMMAND_CATALOG, cursorCommands, cursorCommandPrompt } from "./slash-commands.js";
 import { CursorInteractions } from "./interactions.js";
 import { type CursorSubagents, cursorTaskAddress } from "./subagents.js";
 import type { HarnessSubagentCapability } from "@codexhost/harness-adapter";
@@ -77,6 +77,7 @@ function rejected(code: HarnessError["code"], message: string): { ok: false; err
   return { ok: false, error: { code, message, retryable: false } };
 }
 export class CursorAdapter implements HarnessAdapter {
+  readonly commandCatalog = CURSOR_COMMAND_CATALOG;
   readonly subagents: HarnessSubagentCapability = {
     readSnapshot: async ({ parent, nativeSubagentId, cwd }) => {
       if (parent.harnessId !== this.harnessId || this.#closed)
