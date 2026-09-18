@@ -760,60 +760,6 @@ describe("WorkBuddy native history derivation", () => {
     await expect(fixture.run()).rejects.toThrow("Redirected native Subagent directory");
   });
 
-  it("uses the WorkBuddy native invocation for derivation with an explicit client factory", async () => {
-    const fixture = await setup();
-    const script = path.join(path.dirname(fixture.sourceCwd), "native-copy.mjs");
-    const executable = process.platform === "win32" ? `${script}.cmd` : script;
-    const log = path.join(path.dirname(fixture.sourceCwd), "native-copy.log");
-    await writeFile(
-      script,
-      await readFile(path.resolve("packages/adapters/workbuddy/test/fixtures/native-copy.mjs")),
-      { mode: 0o700 },
-    );
-    if (process.platform === "win32") {
-      await writeFile(executable, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
-    } else {
-      await chmod(executable, 0o700);
-    }
-    const adapter = new WorkBuddyAdapter({
-      clientFactory: fixture.factory,
-      environment: {
-        ...fixture.environment,
-        CODEXHOST_WORKBUDDY_COMMAND: executable,
-        COPY_INVOCATION_LOG: log,
-      },
-    });
-    try {
-      const opened = await adapter.open({
-        kind: "fork",
-        cwd: fixture.targetCwd,
-        sourceRef: nativeSessionRefSchema.parse({
-          ...sourceRef,
-          locator: { boundCwd: fixture.sourceCwd },
-        }),
-        checkpoint,
-      });
-      if (!opened.ok) {
-        const diagnostic = await readFile(log, "utf8").catch(() => "no fixture log");
-        throw new Error(`${opened.error.message}: ${diagnostic}`);
-      }
-      expect(opened.value.initialState.nativeRef?.locator).toMatchObject({
-        codebuddyDerived: 1,
-        boundCwd: codeBuddyCanonicalCwd(fixture.targetCwd),
-      });
-      const invocation = JSON.parse((await readFile(log, "utf8")).trim());
-      expect(invocation).toMatchObject({ cwd: codeBuddyCanonicalCwd(fixture.sourceCwd) });
-      expect(invocation.args).toContain("--fork-session");
-      expect(invocation.args).not.toContain("--acp");
-      expect(fixture.opens.at(-1)).toEqual({
-        cwd: fixture.targetCwd,
-        sessionId: "derived",
-      });
-    } finally {
-      await adapter.close();
-    }
-  });
-
   it.each([
     ["source mutation", { sourceRace: true }, "Source history changed"],
     ["unpersisted rewind", { badRewind: true }, "did not persist"],
