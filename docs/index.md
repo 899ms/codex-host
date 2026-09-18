@@ -88,6 +88,7 @@
 | 文档 | 内容与阅读时机 |
 | --- | --- |
 | [`harnesses/zcode/zcode-harness-integration.md`](harnesses/zcode/zcode-harness-integration.md) | ZCode 原生 app-server 插件、Provider 桥、能力与验收边界；维护 ZCode 接入时阅读。 |
+| [`harnesses/zcode/zcode-official-provider-proposal.md`](harnesses/zcode/zcode-official-provider-proposal.md) | 官方账号模型缺失的背景、原生认证与验证码证据、Desktop 协作候选方案及停止条件；暂缓实施，不代表已支持。 |
 
 ## 账号与 Desktop 产品接入
 

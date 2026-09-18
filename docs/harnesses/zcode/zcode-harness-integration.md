@@ -52,6 +52,8 @@ Provider 和模型目录有两条原生路径：
 
 ## 明确的限制
 
+官方账号模型的调研依据、候选路线和暂缓实施决定见[官方账号模型接入：背景与候选方案](zcode-official-provider-proposal.md)；该方案不代表当前能力。
+
 - 原生运行中的子代理没有独立的无副作用 Transcript 读取接口。`session/resume` 会恢复并修复会话状态，因此读取运行中子代理时返回可重试的 `sessionBusy`，完成后可读。
 - 终端运行面不提供 ZCode Desktop 的私有浏览器/Computer Use 桥、Wiki 管理 UI、Bot Channel、定时任务管理、额度和账号切换。官方账号 Provider 所需的 `provider/updateAccountConfig` 账号状态同步和 `interaction/requestProviderRuntimeHeaders` 请求认证尚未接入；Start Plan（体验方案）还依赖 Desktop 的原生验证码流程。自定义 API Key Provider 可被读取，不代表官方账号模型可用；不硬编码模型列表或伪造权益。官方 MCP 登录流程同样尚未桥接。
 - ZCode 原生设置与权限规则可能按它自己的语义持久化；Host 不模拟会话级设置来覆盖原生行为。
