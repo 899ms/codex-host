@@ -38,6 +38,14 @@ ELECTRON_RUN_AS_NODE=1 \
 
 进入 TUI 后输入 `/login`，完成浏览器认证再重试 Harness。这里使用的仍是 App 内置 CLI，不表示需要另装一个 CLI。不要使用 Desktop owner runtime 的凭据，也不要发明 `codebuddy auth login` 命令。本轮没有接受登录提示、发送模型 Prompt 或触发付费调用，因此认证后的真实 WorkBuddy Turn 仍待验收。
 
+## 动态产品快照与模型目录
+
+WorkBuddy App 会把账号、版本和服务可用性共同解析出的产品快照交给其 Hosted CLI。小快照使用 `ACC_PRODUCT_CONFIG_V3`，较大的快照原子写入 WorkBuddy 配置根下的 `cache/acc-product-config-v3.json`，再通过 `ACC_PRODUCT_CONFIG_PATH` 传给子进程。若没有这份上下文，内置 CLI 会回退到随安装包发布的 `product.json`；WorkBuddy AI 5.5.2 内置的默认 `cli` Agent 在该回退配置中只暴露 Fast、Balanced、Primary 和 Deep。
+
+对于自动发现的 macOS 内置 CLI，插件会沿用现有的 WorkBuddy 产品快照文件，但不读取、记录它的内容，也不据此拼造 Host 模型目录；某些部署的快照可能包含敏感配置。只有当调用方没有显式设置路径或任一内联产品配置环境变量，WorkBuddy 根目录及其 `cache` 目录不可由其他用户写入，并且快照是当前用户拥有、非符号链接、非空且不允许组或其他用户读取的普通文件时，插件才传递 `ACC_PRODUCT_CONFIG_PATH`。快照缺失或校验失败时保留内置 CLI 的四模型回退；显式 `CODEXHOST_WORKBUDDY_COMMAND` 不自动推断 WorkBuddy 私有缓存，但会保留调用方显式提供的产品配置环境。
+
+最终模型列表仍完全来自 ACP Session 的 `configOptions`，选择模型也等待 ACP 原生确认。`ACC_PRODUCT_CONFIG_PATH` 是 WorkBuddy 第一方 App 到 Hosted CLI 的实际兼容机制，但不是 ACP 标准或已公开承诺稳定的 WorkBuddy API，因此升级 WorkBuddy 后需要通过原生边界测试复核；插件不硬编码当前账号观察到的模型数量、名称或计费标签。小于 WorkBuddy 内联阈值的快照只存在于 App 进程环境且旧缓存会被删除，独立启动的 CodexHost 无法自动取得，这种情况下仍使用原生回退目录。
+
 ## Desktop 私有运行时边界
 
 WorkBuddy Desktop 还包含面向官方应用的 owner runtime、签名身份、租约和 Session admission/grant 流程。这些不是第三方 Harness 的公共认证接口。本插件明确不会：
