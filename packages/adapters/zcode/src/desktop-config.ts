@@ -5,8 +5,9 @@ import { createHash } from "node:crypto";
 import { record, text, workspaceStateSchema, type NativeSnapshot } from "./protocol.js";
 import type { ZcodeTransport } from "./transport.js";
 import { ZcodeError } from "./errors.js";
+import { readProcessWorkspace } from "./process-workspace.js";
 
-/** The Desktop sends this same ephemeral registry to app-server. Never copy its credentials to disk. */
+/** Read native settings without copying Provider credentials to Host storage. */
 export async function readWorkspace(
   transport: ZcodeTransport,
   workspace: NativeSnapshot["session"]["workspace"] = {
@@ -14,11 +15,19 @@ export async function readWorkspace(
     workspaceKey: transport.options.cwd,
   },
 ) {
-  let state = workspaceStateSchema.parse(
-    await transport.request("workspace/readState", { workspace }),
-  );
+  let response: unknown;
+  try {
+    response = await transport.request("workspace/readState", { workspace });
+  } catch (error) {
+    // Only a native method-not-found response selects the alternative protocol.
+    // Authentication, malformed responses, timeouts and process failures must not fall back.
+    if (!(error instanceof ZcodeError) || error.rpcCode !== -32601) throw error;
+    return readProcessWorkspace(transport, workspace);
+  }
+  let state = workspaceStateSchema.parse(response);
   const explicit = transport.options.environment.CODEXHOST_ZCODE_CONFIG;
-  if (!explicit && state.settings.model.available.length) return state;
+  if (!explicit && state.settings.model.available.length)
+    return { ...state, registryScope: "workspace" as const };
   const configPath =
     explicit ??
     path.join(
@@ -32,7 +41,7 @@ export async function readWorkspace(
     config = record(JSON.parse(await readFile(configPath, "utf8")));
   } catch (error) {
     if (!explicit && error instanceof Error && "code" in error && error.code === "ENOENT")
-      return state;
+      return { ...state, registryScope: "workspace" as const };
     throw new ZcodeError("unavailable", "ZCode provider configuration cannot be read");
   }
   const providers = Object.entries(record(config.provider)).flatMap(([providerId, value]) => {
@@ -93,7 +102,7 @@ export async function readWorkspace(
       },
     ];
   });
-  if (!providers.length) return state;
+  if (!providers.length) return { ...state, registryScope: "workspace" as const };
   const result = record(
     await transport.request("workspace/updateProviderRegistry", {
       workspace,
@@ -107,5 +116,5 @@ export async function readWorkspace(
   if (result.status === "failed")
     throw new ZcodeError("unavailable", "ZCode rejected the Desktop provider registry");
   state = workspaceStateSchema.parse(result.workspaceState);
-  return state;
+  return { ...state, registryScope: "workspace" as const };
 }

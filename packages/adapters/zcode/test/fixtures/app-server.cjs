@@ -1,8 +1,10 @@
 // A deterministic native protocol peer. Real-runtime coverage lives in native.test.ts.
 const { createInterface } = require("node:readline");
-const { readFileSync, writeFileSync } = require("node:fs");
+const { readFileSync, writeFileSync, appendFileSync } = require("node:fs");
 const { randomUUID } = require("node:crypto");
 const store = process.env.ZCODE_FIXTURE_STORE;
+const processProfile = process.env.ZCODE_FIXTURE_PROFILE === "process";
+const deferred = new Set();
 let sessions = {};
 try {
   sessions = JSON.parse(readFileSync(store, "utf8"));
@@ -11,12 +13,33 @@ let active;
 let configuredWorkspace;
 const write = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const save = () => {
-  if (store) writeFileSync(store, JSON.stringify(sessions));
+  if (store)
+    writeFileSync(
+      store,
+      JSON.stringify(
+        Object.fromEntries(Object.entries(sessions).filter(([id]) => !deferred.has(id))),
+      ),
+    );
 };
 const settings = () => ({
   model: {
-    current: { providerId: "fixture", modelId: "model" },
-    available: [{ ref: { providerId: "fixture", modelId: "model" }, label: "Fixture" }],
+    ...(process.env.ZCODE_FIXTURE_NO_MODELS
+      ? {}
+      : { current: { providerId: "fixture", modelId: "model" } }),
+    available: process.env.ZCODE_FIXTURE_NO_MODELS
+      ? []
+      : [
+          { ref: { providerId: "fixture", modelId: "model" }, label: "Fixture" },
+          ...(processProfile
+            ? [
+                {
+                  ref: { providerId: "fixture", modelId: "other" },
+                  label: "Other",
+                  reasoning: { levels: [{ value: "high", label: "High" }] },
+                },
+              ]
+            : []),
+        ],
   },
   thoughtLevel: { enabled: false, available: [] },
   mode: { current: "build" },
@@ -75,11 +98,22 @@ function terminal(s, turnId, user, status = "success") {
 createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params: p = {} } = JSON.parse(line);
   if (!method) return;
+  if (process.env.ZCODE_FIXTURE_LOG)
+    appendFileSync(process.env.ZCODE_FIXTURE_LOG, JSON.stringify({ method, params: p }) + "\n");
   const s = sessions[p.sessionId];
   const reply = (result) => write({ id, result });
   if (method === "workspace/readState") {
+    if (processProfile)
+      return write({
+        id,
+        error: { code: -32601, message: "Method not found: workspace/readState" },
+      });
     configuredWorkspace = p.workspace;
     return reply({ workspace: p.workspace, settings: settings() });
+  }
+  if (method === "workspace/readPresentation" && processProfile) {
+    configuredWorkspace = p.workspace;
+    return reply({ workspace: p.workspace, mode: "build", slashCommands: [] });
   }
   if (method === "session/create") {
     const sessionId = randomUUID(),
@@ -102,6 +136,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       runtime: { eventSeq: 0 },
     };
     sessions[sessionId] = value;
+    if (p.persistence === "deferred") deferred.add(sessionId);
     save();
     return reply(value);
   }
@@ -119,7 +154,33 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         },
       },
     });
+  if (method === "session/read" && processProfile)
+    return reply({
+      ...s,
+      settings: {
+        ...s.settings,
+        model: {
+          ...s.settings.model,
+          available: s.settings.model.available.filter(
+            (model) => model.ref.modelId === s.settings.model.current?.modelId,
+          ),
+        },
+      },
+    });
   if (method === "session/resume" || method === "session/read") return reply(s);
+  if (method === "session/close" && processProfile) {
+    if (deferred.has(p.sessionId)) {
+      delete sessions[p.sessionId];
+      deferred.delete(p.sessionId);
+      save();
+    }
+    return reply({ closed: true });
+  }
+  if (method === "session/setModel") {
+    s.settings.model.current = p.model;
+    save();
+    return reply(s);
+  }
   if (method === "session/events") return reply({ events: [] });
   if (method === "session/subscribe") return reply({ eventSeq: s.runtime.eventSeq, events: [] });
   if (method === "session/usage")

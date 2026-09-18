@@ -5,6 +5,7 @@ export const nativeModelSchema = z.object({
   providerId: z.string().min(1),
   modelId: z.string().min(1),
   variant: z.string().optional(),
+  options: z.object({ reasoningLevel: z.string().min(1).optional() }).optional(),
 });
 const levelSchema = z.object({ value: z.string(), label: z.string() });
 export const modelSchema = z.object({
@@ -13,15 +14,19 @@ export const modelSchema = z.object({
   disabledReason: z.string().optional(),
   reasoning: z
     .object({
-      enabled: z.boolean(),
+      enabled: z.boolean().optional(),
       levels: z.array(levelSchema),
       defaultLevel: z.string().optional(),
     })
+    .transform((reasoning) => ({
+      ...reasoning,
+      enabled: reasoning.enabled ?? reasoning.levels.length > 0,
+    }))
     .optional(),
 });
 export const settingsSchema = z.object({
   model: z.object({
-    current: nativeModelSchema,
+    current: nativeModelSchema.optional(),
     available: z.array(modelSchema),
     lastUsed: nativeModelSchema.optional(),
   }),
@@ -83,6 +88,7 @@ export const snapshotSchema = z.object({
     contextWindow: z.number(),
     currentTurnId: z.string().optional(),
     backgroundJobs: z.array(z.unknown()).optional(),
+    target: recordSchema.nullable().optional(),
   }),
   messages: z.array(messageSchema),
   runtime: recordSchema,

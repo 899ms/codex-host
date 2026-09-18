@@ -40,7 +40,7 @@ import {
 import {
   ZCODE_ID,
   contextUsage,
-  decodeModel,
+  selectNativeModel,
   sessionState,
   modelCatalog,
   permissionModes,
@@ -96,15 +96,20 @@ export class ZcodeSession implements HarnessSession {
   #lastSeq = 0;
   #closePromise: Promise<void> | undefined;
   #terminalTask: Promise<void> | undefined;
+  readonly catalog: ReturnType<typeof modelCatalog>;
   constructor(
     readonly transport: ZcodeTransport,
     snapshot: NativeSnapshot,
     readonly onClose: () => void,
-    readonly catalog = modelCatalog(snapshot.settings),
+    readonly nativeCatalog = snapshot.settings,
     readonly isLocked = () => false,
+    readonly processRegistry = false,
   ) {
+    this.catalog = modelCatalog(nativeCatalog);
     this.#snapshot = snapshot;
-    this.#goalActive = snapshot.target?.status === "active";
+    this.#goalActive =
+      (snapshot.target === undefined ? snapshot.projection.target : snapshot.target)?.status ===
+      "active";
     this.#state = sessionState(snapshot);
     this.initialState = structuredClone(this.#state);
     this.initialUsage = contextUsage(snapshot);
@@ -142,7 +147,9 @@ export class ZcodeSession implements HarnessSession {
     if (snapshot.session.sessionId !== this.sessionId)
       throw new ZcodeError("protocolError", "ZCode changed the native session identity");
     this.#snapshot = snapshot;
-    this.#goalActive = snapshot.target?.status === "active";
+    this.#goalActive =
+      (snapshot.target === undefined ? snapshot.projection.target : snapshot.target)?.status ===
+      "active";
     this.#state = sessionState(snapshot);
     this.#emit({ type: "session.state.changed", state: structuredClone(this.#state) });
   }
@@ -256,7 +263,20 @@ export class ZcodeSession implements HarnessSession {
           if (!this.catalog.models.some((model) => model.ref.id === command.model.id))
             return failure("invalidRequest", "ZCode model is not available");
           method = "session/setModel";
-          params = { model: decodeModel(command.model), persistAsWorkspaceLastUsed: false };
+          params = {
+            model: selectNativeModel(
+              command.model,
+              {
+                ...this.#snapshot.settings,
+                model: {
+                  ...this.#snapshot.settings.model,
+                  available: this.nativeCatalog.model.available,
+                },
+              },
+              this.processRegistry,
+            ),
+            persistAsWorkspaceLastUsed: false,
+          };
         } else if (command.type === "thinking.select") {
           if (
             !this.#snapshot.settings.thoughtLevel.available.some(

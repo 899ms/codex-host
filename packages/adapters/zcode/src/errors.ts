@@ -10,6 +10,7 @@ export class ZcodeError extends Error {
     readonly code: HarnessErrorCode,
     message: string,
     readonly retryable = false,
+    readonly rpcCode?: number,
   ) {
     super(message);
   }
@@ -45,5 +46,6 @@ export function rpcError(code: number, message: string): ZcodeError {
               : "nativeFailure",
     sanitizeDiagnosticTail(message),
     code === -32010,
+    code,
   );
 }

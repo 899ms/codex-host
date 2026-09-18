@@ -41,12 +41,42 @@ export function decodeModel(model: HarnessModelRef): NativeModel {
     throw new ZcodeError("invalidRequest", "Invalid ZCode model reference");
   }
 }
+/** Process-registry model selection includes its native reasoning option in the same request. */
+export function selectNativeModel(
+  model: HarnessModelRef,
+  settings: NativeSettings,
+  processRegistry: boolean,
+  thinkingOption?: string,
+): NativeModel {
+  const native = decodeModel(model);
+  if (!processRegistry) return native;
+  const entry = settings.model.available.find((entry) => encodeModel(entry.ref).id === model.id);
+  const reasoning = entry?.reasoning;
+  if (!reasoning?.enabled || !reasoning.levels.length) return native;
+  const current = settings.model.current;
+  const previous =
+    current && encodeModel(current).id === model.id
+      ? (current.options?.reasoningLevel ?? settings.thoughtLevel.current)
+      : undefined;
+  const level =
+    thinkingOption ??
+    previous ??
+    reasoning.defaultLevel ??
+    (reasoning.levels.length === 1 ? reasoning.levels[0]?.value : undefined);
+  if (!level || !reasoning.levels.some((option) => option.value === level))
+    throw new ZcodeError(
+      "invalidRequest",
+      "ZCode did not provide a supported default reasoning level for this model",
+    );
+  return { ...native, options: { reasoningLevel: level } };
+}
+
 export function modelCatalog(settings: NativeSettings) {
   const available = settings.model.available.filter((model) => !model.disabledReason);
   const levels = new Map(settings.thoughtLevel.available.map((level) => [level.value, level]));
   for (const model of available)
     for (const level of model.reasoning?.levels ?? []) levels.set(level.value, level);
-  const current = encodeModel(settings.model.current);
+  const current = settings.model.current ? encodeModel(settings.model.current) : undefined;
   const defaultThinking = settings.thoughtLevel.current ?? settings.thoughtLevel.defaultLevel;
   return harnessModelCatalogSchema.parse({
     models: available.map((model) => ({
@@ -56,7 +86,7 @@ export function modelCatalog(settings: NativeSettings) {
         ? model.reasoning.levels.map((level) => level.value)
         : [],
     })),
-    ...(available.some((model) => encodeModel(model.ref).id === current.id)
+    ...(current && available.some((model) => encodeModel(model.ref).id === current.id)
       ? { defaultModel: current }
       : {}),
     thinkingOptions: [...levels.values()].map((level) => ({ id: level.value, label: level.label })),
@@ -84,8 +114,9 @@ export function permissionModes(current: NativeSettings["mode"]["current"] = "bu
 }
 export function sessionState(snapshot: NativeSnapshot): HarnessSessionState {
   const settings = snapshot.settings;
+  const current = settings.model.current ? encodeModel(settings.model.current) : undefined;
   const model = settings.model.available.find(
-    (candidate) => encodeModel(candidate.ref).id === encodeModel(settings.model.current).id,
+    (candidate) => encodeModel(candidate.ref).id === current?.id,
   );
   return {
     nativeRef: nativeSessionRefSchema.parse({
@@ -94,8 +125,8 @@ export function sessionState(snapshot: NativeSnapshot): HarnessSessionState {
       formatVersion: 1,
       locator: { cwd: snapshot.session.workspace.workspacePath },
     }),
-    ...(settings.model.current.providerId !== "zcode-unconfigured"
-      ? { effectiveModel: encodeModel(settings.model.current) }
+    ...(current && settings.model.current?.providerId !== "zcode-unconfigured"
+      ? { effectiveModel: current }
       : {}),
     ...(model ? { resolvedModelLabel: model.label } : {}),
     ...(settings.thoughtLevel.enabled && settings.thoughtLevel.current

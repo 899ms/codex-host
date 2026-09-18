@@ -12,7 +12,7 @@ afterEach(async () => {
   await Promise.all(adapters.splice(0).map((adapter) => adapter.close()));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
-async function fixture() {
+async function createFixture(profile: string) {
   const root = await mkdtemp(path.join(os.tmpdir(), "zcode-lifecycle-"));
   roots.push(root);
   const adapter = new ZcodeAdapter({
@@ -22,6 +22,7 @@ async function fixture() {
       ...process.env,
       ZCODE_FIXTURE_STORE: path.join(root, "sessions.json"),
       ZCODE_FIXTURE_DUPLICATES: "1",
+      ZCODE_FIXTURE_PROFILE: profile,
     },
   });
   adapters.push(adapter);
@@ -34,7 +35,8 @@ async function fixture() {
   })();
   return { adapter, root, session, outputs, ended };
 }
-describe("ZCode session lifecycle", () => {
+describe.each(["workspace", "process"])("ZCode %s session lifecycle", (profile) => {
+  const fixture = () => createFixture(profile);
   it.each(["trailing-separator", "junction"])(
     "resumes the same workspace via %s and continues writing",
     async (variant) => {

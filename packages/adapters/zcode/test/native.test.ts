@@ -12,8 +12,10 @@ import type { HarnessOutput, HarnessSession } from "@codexhost/harness-adapter";
 import { ZcodeAdapter } from "../src/adapter.js";
 import { installDelegationSkills } from "@codexhost/host-runtime";
 import { record } from "../src/protocol.js";
+import { writePersonalProviderFixture } from "./fixtures/personal-provider-config.js";
 
 const runtime = process.env.CODEXHOST_TEST_ZCODE_RUNTIME;
+const processRegistry = process.env.CODEXHOST_TEST_ZCODE_PROFILE === "process";
 describe.skipIf(!runtime)(
   "ZCode installed runtime with an isolated database and local Provider",
   () => {
@@ -220,15 +222,24 @@ describe.skipIf(!runtime)(
           },
         }),
       );
+      if (processRegistry)
+        await writePersonalProviderFixture(root, `http://127.0.0.1:${address.port}`);
       adapter = new ZcodeAdapter({
         command: required(runtime),
         timeoutMs: 10_000,
         environment: {
-          ...process.env,
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([key]) =>
+                !key.toUpperCase().startsWith("ZCODE_") &&
+                key.toUpperCase() !== "CODEXHOST_ZCODE_CONFIG",
+            ),
+          ),
           HOME: root,
           USERPROFILE: root,
           XDG_CONFIG_HOME: path.join(root, "config"),
-          CODEXHOST_ZCODE_CONFIG: config,
+          CODEXHOST_ZCODE_CONFIG: processRegistry ? undefined : config,
+          ZCODE_DATA_BASE_DIR: root,
           ZCODE_SESSION_DB_PATH: path.join(root, "native.sqlite"),
           HTTP_PROXY: "",
           HTTPS_PROXY: "",
@@ -297,7 +308,7 @@ describe.skipIf(!runtime)(
       );
     }
 
-    it("inspects without sessions, streams, persists, resumes, forks without rewinding files and rolls back", async () => {
+    it("inspects without persisted sessions, streams, persists, resumes, forks without rewinding files and rolls back", async () => {
       const before = await adapter.sessionImport.listCandidates();
       const inspection = await adapter.inspect({ cwd: root });
       expect(inspection.status).toBe("ready");
@@ -579,7 +590,9 @@ describe.skipIf(!runtime)(
       const inspection = await adapter.inspect({ cwd: root });
       if (inspection.status !== "ready") throw new Error(JSON.stringify(inspection));
       const model = required(
-        inspection.catalog.models.find((model) => model.supportedThinkingOptionIds?.length),
+        inspection.catalog.models.find((model) =>
+          model.supportedThinkingOptionIds?.includes(harnessThinkingOptionIdSchema.parse("low")),
+        ),
       );
       const session = await create(),
         observed = observe(session);

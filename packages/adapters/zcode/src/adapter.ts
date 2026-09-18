@@ -18,7 +18,13 @@ import {
 import { ZcodeTransport, type TransportOptions } from "./transport.js";
 import { ZcodeSession, handleRuntimeRequest } from "./session.js";
 import { failure, nativeError, ZcodeError } from "./errors.js";
-import { ZCODE_ID, decodeModel, encodeModel, modelCatalog, permissionModes } from "./models.js";
+import {
+  ZCODE_ID,
+  selectNativeModel,
+  encodeModel,
+  modelCatalog,
+  permissionModes,
+} from "./models.js";
 import { record, snapshotSchema, summarySchema, text, type NativeSnapshot } from "./protocol.js";
 import { readWorkspace } from "./desktop-config.js";
 import { history } from "./history.js";
@@ -79,7 +85,7 @@ export class ZcodeAdapter implements HarnessAdapter {
         if (!catalog.models.length)
           throw new ZcodeError(
             "authenticationRequired",
-            "ZCode has no available models. Configure and authenticate ZCode CLI, or an enabled Desktop provider.",
+            "ZCode has no available models. Configure and authenticate a Provider in ZCode.",
           );
         return {
           status: "ready",
@@ -192,7 +198,16 @@ export class ZcodeAdapter implements HarnessAdapter {
         snapshot = snapshotSchema.parse(
           await transport.request("session/create", {
             workspace: workspace.workspace,
-            ...(input.model ? { model: decodeModel(input.model) } : {}),
+            ...(input.model
+              ? {
+                  model: selectNativeModel(
+                    input.model,
+                    workspace.settings,
+                    workspace.registryScope === "process",
+                    input.thinkingOptionId,
+                  ),
+                }
+              : {}),
             ...(input.thinkingOptionId ? { thoughtLevel: input.thinkingOptionId } : {}),
             ...(input.executionPolicy === "unattended-full-access"
               ? { mode: "yolo" }
@@ -230,7 +245,9 @@ export class ZcodeAdapter implements HarnessAdapter {
           const settings = snapshot.settings;
           if (input.kind === "rollbackLastTurn" && input.thinkingOptionId) {
             const catalog = modelCatalog(workspace.settings),
-              selected = input.model ?? encodeModel(settings.model.current);
+              selected =
+                input.model ??
+                (settings.model.current ? encodeModel(settings.model.current) : undefined);
             if (
               !catalog.models
                 .find((model) => model.ref.id === selected?.id)
@@ -282,15 +299,26 @@ export class ZcodeAdapter implements HarnessAdapter {
               "ZCode did not preserve the exact history prefix",
             );
           if (input.kind === "rollbackLastTurn") {
-            snapshot = snapshotSchema.parse(
-              await transport.request("session/setModel", {
-                sessionId: snapshot.session.sessionId,
-                model: input.model ? decodeModel(input.model) : settings.model.current,
-                persistAsWorkspaceLastUsed: false,
-              }),
-            );
+            const selectedModel = input.model
+              ? selectNativeModel(
+                  input.model,
+                  workspace.settings,
+                  workspace.registryScope === "process",
+                  input.thinkingOptionId,
+                )
+              : settings.model.current;
+            if (selectedModel)
+              snapshot = snapshotSchema.parse(
+                await transport.request("session/setModel", {
+                  sessionId: snapshot.session.sessionId,
+                  model: selectedModel,
+                  persistAsWorkspaceLastUsed: false,
+                }),
+              );
             const modelChanged =
-              input.model && input.model.id !== encodeModel(settings.model.current).id;
+              input.model &&
+              (!settings.model.current ||
+                input.model.id !== encodeModel(settings.model.current).id);
             const thought =
               input.thinkingOptionId ?? (modelChanged ? undefined : settings.thoughtLevel.current);
             if (thought)
@@ -329,8 +357,9 @@ export class ZcodeAdapter implements HarnessAdapter {
           this.#sessions.delete(session);
           this.#transports.delete(owned);
         },
-        modelCatalog(workspace.settings),
+        workspace.settings,
         () => this.#opening.has(snapshot.session.sessionId),
+        workspace.registryScope === "process",
       );
       this.#sessions.add(session);
       try {
