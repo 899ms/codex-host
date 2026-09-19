@@ -299,16 +299,23 @@ function startupTrace(stage) {
   );
 }
 function printStarPrompt() {
-  const prompt = "⭐ Like codexhost? Star us on GitHub:";
+  const locale =
+    process.env.LC_ALL ??
+    process.env.LC_MESSAGES ??
+    process.env.LANG ??
+    Intl.DateTimeFormat().resolvedOptions().locale;
+  const prompt = /^zh(?:[_-]|$)/iu.test(locale)
+    ? "⭐ 如果这个项目对你有帮助，请给我们一个 Star ⭐"
+    : "⭐ If this project helps you, please give us a Star ⭐";
   const useColor =
     process.stdout.isTTY && process.env.NO_COLOR === undefined && process.env.TERM !== "dumb";
   if (useColor) {
     console.log(
-      "\\u001B[33m" + prompt + "\\u001B[0m \\u001B[36m" + repositoryUrl + "\\u001B[0m",
+      "\\u001B[33m" + prompt + "\\u001B[0m\\n\\u001B[36m" + repositoryUrl + "\\u001B[0m",
     );
     return;
   }
-  console.log(prompt + " " + repositoryUrl);
+  console.log(prompt + "\\n" + repositoryUrl);
 }
 if (
   userArguments.length === 1 &&
@@ -316,6 +323,9 @@ if (
 ) {
   console.log(version);
   process.exit(0);
+}
+if (userArguments.length === 0 || userArguments[0] === "launch") {
+  printStarPrompt();
 }
 startupTrace("entry");
 
@@ -688,7 +698,6 @@ if (delegationArguments !== null) {
       ready = true;
       launcherOutput = "";
       startupTrace("received Launcher ready");
-      printStarPrompt();
       if (!keepLauncherForeground) finish(0);
       return;
     }
