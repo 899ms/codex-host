@@ -171,7 +171,7 @@ export class KimiSession implements HarnessSession {
     cancellationRequested: boolean;
   } | null = null;
   #activeTurnPromise: Promise<void> | null = null;
-  #activeInteraction: ActiveInteraction | null = null;
+  #activeInteractions = new Map<HostInteractionId, ActiveInteraction>();
   #availableCommands: AvailableCommand[] = [...KIMI_DEFAULT_COMMANDS];
   #onCommandsUpdate: ((catalog: HarnessCommandCatalog) => void) | undefined;
 
@@ -337,7 +337,7 @@ export class KimiSession implements HarnessSession {
     this.#closed = true;
     this.#transport.setSessionEventHandler(null);
 
-    this.#closeActiveInteraction("cancelled");
+    this.#closeActiveInteractions("cancelled");
 
     if (this.#activeTurn) {
       this.#activeTurn.cancellationRequested = true;
@@ -358,7 +358,7 @@ export class KimiSession implements HarnessSession {
     if (this.#closed || this.#faulted) return;
     this.#faulted = true;
     this.#transportFault = error;
-    this.#closeActiveInteraction("cancelled");
+    this.#closeActiveInteractions("cancelled");
     void this.#finishTransportFault(error);
   }
 
@@ -702,13 +702,13 @@ export class KimiSession implements HarnessSession {
         }
         const projected = projectKimiApprovalRequest(turnId, request);
         return new Promise<RequestPermissionResponse>((resolve) => {
-          this.#activeInteraction = {
+          this.#activeInteractions.set(projected.interaction.interactionId, {
             id: projected.interaction.interactionId,
             type: "approval",
             interaction: projected.interaction,
             metadata: projected.optionIdByActionId,
             resolve: (val) => resolve(val as RequestPermissionResponse),
-          };
+          });
           this.#channel.emit({
             kind: "interaction",
             interaction: projected.interaction,
@@ -724,13 +724,13 @@ export class KimiSession implements HarnessSession {
         }
         const projected = projectKimiElicitationRequest(turnId, request);
         return new Promise<CreateElicitationResponse>((resolve) => {
-          this.#activeInteraction = {
+          this.#activeInteractions.set(projected.interaction.interactionId, {
             id: projected.interaction.interactionId,
             type: "question",
             interaction: projected.interaction,
             metadata: projected.schemaProperties,
             resolve: (val) => resolve(val as CreateElicitationResponse),
-          };
+          });
           this.#channel.emit({
             kind: "interaction",
             interaction: projected.interaction,
@@ -754,7 +754,7 @@ export class KimiSession implements HarnessSession {
       promptError = error instanceof Error ? error : new Error(String(error));
     }
 
-    this.#closeActiveInteraction("cancelled");
+    this.#closeActiveInteractions("cancelled");
 
     for (const state of accumulator.values()) {
       if (state.status === "completed" || state.status === "failed") continue;
@@ -982,24 +982,24 @@ export class KimiSession implements HarnessSession {
     };
   }
 
-  #closeActiveInteraction(reason: "cancelled" | "expired" | "superseded"): void {
-    const interaction = this.#activeInteraction;
-    if (!interaction) return;
-    this.#activeInteraction = null;
-    interaction.resolve(
-      interaction.type === "approval"
-        ? { outcome: { outcome: "cancelled" } }
-        : { action: "cancel" },
-    );
-    this.#channel.emit({
-      kind: "event",
-      event: {
-        type: "interaction.closed",
-        interactionId: interaction.id,
-        turnId: interaction.interaction.turnId,
-        reason,
-      },
-    });
+  #closeActiveInteractions(reason: "cancelled" | "expired" | "superseded"): void {
+    for (const interaction of this.#activeInteractions.values()) {
+      this.#activeInteractions.delete(interaction.id);
+      interaction.resolve(
+        interaction.type === "approval"
+          ? { outcome: { outcome: "cancelled" } }
+          : { action: "cancel" },
+      );
+      this.#channel.emit({
+        kind: "event",
+        event: {
+          type: "interaction.closed",
+          interactionId: interaction.id,
+          turnId: interaction.interaction.turnId,
+          reason,
+        },
+      });
+    }
   }
 
   async #handleTurnCancel(command: TurnCancelCommand): Promise<HarnessResult<TurnCancelAccepted>> {
@@ -1020,24 +1020,7 @@ export class KimiSession implements HarnessSession {
       );
     }
 
-    if (this.#activeInteraction) {
-      const interaction = this.#activeInteraction;
-      this.#activeInteraction = null;
-      if (interaction.type === "approval") {
-        interaction.resolve({ outcome: { outcome: "cancelled" } });
-      } else {
-        interaction.resolve({ action: "cancel" });
-      }
-      this.#channel.emit({
-        kind: "event",
-        event: {
-          type: "interaction.closed",
-          interactionId: interaction.id,
-          turnId: command.turnId,
-          reason: "cancelled",
-        },
-      });
-    }
+    this.#closeActiveInteractions("cancelled");
 
     return ok({ cancellationRequested: true });
   }
@@ -1045,8 +1028,8 @@ export class KimiSession implements HarnessSession {
   async #handleInteractionRespond(
     command: InteractionRespondCommand,
   ): Promise<HarnessResult<InteractionRespondAccepted>> {
-    const active = this.#activeInteraction;
-    if (!active || active.id !== command.interactionId) {
+    const active = this.#activeInteractions.get(command.interactionId);
+    if (!active) {
       return err("invalidRequest", `No active interaction matches ID ${command.interactionId}`);
     }
 
@@ -1068,7 +1051,7 @@ export class KimiSession implements HarnessSession {
         return err(validation.code, validation.message);
       }
 
-      this.#activeInteraction = null;
+      this.#activeInteractions.delete(command.interactionId);
       const optionIdMap = active.metadata as ReadonlyMap<string, string>;
       const selectedOptionId =
         optionIdMap?.get(command.response.actionId) || command.response.actionId;
@@ -1109,7 +1092,7 @@ export class KimiSession implements HarnessSession {
         return err(validation.code, validation.message);
       }
 
-      this.#activeInteraction = null;
+      this.#activeInteractions.delete(command.interactionId);
       const schemaProps = active.metadata as Record<string, { type: "string" | "array" }>;
       const elicitationResponse = formatElicitationResponse(command.response, schemaProps);
 

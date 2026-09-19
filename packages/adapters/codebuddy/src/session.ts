@@ -52,6 +52,7 @@ import {
 import {
   codeBuddyCanonicalCwd,
   historyUsage,
+  pendingNativeHistoryRewind,
   readNativeHistory,
   snapshotFromHistory,
 } from "./history.js";
@@ -207,13 +208,10 @@ export class CodeBuddySession implements HarnessSession {
     });
   }
 
-  async initialize() {
-    const saved =
-      this.input.kind === "resume" && record(this.input.nativeRef.locator).codebuddyDerived === 1
-        ? record(record(this.input.nativeRef.locator).configuration)
-        : {};
-    if (this.input.kind === "resume") {
-      this.#ref = this.input.nativeRef;
+  /** Every fresh process must restore an unanchored rewind before it can accept prompts. */
+  async #openClient(): Promise<Record<string, unknown>> {
+    let rewind: ReturnType<typeof pendingNativeHistoryRewind>;
+    if (this.#ref) {
       const history = await this.readHistory(
         this.input.cwd,
         this.#ref,
@@ -223,15 +221,33 @@ export class CodeBuddySession implements HarnessSession {
       this.#hasTurn =
         snapshotFromHistory(history, this.#ref, this.input.cwd, this.profile).turns.length > 0;
       this.#usage = historyUsage(history);
+      rewind = pendingNativeHistoryRewind(history);
     }
     await this.#client.initialize();
     const opened = await this.#client.open(this.input.cwd, this.#ref?.nativeSessionId);
     const sessionId = this.#ref?.nativeSessionId ?? text(opened.sessionId);
     if (!sessionId || (opened.sessionId && opened.sessionId !== sessionId))
       throw new CodeBuddyError("protocolError", "ACP returned a different Native Session identity");
+    if (rewind) {
+      if (!this.#client.rollback)
+        throw new CodeBuddyError("unsupported", "Native history rewind is unavailable");
+      const result = await this.#client.rollback(sessionId, rewind.forkPointId);
+      if (result.applied !== true || (result.actualForkPointId ?? null) !== rewind.forkPointId)
+        throw new CodeBuddyError("nativeFailure", "Native history rewind was not confirmed");
+    }
+    return { ...opened, sessionId };
+  }
+
+  async initialize() {
+    const saved =
+      this.input.kind === "resume" && record(this.input.nativeRef.locator).codebuddyDerived === 1
+        ? record(record(this.input.nativeRef.locator).configuration)
+        : {};
+    if (this.input.kind === "resume") this.#ref = this.input.nativeRef;
+    const opened = await this.#openClient();
     this.#ref = nativeSessionRefSchema.parse({
       harnessId: this.profile.harnessId,
-      nativeSessionId: sessionId,
+      nativeSessionId: opened.sessionId,
       formatVersion: 1,
       ...(this.#ref?.locator || this.capabilities.history.fork
         ? {
@@ -584,13 +600,7 @@ export class CodeBuddySession implements HarnessSession {
       await this.#client.close();
       if (this.#closed) return;
       this.#client = this.#createClient();
-      await this.#client.initialize();
-      const loaded = await this.#client.open(this.input.cwd, this.#ref.nativeSessionId);
-      if (loaded.sessionId && loaded.sessionId !== this.#ref.nativeSessionId)
-        throw new CodeBuddyError(
-          "protocolError",
-          "Cancellation recovery changed Native Session identity",
-        );
+      const loaded = await this.#openClient();
       this.#apply(configuration(loaded.configOptions));
       if (saved.effectiveModel) await this.#configure("model", nativeModel(saved.effectiveModel));
       if (saved.effectiveThinkingOptionId)

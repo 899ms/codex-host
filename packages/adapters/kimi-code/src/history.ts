@@ -486,11 +486,12 @@ export async function parseKimiWireLog(
         call.result && typeof call.result === "object"
           ? (call.result as Record<string, unknown>)
           : undefined;
-      const outputText = resultObj?.output
-        ? String(resultObj.output)
-        : call.result
-          ? JSON.stringify(call.result)
-          : undefined;
+      const outputText =
+        resultObj?.output != null
+          ? String(resultObj.output)
+          : call.result != null
+            ? JSON.stringify(call.result)
+            : undefined;
 
       if (isBash) {
         const commandText =

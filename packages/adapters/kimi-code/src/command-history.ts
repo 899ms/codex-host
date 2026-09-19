@@ -20,20 +20,27 @@ export async function readKimiCommandHistory(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  return content
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => {
-      const turn = JSON.parse(line) as HostTurnSnapshot;
-      if (
-        turn.nativeTurnRef?.harnessId !== "kimi-code" ||
-        turn.nativeTurnRef.nativeSessionId !== sessionId ||
-        !turn.nativeTurnRef.nativeTurnKey.startsWith("turn:command:")
-      ) {
-        throw new Error("Invalid Kimi command history identity");
-      }
-      return turn;
-    });
+  const lines = content.split("\n");
+  const turns: HostTurnSnapshot[] = [];
+  for (const [index, line] of lines.entries()) {
+    if (!line.trim()) continue;
+    let turn: HostTurnSnapshot;
+    try {
+      turn = JSON.parse(line) as HostTurnSnapshot;
+    } catch (error) {
+      if (index !== lines.length - 1) throw error;
+      break;
+    }
+    if (
+      turn.nativeTurnRef?.harnessId !== "kimi-code" ||
+      turn.nativeTurnRef.nativeSessionId !== sessionId ||
+      !turn.nativeTurnRef.nativeTurnKey.startsWith("turn:command:")
+    ) {
+      throw new Error("Invalid Kimi command history identity");
+    }
+    turns.push(turn);
+  }
+  return turns;
 }
 
 export async function appendKimiCommandHistory(

@@ -259,7 +259,6 @@ export async function runDesktopController(
           "qoder",
           "qoder-cn",
           "kimi-code",
-          "zcode",
         ],
         timeoutMs: PRODUCTION_INSTALL_TIMEOUT_MS,
       },

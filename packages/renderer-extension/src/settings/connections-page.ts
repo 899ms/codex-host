@@ -31,8 +31,7 @@ const HARNESS_INSTALL_URLS: Readonly<Record<ExternalRendererAgent, string>> = Ob
   hermes: "https://hermes-agent.nousresearch.com/docs",
   qoder: "https://docs.qoder.com/",
   "qoder-cn": "https://docs.qoder.cn/",
-  "kimi-code": "https://moonshotai.github.io/kimi-code/en/reference/kimi-acp.html",
-  zcode: "https://zcode.z.ai/cn/docs/install",
+  "kimi-code": "https://moonshotai.github.io/kimi-code/en/guides/getting-started.html",
 });
 
 export interface RendererConnectionAgentSnapshot {
@@ -538,12 +537,7 @@ function renderConnectionInspector(
   const agent = item.agentSnapshot?.agent;
   const getLaunchSettings = diagnostics?.getLaunchSettings?.bind(diagnostics);
   const setLaunchSettings = diagnostics?.setLaunchSettings?.bind(diagnostics);
-  if (
-    hostId === "local" &&
-    (agent === "zcode" || agent === "workbuddy") &&
-    getLaunchSettings &&
-    setLaunchSettings
-  ) {
+  if (hostId === "local" && agent === "workbuddy" && getLaunchSettings && setLaunchSettings) {
     launchControls =
       existingLaunchControls ??
       createHarnessLaunchControls(document, messages, agent, {

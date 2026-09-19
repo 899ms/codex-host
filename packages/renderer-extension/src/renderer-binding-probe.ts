@@ -103,7 +103,6 @@ const externalHarnessIds = {
   qoder: harnessIdSchema.parse("qoder"),
   "qoder-cn": harnessIdSchema.parse("qoder-cn"),
   "kimi-code": harnessIdSchema.parse("kimi-code"),
-  zcode: harnessIdSchema.parse("zcode"),
 } as const;
 
 const externalAgents: readonly ExternalRendererAgent[] = [
@@ -122,7 +121,6 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "qoder",
   "qoder-cn",
   "kimi-code",
-  "zcode",
 ];
 type HarnessAvailability = Partial<Record<ExternalRendererAgent, RendererAgentAvailability>>;
 type HarnessAvailabilityErrors = Partial<Record<ExternalRendererAgent, CodexhostError | undefined>>;
@@ -509,11 +507,7 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
         : {}),
     };
   }
-  if (
-    inspection.harnessId === "qoder" ||
-    inspection.harnessId === "qoder-cn" ||
-    inspection.harnessId === "zcode"
-  ) {
+  if (inspection.harnessId === "qoder" || inspection.harnessId === "qoder-cn") {
     const route = decodeHarnessPluginRoute(inspection.transportModelId);
     if (!route || route.harnessId !== inspection.harnessId) {
       throw new Error("Harness Thread reported an incompatible transport Model");
@@ -788,7 +782,6 @@ export function installRendererBindingProbe(
       qoder: undefined,
       "qoder-cn": undefined,
       "kimi-code": undefined,
-      zcode: undefined,
     },
     webUi: Object.fromEntries(
       externalAgents.map((agent) => [agent, false]),

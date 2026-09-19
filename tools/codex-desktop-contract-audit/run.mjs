@@ -23,7 +23,6 @@ const productionRendererAgents = Object.freeze([
   "omp",
   "qoder",
   "qoder-cn",
-  "zcode",
 ]);
 
 function usage() {

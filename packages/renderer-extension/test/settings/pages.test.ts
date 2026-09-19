@@ -406,7 +406,7 @@ describe("Read-only Harness accounts", () => {
 });
 
 describe("Renderer Connections page", () => {
-  it.each(["zcode", "workbuddy"] as const)(
+  it.each(["workbuddy"] as const)(
     "edits %s launch settings in the local right-side inspector",
     async (agent) => {
       const messages = rendererSettingsMessages("zh-CN");

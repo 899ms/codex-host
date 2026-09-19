@@ -517,7 +517,7 @@ describe("Kimi Code History & Diff", () => {
       expect(turn.completedAtMs).toBe(15000);
     });
 
-    it("populates fallback completedAtMs from lastSeenTimeMs when turn has no turn.ended", async () => {
+    it("populates fallback completedAtMs when the terminal record has no timestamp", async () => {
       const wire = [
         JSON.stringify({
           type: "turn.prompt",
@@ -528,9 +528,10 @@ describe("Kimi Code History & Diff", () => {
         JSON.stringify({
           type: "context.append_loop_event",
           event: { type: "content.part", turnId: 0, part: { type: "text", text: "Working..." } },
+          turnId: 0,
           time: 5500,
         }),
-        JSON.stringify({ type: "agent.turn.ended", turnId: 0, outcome: "cancelled", time: 6000 }),
+        JSON.stringify({ type: "agent.turn.ended", turnId: 0, outcome: "cancelled" }),
       ].join("\n");
 
       const snapshots = await parseKimiWireLog(wire, "s-cancel-time");
@@ -539,7 +540,7 @@ describe("Kimi Code History & Diff", () => {
       expect(turn).toBeDefined();
       if (!turn) return;
       expect(turn.startedAtMs).toBe(2000);
-      expect(turn.completedAtMs).toBe(6000);
+      expect(turn.completedAtMs).toBe(5500);
       expect(turn.outcome.status).toBe("cancelled");
     });
   });

@@ -25,7 +25,6 @@ describe("production Renderer release chain", () => {
     expect(agentState).toContain('"opencode",');
     expect(agentState).toContain('"grok",');
     expect(agentState).toContain('"antigravity",');
-    expect(agentState).toContain('"zcode",');
     expect(agentState).toContain("DEFAULT_RENDERER_AGENTS = KNOWN_RENDERER_AGENTS");
     const rendererAgents = agentState.match(/KNOWN_RENDERER_AGENTS = \[([^\]]+)\]/)[1];
     const controllerAgents = controller.match(/enabledAgents: \[([^\]]+)\]/)[1];
@@ -54,7 +53,6 @@ describe("production Renderer release chain", () => {
     expect(RENDERER_PROBE_AGENTS).toContain("opencode");
     expect(RENDERER_PROBE_AGENTS).toContain("grok");
     expect(RENDERER_PROBE_AGENTS).toContain("antigravity");
-    expect(RENDERER_PROBE_AGENTS).toContain("zcode");
     expect(status.selections).toEqual([
       { composerId: "composer-grok", agent: "grok", phase: "draft" },
     ]);

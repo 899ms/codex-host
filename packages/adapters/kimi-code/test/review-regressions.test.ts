@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InitializeResponse, PromptResponse } from "@agentclientprotocol/sdk";
-import type { HarnessOutput, HostTurnSnapshot } from "@codexhost/harness-adapter";
+import type { HarnessOutput, HostInteraction, HostTurnSnapshot } from "@codexhost/harness-adapter";
 import { hostTurnIdSchema } from "@codexhost/shared-contracts";
 import { KimiAdapter, type KimiAcpTransportLike } from "../src/kimi-adapter.js";
 import { KimiSession } from "../src/kimi-session.js";
+import { readKimiCommandHistory } from "../src/command-history.js";
+import { createHostItemFromToolState, KimiToolCallAccumulator } from "../src/projection.js";
 import {
   createKimiNativeSessionRef,
   createKimiNativeTurnRef,
@@ -68,6 +70,152 @@ describe("Kimi PR review regressions", () => {
     for (const directory of directories.splice(0))
       await rm(directory, { recursive: true, force: true });
   });
+
+  it.each([
+    [{ output: "" }, ""],
+    [{ output: 0 }, "0"],
+    [0, "0"],
+    [false, "false"],
+    [null, undefined],
+  ])("preserves native tool output %j", async (result, output) => {
+    const wire = [
+      { type: "turn.prompt", turnId: 0, input: [{ type: "text", text: "hello" }] },
+      {
+        type: "context.append_loop_event",
+        event: {
+          type: "tool.call",
+          toolCallId: "shell",
+          name: "Bash",
+          args: { command: "echo" },
+        },
+      },
+      {
+        type: "context.append_loop_event",
+        event: {
+          type: "tool.result",
+          toolCallId: "shell",
+          result,
+        },
+      },
+      { type: "agent.turn.ended", turnId: 0, outcome: "completed" },
+    ];
+    const turns = await parseKimiWireLog(
+      wire.map((row) => JSON.stringify(row)).join("\n"),
+      "review-session",
+    );
+    const item = turns[0]?.items.find(({ item }) => item.type === "commandExecution")?.item;
+    expect(item?.type).toBe("commandExecution");
+    if (item?.type === "commandExecution") expect(item.output).toBe(output);
+  });
+
+  it.each([
+    [undefined, "Edit"],
+    [{ path: "file.txt" }, "Edit"],
+    [{ content: "" }, "Write"],
+    [{ text: "new" }, "Write"],
+    [{ old_string: "", content: "new" }, "Edit"],
+  ])("classifies streamed edit input %j", (rawInput, toolName) => {
+    const state = new KimiToolCallAccumulator().getOrCreate(
+      "edit",
+      hostTurnIdSchema.parse("edit-turn"),
+      "Tool",
+      "edit",
+    );
+    state.rawInput = rawInput;
+    expect(createHostItemFromToolState(state)).toMatchObject({ type: "toolExecution", toolName });
+  });
+
+  it.each(["respond", "cancel", "close", "fault"])(
+    "settles concurrent permissions and elicitation on %s",
+    async (action) => {
+      const transport = new Transport();
+      let replies: unknown[] = [];
+      transport.prompt.mockImplementation(async (_text, handler) => {
+        replies = await Promise.all([
+          ...["first", "second"].map((id) =>
+            handler.onPermission({
+              sessionId: transport.sessionId,
+              toolCall: { toolCallId: id },
+              options: [{ optionId: id, name: id, kind: "allow_once" }],
+            }),
+          ),
+          handler.onElicitation({
+            sessionId: transport.sessionId,
+            mode: "form",
+            message: "Choose",
+            requestedSchema: { type: "object", properties: {} },
+          }),
+        ]);
+        return { stopReason: "end_turn" };
+      });
+      let reads = 0;
+      const session = new KimiSession({
+        transport,
+        sessionId: transport.sessionId,
+        cwd: process.cwd(),
+        initialState: {},
+        readNativeSnapshot: async () => ({ turns: reads++ ? [nativeTurn(0, "hello")] : [] }),
+      });
+      const interactions: HostInteraction[] = [];
+      const outputs: HarnessOutput[] = [];
+      let allOpened!: () => void;
+      const opened = new Promise<void>((resolve) => {
+        allOpened = resolve;
+      });
+      const consume = (async () => {
+        for await (const output of session.outputs) {
+          outputs.push(output);
+          if (output.kind === "interaction") {
+            interactions.push(output.interaction);
+            if (interactions.length === 3) allOpened();
+          }
+          if (output.kind === "event" && output.event.type === "turn.completed") break;
+        }
+      })();
+      const turnId = hostTurnIdSchema.parse("concurrent-turn");
+      await session.execute({
+        type: "turn.start",
+        turnId,
+        input: [{ type: "text", text: "hello" }],
+      });
+      await opened;
+      if (action === "respond") {
+        for (const interaction of [...interactions].reverse()) {
+          expect(
+            await session.execute({
+              type: "interaction.respond",
+              interactionId: interaction.interactionId,
+              response:
+                interaction.type === "approval"
+                  ? { type: "approval", actionId: interaction.actions[0]!.id }
+                  : { type: "question", answers: {} },
+            }),
+          ).toMatchObject({ ok: true });
+        }
+      } else if (action === "cancel") {
+        expect(await session.execute({ type: "turn.cancel", turnId })).toMatchObject({ ok: true });
+      } else if (action === "close") await session.close();
+      else session.handleTransportFault(new KimiTransportError("processExited", "native exit"));
+      await consume;
+      expect(replies).toEqual(
+        action === "respond"
+          ? [
+              { outcome: { outcome: "selected", optionId: "first" } },
+              { outcome: { outcome: "selected", optionId: "second" } },
+              { action: "accept", content: {} },
+            ]
+          : [
+              { outcome: { outcome: "cancelled" } },
+              { outcome: { outcome: "cancelled" } },
+              { action: "cancel" },
+            ],
+      );
+      expect(
+        outputs.filter((o) => o.kind === "event" && o.event.type === "interaction.closed"),
+      ).toHaveLength(3);
+      await session.close();
+    },
+  );
 
   it("keeps metadata-only native sessions empty", async () => {
     const wire = [
@@ -296,7 +444,8 @@ describe("Kimi PR review regressions", () => {
     for (const id of ["first", "second"]) {
       await session.commands.execute({ commandId: "status", turnId: hostTurnIdSchema.parse(id) });
       for (;;) {
-        const { value } = await outputIterator.next();
+        const { value, done } = await outputIterator.next();
+        if (done) throw new Error(`output stream ended before turn.completed for ${id}`);
         if (value?.kind === "event" && value.event.type === "turn.completed") {
           expect(value.event.outcome.status).toBe("succeeded");
           references.push(value.event.nativeTurnRef);
@@ -318,5 +467,16 @@ describe("Kimi PR review regressions", () => {
     }
     expect(await readFile(wirePath, "utf8")).toBe(wire);
     await resumed.close();
+    const journalPath = path.join(sessionDir, "codexhost-commands.jsonl");
+    const journal = await readFile(journalPath, "utf8");
+    const options = { kimiCodeHome: home };
+    await writeFile(journalPath, journal + '{"nativeTurnRef":');
+    expect(await readKimiCommandHistory("review-session", options)).toHaveLength(2);
+    await writeFile(journalPath, "{broken}\n" + journal);
+    await expect(readKimiCommandHistory("review-session", options)).rejects.toThrow();
+    await writeFile(journalPath, journal + JSON.stringify(nativeTurn(9, "wrong identity")));
+    await expect(readKimiCommandHistory("review-session", options)).rejects.toThrow(
+      "Invalid Kimi command history identity",
+    );
   });
 });

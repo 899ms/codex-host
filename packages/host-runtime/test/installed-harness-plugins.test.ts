@@ -26,7 +26,6 @@ const classes = {
   hermes: "HermesAdapter",
   qoder: "QoderAdapter",
   "qoder-cn": "QoderAdapter",
-  zcode: "ZcodeAdapter",
 };
 
 const unavailable: HarnessInspection = {
@@ -128,7 +127,6 @@ describe("installed Harness composition", () => {
       hermes: ["/help", "/tools", "/context", "/version", "/compress"],
       qoder: ["/compact"],
       "qoder-cn": ["/compact"],
-      zcode: ["/compact", "/goal"],
     };
     const registry = await load();
     try {
@@ -160,7 +158,6 @@ describe("installed Harness composition", () => {
     ["hermes", "CODEXHOST_HERMES_COMMAND"],
     ["qoder", "CODEXHOST_QODER_COMMAND"],
     ["qoder-cn", "CODEXHOST_QODERCN_COMMAND"],
-    ["zcode", "CODEXHOST_ZCODE_COMMAND"],
   ])(
     "preserves the explicit %s command rather than finding another local installation",
     async (id, commandVariable) => {

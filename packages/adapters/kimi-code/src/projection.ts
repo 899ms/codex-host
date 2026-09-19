@@ -219,14 +219,18 @@ export function canonicalizeKimiToolName(
   const trimmed = name?.trim();
   const lower = trimmed?.toLowerCase() ?? "";
 
-  if (kind === "edit" || lower.startsWith("write") || lower.startsWith("writ")) {
+  if (lower.startsWith("write") || lower.startsWith("writ")) {
     const isEdit =
       isRecord(rawInput) &&
       ("old_string" in rawInput || "oldText" in rawInput || "old" in rawInput);
     return isEdit ? "Edit" : "Write";
   }
   if (kind === "edit" || lower.startsWith("edit")) {
-    return "Edit";
+    const isWrite =
+      isRecord(rawInput) &&
+      ("content" in rawInput || "text" in rawInput) &&
+      !("old_string" in rawInput || "oldText" in rawInput || "old" in rawInput);
+    return isWrite ? "Write" : "Edit";
   }
   if (
     kind === "execute" ||

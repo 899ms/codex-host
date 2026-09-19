@@ -176,9 +176,17 @@ in the temporary copy.
 The final Session is rewound using native `resend_edit`, with files disabled, to
 the end of the selected Turn, including its Tool result suffix. Revision retains
 the prefix before the last Turn, including the valid empty prefix. Native
-`resend-fork-notice` records select the active branch of the append-only history;
-the plugin verifies the durable result and removes all `/fork` administrative
-messages from that active branch. It never edits native transcripts, injects
+`resend-fork-notice` records identify the requested branch of the append-only history;
+the plugin verifies that prefix and excludes `/fork` administrative messages from
+its projection. A notice alone does not guarantee that a fresh native process
+restores the same cursor. After loading, the writable Session reapplies and confirms
+native rollback only when the latest message/rewind record is still a rewind notice
+(`null` for an empty prefix). Initial resume and cancellation recovery share this
+path. Titles, summaries and file snapshots do not consume the notice; a subsequent
+message, reasoning or tool record anchors the branch and prevents another rewind,
+so later valid Turns survive resume. No additional persistent state is needed.
+Missing or unconfirmed rollback fails closed. This does not automatically repair
+Sessions already continued on the wrong branch. It never edits native transcripts, injects
 replacement messages, invents native message IDs, or rewinds source files.
 Snapshots and Turn completion expose checkpoints based on persisted native user
 message IDs. Cross-cwd Fork remains unsupported.

@@ -14,8 +14,7 @@
     "packages/adapters/hermes",
     "packages/adapters/qoder",
     "packages/adapters/qoder-cn",
-    "packages/adapters/kimi-code",
-    "packages/adapters/zcode"
+    "packages/adapters/kimi-code"
   ],
   "runtimePackages": [
     "@agentclientprotocol/sdk",

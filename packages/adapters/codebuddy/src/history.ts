@@ -427,19 +427,35 @@ function parseJsonl(contents: string, tolerateIncompleteTail: boolean) {
   };
 }
 
+const NATIVE_MESSAGE_TYPES = new Set([
+  "message",
+  "reasoning",
+  "function_call",
+  "function_call_result",
+]);
+
+/** A trailing rewind still needs a live cursor; a later message anchors the branch itself. */
+export function pendingNativeHistoryRewind(contents: string) {
+  const last = parseRows(contents).findLast(
+    (row) => row.type === "resend-fork-notice" || NATIVE_MESSAGE_TYPES.has(text(row.type)),
+  );
+  return last?.type === "resend-fork-notice"
+    ? { forkPointId: text(last.parentId) || null }
+    : undefined;
+}
+
 /** Follow the current native parent chain, not every branch in the append-only file. */
 export function nativeHistoryRows(contents: string) {
   const entries = new Map<string, Record<string, unknown>>();
   let leaf = "";
   for (const row of parseRows(contents)) {
     if (row.type === "resend-fork-notice") {
-      // Native resend_edit atomically moves the durable lane to this parent while
-      // leaving the discarded branch in the append-only transcript.
+      // The notice records the desired branch, but native load may ignore it.
+      // Session opening restores this cursor before allowing a new prompt.
       leaf = text(row.parentId);
       continue;
     }
-    if (!["message", "reasoning", "function_call", "function_call_result"].includes(text(row.type)))
-      continue;
+    if (!NATIVE_MESSAGE_TYPES.has(text(row.type))) continue;
     if (!text(row.id))
       throw new CodeBuddyError("protocolError", "Native message is missing its stable ID");
     entries.set(text(row.id), row);
