@@ -478,7 +478,7 @@ describe("npm package release", () => {
 
     expect(promptCall).toBeGreaterThanOrEqual(0);
     expect(promptCall).toBeLessThan(platformResolution);
-    expect(source.match(/\n  printStarPrompt\(\);/gu)).toHaveLength(1);
+    expect(source.match(/\n {2}printStarPrompt\(\);/gu)).toHaveLength(1);
   });
 
   it("injects package resources when the user runs codexhost with no args", () => {
