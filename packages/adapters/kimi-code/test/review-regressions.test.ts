@@ -80,13 +80,14 @@ describe("Kimi PR review regressions", () => {
     ).toEqual([]);
   });
 
-  it("rejects rollbackLastTurn before native side effects", async () => {
+  it("rejects rollback of another harness before native side effects", async () => {
     const transport = new Transport();
     const createTransport = vi.fn(() => transport);
     const adapter = new KimiAdapter({}, { resolveExecutable: () => "kimi", createTransport });
     const sourceRef = createKimiNativeSessionRef("source", process.cwd());
+    sourceRef.harnessId = "other" as typeof sourceRef.harnessId;
     const result = await adapter.open({ kind: "rollbackLastTurn", sourceRef, cwd: process.cwd() });
-    expect(result).toMatchObject({ ok: false, error: { code: "unsupported" } });
+    expect(result).toMatchObject({ ok: false, error: { code: "invalidRequest" } });
     expect(createTransport).not.toHaveBeenCalled();
   });
 

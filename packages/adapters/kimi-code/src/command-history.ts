@@ -1,4 +1,4 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { HostTurnSnapshot } from "@codexhost/harness-adapter";
 import { locateKimiSession } from "./history.js";
@@ -45,6 +45,26 @@ export async function appendKimiCommandHistory(
   await appendFile(
     path.join(located.sessionDir, "codexhost-commands.jsonl"),
     `${JSON.stringify(turn)}\n`,
+    "utf8",
+  );
+}
+
+export async function copyKimiCommandHistory(
+  turns: HostTurnSnapshot[],
+  sessionId: string,
+  options: HistoryOptions,
+): Promise<void> {
+  if (turns.length === 0) return;
+  const located = await locateKimiSession(sessionId, options);
+  if (!located) throw new Error("Cannot copy Kimi command history: derived session is missing");
+  const copied = turns.map((turn) => ({
+    ...turn,
+    nativeTurnRef: { ...turn.nativeTurnRef, nativeSessionId: sessionId },
+    ...(turn.checkpoint ? { checkpoint: { ...turn.checkpoint, nativeSessionId: sessionId } } : {}),
+  }));
+  await writeFile(
+    path.join(located.sessionDir, "codexhost-commands.jsonl"),
+    copied.map((turn) => `${JSON.stringify(turn)}\n`).join(""),
     "utf8",
   );
 }

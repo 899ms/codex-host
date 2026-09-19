@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import type {
   HarnessAdapter,
@@ -49,6 +50,8 @@ import {
 } from "./models.js";
 import { KimiSession, kimiSessionCapabilities } from "./kimi-session.js";
 import { KIMI_DEFAULT_COMMAND_CATALOG } from "./slash-commands.js";
+import { copyKimiCommandHistory, readKimiCommandHistory } from "./command-history.js";
+import { KimiRollbackError, rollbackKimiNativeSession } from "./native-rollback.js";
 
 const kimiHarnessId: HarnessId = harnessIdSchema.parse("kimi-code");
 
@@ -85,6 +88,7 @@ export interface KimiAcpTransportLike {
 }
 
 export interface KimiAdapterDependencies {
+  rollbackNativeSession?: typeof rollbackKimiNativeSession;
   createTransport?: (options: KimiAcpTransportOptions) => KimiAcpTransportLike;
   resolveExecutable?: (input: {
     command?: string;
@@ -295,13 +299,13 @@ export class KimiAdapter implements HarnessAdapter {
       return err("invalidState", "Adapter is closed");
     }
 
-    if (input.kind === "rollbackLastTurn") {
-      return err("unsupported", "Kimi Code does not support rollbackLastTurn");
-    }
     if (input.kind === "create" && input.executionPolicy === "unattended-full-access") {
       return err("unsupported", "Kimi Code cannot guarantee unattended-full-access");
     }
-    if (input.kind === "resume" && input.nativeRef.harnessId !== this.harnessId) {
+    if (
+      (input.kind === "resume" && input.nativeRef.harnessId !== this.harnessId) ||
+      (input.kind === "rollbackLastTurn" && input.sourceRef.harnessId !== this.harnessId)
+    ) {
       return err("invalidRequest", "Native Session belongs to a different Harness");
     }
     if (
@@ -331,6 +335,13 @@ export class KimiAdapter implements HarnessAdapter {
       });
     } catch (error) {
       return err("notInstalled", error instanceof Error ? error.message : "Kimi CLI not found");
+    }
+
+    if (input.kind === "rollbackLastTurn") {
+      return this.#rollbackLastTurn(input, executable, {
+        ...environment,
+        KIMI_CODE_HOME: kimiCodeHome,
+      });
     }
 
     let session: KimiSession | null = null;
@@ -585,6 +596,83 @@ export class KimiAdapter implements HarnessAdapter {
 
     await transport.close().catch(() => undefined);
     return err("unsupported", `Unsupported open kind`);
+  }
+
+  async #rollbackLastTurn(
+    input: Extract<OpenSessionInput, { kind: "rollbackLastTurn" }>,
+    executable: string,
+    environment: NodeJS.ProcessEnv,
+  ): Promise<HarnessResult<HarnessSession>> {
+    const sourceId = input.sourceRef.nativeSessionId;
+    const historyOptions = {
+      kimiCodeHome: getKimiCodeHome(this.#options.homeDirectory, environment),
+    };
+    let derivedId: string | undefined;
+    try {
+      const located = await locateKimiSession(sourceId, historyOptions);
+      if (!located) return err("sessionNotFound", "Kimi source session was not found");
+      if (path.resolve(input.cwd) !== path.resolve(located.state.cwd))
+        return err("unsupported", "Kimi cannot roll back into another working directory");
+      const source = [...this.#sessions].find(
+        (candidate) => candidate.initialState.nativeRef?.nativeSessionId === sourceId,
+      );
+      if (source) {
+        const snapshot = await source.readSnapshot();
+        if (!snapshot.ok) return snapshot;
+      }
+      const snapshot = await readKimiSessionSnapshot(sourceId, historyOptions);
+      const commands = await readKimiCommandHistory(sourceId, historyOptions);
+      const latest = [...snapshot.turns, ...commands]
+        .sort((a, b) => (a.startedAtMs ?? 0) - (b.startedAtMs ?? 0))
+        .at(-1);
+      if (!latest) return err("invalidState", "Kimi session has no turn to revise");
+      if (latest.nativeTurnRef.nativeTurnKey.startsWith("turn:command:"))
+        return err(
+          "unsupported",
+          "Kimi can revise conversation messages, but cannot undo slash-command side effects",
+        );
+      if (latest.outcome.status === "unknown")
+        return err("sessionBusy", "Kimi's last turn has not reached a confirmed terminal state");
+
+      const rolledBack = await (this.#deps.rollbackNativeSession ?? rollbackKimiNativeSession)({
+        command: executable,
+        cwd: input.cwd,
+        environment,
+        sourceSessionId: sourceId,
+        timeoutMs: this.#options.commandTimeoutMs ?? 30_000,
+      });
+      derivedId = rolledBack.sessionId;
+      if (derivedId === sourceId) throw new Error("Native rollback returned the source session");
+      const derived = await readKimiSessionSnapshot(derivedId, historyOptions);
+      const comparable = (turns: typeof snapshot.turns) =>
+        turns.map((turn) => ({
+          key: turn.nativeTurnRef.nativeTurnKey,
+          input: turn.input,
+          items: turn.items,
+          outcome: turn.outcome,
+        }));
+      if (!isDeepStrictEqual(comparable(derived.turns), comparable(snapshot.turns.slice(0, -1))))
+        throw new Error("Native rollback did not preserve exactly the preceding conversation");
+      await copyKimiCommandHistory(commands, derivedId, historyOptions);
+      const opened = await this.open({
+        kind: "resume",
+        nativeRef: createKimiNativeSessionRef(derivedId, input.cwd),
+        cwd: input.cwd,
+        environment,
+        model: input.model ?? encodeKimiModelRef(rolledBack.model),
+        thinkingOptionId:
+          input.thinkingOptionId ?? harnessThinkingOptionIdSchema.parse(rolledBack.thinking),
+        permissionModeId:
+          input.permissionModeId ?? harnessPermissionModeIdSchema.parse(rolledBack.mode),
+      });
+      if (!opened.ok) throw new Error(opened.error.message);
+      return opened;
+    } catch (error) {
+      return err(
+        error instanceof KimiRollbackError ? error.code : "nativeFailure",
+        `${error instanceof Error ? error.message : String(error)}${derivedId ? ` (Original session preserved; derived session: ${derivedId})` : ""}`,
+      );
+    }
   }
 
   async close(): Promise<void> {

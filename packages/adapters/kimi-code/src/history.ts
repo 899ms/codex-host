@@ -34,6 +34,7 @@ import {
 
 import { encodeKimiModelRef } from "./models.js";
 import { canonicalizeKimiToolName } from "./projection.js";
+import { activeKimiWireRecords } from "./wire-history.js";
 
 const kimiHarnessId: HarnessId = harnessIdSchema.parse("kimi-code");
 
@@ -195,7 +196,6 @@ export async function parseKimiWireLog(
   sessionId: string,
   mainHomeDir?: string,
 ): Promise<HostTurnSnapshot[]> {
-  const lines = wireContent.split("\n");
   const turns = new Map<number, KimiNativeTurnBuilder>();
   let eventOrder = 0;
 
@@ -215,23 +215,7 @@ export async function parseKimiWireLog(
     return turn;
   };
 
-  for (let index = 0; index < lines.length; index++) {
-    const rawLine = lines[index];
-    if (!rawLine) continue;
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    let record: Record<string, unknown>;
-    try {
-      record = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      if (index === lines.length - 1) {
-        // Last line incomplete - wait for next read
-        break;
-      }
-      throw new Error(`Malformed JSON in wire log at line ${index + 1}`);
-    }
-
+  for (const record of activeKimiWireRecords(wireContent)) {
     const type = record.type;
     const agentId = record.agentId;
     if (agentId !== undefined && agentId !== "main") {
@@ -244,7 +228,13 @@ export async function parseKimiWireLog(
       if (turn) turn.lastSeenTimeMs = Math.max(turn.lastSeenTimeMs ?? 0, record.time);
     }
 
-    if (type === "turn.prompt") {
+    if (type === "context.undone" && typeof record.fromTurnId === "number") {
+      // The branch base can retain turn.prompt queued before its context
+      // checkpoint. Kimi identifies these removed turns explicitly.
+      for (const turnId of turns.keys()) {
+        if (turnId >= record.fromTurnId) turns.delete(turnId);
+      }
+    } else if (type === "turn.prompt") {
       const turnId = typeof record.turnId === "number" ? record.turnId : 0;
       const turn = getOrCreateTurn(turnId);
       if (typeof record.promptId === "string") turn.promptId = record.promptId;
@@ -689,7 +679,6 @@ export function extractKimiUsageFromWireLog(
   wireContent: string,
   contextWindowTokens?: number,
 ): HostUsage | null {
-  const lines = wireContent.split("\n");
   let inputTokens = 0;
   let outputTokens = 0;
   let cachedInputTokens = 0;
@@ -697,29 +686,24 @@ export function extractKimiUsageFromWireLog(
   let contextUsedTokens: number | undefined = undefined;
   let hasUsage = false;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const record = JSON.parse(trimmed) as Record<string, unknown>;
-      const type = record.type;
-      if (type === "usage.record" && typeof record.usage === "object" && record.usage !== null) {
-        const u = record.usage as Record<string, unknown>;
-        if (typeof u.inputOther === "number") inputTokens += u.inputOther;
-        if (typeof u.output === "number") outputTokens += u.output;
-        if (typeof u.inputCacheRead === "number") cachedInputTokens += u.inputCacheRead;
-        if (typeof u.inputCacheCreation === "number") cacheWriteInputTokens += u.inputCacheCreation;
-        hasUsage = true;
-      }
-      if (
-        (type === "token_counting.turn_recorded" || type === "token_counting.measured") &&
-        typeof record.tokens === "number"
-      ) {
-        contextUsedTokens = record.tokens;
-        hasUsage = true;
-      }
-    } catch {
-      // ignore malformed line
+  for (const record of activeKimiWireRecords(wireContent)) {
+    const type = record.type;
+    if (type === "usage.record" && typeof record.usage === "object" && record.usage !== null) {
+      const u = record.usage as Record<string, unknown>;
+      if (typeof u.inputOther === "number") inputTokens += u.inputOther;
+      if (typeof u.output === "number") outputTokens += u.output;
+      if (typeof u.inputCacheRead === "number") cachedInputTokens += u.inputCacheRead;
+      if (typeof u.inputCacheCreation === "number") cacheWriteInputTokens += u.inputCacheCreation;
+      hasUsage = true;
+    }
+    if (
+      (type === "token_counting.turn_recorded" ||
+        type === "token_counting.measured" ||
+        type === "token_counting.truncated") &&
+      typeof record.tokens === "number"
+    ) {
+      contextUsedTokens = record.tokens;
+      hasUsage = true;
     }
   }
 
