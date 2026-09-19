@@ -449,6 +449,32 @@ export class KimiSession implements HarnessSession {
   }
 
   async #runTurn(command: TurnStartCommand): Promise<void> {
+    try {
+      this.#channel.emit(await this.#runTurnBody(command));
+    } catch (error) {
+      this.#channel.emit({
+        kind: "event",
+        event: {
+          type: "turn.completed",
+          turnId: command.turnId,
+          outcome: {
+            status: "failed",
+            error: {
+              code: "nativeFailure",
+              message: error instanceof Error ? error.message : String(error),
+              retryable: false,
+            },
+          },
+        },
+      });
+    } finally {
+      this.#closeActiveInteractions("cancelled");
+      this.#activeTurn = null;
+      this.#activeTurnPromise = null;
+    }
+  }
+
+  async #runTurnBody(command: TurnStartCommand): Promise<HarnessOutput> {
     const turnId = command.turnId;
     const startedAtMs = Date.now();
     this.#channel.emit({ kind: "event", event: { type: "turn.started", turnId } });
@@ -852,9 +878,10 @@ export class KimiSession implements HarnessSession {
     }
 
     // Refresh and emit usage for this turn
-    if (promptResponse && typeof (promptResponse as Record<string, unknown>).usage === "object") {
+    const responseUsage = promptResponse?.usage;
+    if (responseUsage && typeof responseUsage === "object" && !Array.isArray(responseUsage)) {
       const promptUsage = parseKimiUsage(
-        (promptResponse as Record<string, unknown>).usage as Record<string, unknown>,
+        responseUsage as Record<string, unknown>,
         this.#contextWindowTokens,
       );
       if (promptUsage) {
@@ -914,7 +941,7 @@ export class KimiSession implements HarnessSession {
       ? { ...turnOutcome, checkpoint: currentNativeTurn.checkpoint }
       : turnOutcome;
 
-    this.#channel.emit({
+    return {
       kind: "event",
       event: {
         type: "turn.completed",
@@ -922,10 +949,7 @@ export class KimiSession implements HarnessSession {
         ...(currentNativeTurn ? { nativeTurnRef: currentNativeTurn.nativeTurnRef } : {}),
         outcome: completedOutcome,
       },
-    });
-
-    this.#activeTurn = null;
-    this.#activeTurnPromise = null;
+    };
   }
 
   async #waitForNativeTurn(

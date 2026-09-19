@@ -9,6 +9,7 @@ import { KimiAdapter, type KimiAcpTransportLike } from "../src/kimi-adapter.js";
 import { KimiSession } from "../src/kimi-session.js";
 import { readKimiCommandHistory } from "../src/command-history.js";
 import { createHostItemFromToolState, KimiToolCallAccumulator } from "../src/projection.js";
+import * as projection from "../src/projection.js";
 import {
   createKimiNativeSessionRef,
   createKimiNativeTurnRef,
@@ -67,9 +68,77 @@ function nativeTurn(
 describe("Kimi PR review regressions", () => {
   const directories: string[] = [];
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const directory of directories.splice(0))
       await rm(directory, { recursive: true, force: true });
   });
+
+  it.each(["null", "valid", "throw"])(
+    "completes a turn with %s usage and accepts the next turn",
+    async (scenario) => {
+      const transport = new Transport();
+      const turns: HostTurnSnapshot[] = [];
+      const usage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
+      transport.prompt.mockImplementation(async (text) => {
+        turns.push(nativeTurn(turns.length, text));
+        return { stopReason: "end_turn", usage: scenario === "null" ? null : usage };
+      });
+      if (scenario === "throw") {
+        vi.spyOn(projection, "parseKimiUsage").mockImplementationOnce(() => {
+          throw new Error("usage projection failed");
+        });
+      }
+      const session = new KimiSession({
+        transport,
+        sessionId: transport.sessionId,
+        cwd: process.cwd(),
+        initialState: {},
+        readNativeSnapshot: async () => ({ turns: [...turns] }),
+      });
+      const iterator = session.outputs[Symbol.asyncIterator]();
+      for (const id of ["first", "second"]) {
+        expect(
+          await session.execute({
+            type: "turn.start",
+            turnId: hostTurnIdSchema.parse(id),
+            input: [{ type: "text", text: id }],
+          }),
+        ).toMatchObject({ ok: true });
+        const outputs: HarnessOutput[] = [];
+        for (;;) {
+          const { value, done } = await iterator.next();
+          if (done) throw new Error(`output stream ended before turn.completed for ${id}`);
+          outputs.push(value);
+          if (value.kind === "event" && value.event.type === "turn.completed") break;
+        }
+        expect(
+          outputs.filter((o) => o.kind === "event" && o.event.type === "turn.completed"),
+        ).toEqual([
+          expect.objectContaining({
+            event: expect.objectContaining({
+              type: "turn.completed",
+              turnId: id,
+              outcome:
+                scenario === "throw" && id === "first"
+                  ? {
+                      status: "failed",
+                      error: {
+                        code: "nativeFailure",
+                        message: "usage projection failed",
+                        retryable: false,
+                      },
+                    }
+                  : { status: "succeeded" },
+            }),
+          }),
+        ]);
+        expect(await session.readSnapshot()).toMatchObject({ ok: true });
+      }
+      if (scenario !== "null") expect(session.initialUsage).toMatchObject(usage);
+      await session.close();
+      expect(await session.readSnapshot()).toMatchObject({ ok: true });
+    },
+  );
 
   it.each([
     [{ output: "" }, ""],
@@ -181,14 +250,17 @@ describe("Kimi PR review regressions", () => {
       await opened;
       if (action === "respond") {
         for (const interaction of [...interactions].reverse()) {
+          const firstAction = interaction.type === "approval" ? interaction.actions[0] : undefined;
+          if (interaction.type === "approval" && !firstAction) {
+            throw new Error("Approval interaction has no action");
+          }
           expect(
             await session.execute({
               type: "interaction.respond",
               interactionId: interaction.interactionId,
-              response:
-                interaction.type === "approval"
-                  ? { type: "approval", actionId: interaction.actions[0]!.id }
-                  : { type: "question", answers: {} },
+              response: firstAction
+                ? { type: "approval", actionId: firstAction.id }
+                : { type: "question", answers: {} },
             }),
           ).toMatchObject({ ok: true });
         }
