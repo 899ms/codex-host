@@ -140,12 +140,10 @@ describe("ZCode native workspace protocol compatibility", () => {
       .mockRejectedValueOnce(rpcError(-32601, "Missing presentation"));
     await expect(readWorkspace(f.transport)).rejects.toThrow("Missing presentation");
     f.request.mockClear();
-    f.request
-      .mockRejectedValueOnce(rpcError(-32601, "Missing state"))
-      .mockResolvedValueOnce({
-        workspace: { ...f.workspace, workspacePath: path.dirname(f.root) },
-        mode: "build",
-      });
+    f.request.mockRejectedValueOnce(rpcError(-32601, "Missing state")).mockResolvedValueOnce({
+      workspace: { ...f.workspace, workspacePath: path.dirname(f.root) },
+      mode: "build",
+    });
     await expect(readWorkspace(f.transport)).rejects.toThrow("different workspace");
     expect(f.request).toHaveBeenCalledTimes(2);
   });
