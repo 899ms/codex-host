@@ -88,10 +88,13 @@ export function parseKimiConfigToml(content: string): KimiNativeConfig {
   try {
     parsed = parseToml(content) as Record<string, unknown>;
   } catch (error) {
-    throw new Error(`Failed to parse Kimi config.toml: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to parse Kimi config.toml: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
-  const defaultModel = typeof parsed.default_model === "string" ? parsed.default_model.trim() : undefined;
+  const defaultModel =
+    typeof parsed.default_model === "string" ? parsed.default_model.trim() : undefined;
   const models: KimiNativeConfig["models"] = [];
 
   if (typeof parsed.models === "object" && parsed.models !== null) {
@@ -163,14 +166,14 @@ export function buildModelCatalogFromConfig(
     { id: harnessThinkingOptionIdSchema.parse("max"), label: "Max" },
   ];
 
-  const thinkingOptions = thinkingOptionsList && thinkingOptionsList.length > 0
-    ? thinkingOptionsList
-    : fallbackThinkingOptions;
+  const thinkingOptions =
+    thinkingOptionsList && thinkingOptionsList.length > 0
+      ? thinkingOptionsList
+      : fallbackThinkingOptions;
 
   const thinkingIds = thinkingOptions.map((opt) => opt.id);
-  const rawModels = config.models.length > 0
-    ? config.models
-    : [{ alias: config.defaultModel ?? "default" }];
+  const rawModels =
+    config.models.length > 0 ? config.models : [{ alias: config.defaultModel ?? "default" }];
   const models: HarnessModel[] = rawModels.map((m) => {
     const label = m.model ? `${m.alias} (${m.model})` : m.alias;
     return harnessModelSchema.parse({
@@ -181,14 +184,22 @@ export function buildModelCatalogFromConfig(
     });
   });
 
-  const defaultModel = config.defaultModel && models.some((m) => decodeKimiModelRefId(m.ref.id) === config.defaultModel)
-    ? encodeKimiModelRef(config.defaultModel)
-    : models[0]?.ref;
+  const defaultModel =
+    config.defaultModel &&
+    models.some((m) => decodeKimiModelRefId(m.ref.id) === config.defaultModel)
+      ? encodeKimiModelRef(config.defaultModel)
+      : models[0]?.ref;
 
   let defaultThinkingOptionId: HarnessThinkingOptionId | undefined = undefined;
-  if (config.thinking?.effort && thinkingIds.includes(config.thinking.effort as HarnessThinkingOptionId)) {
+  if (
+    config.thinking?.effort &&
+    thinkingIds.includes(config.thinking.effort as HarnessThinkingOptionId)
+  ) {
     defaultThinkingOptionId = harnessThinkingOptionIdSchema.parse(config.thinking.effort);
-  } else if (config.thinking?.enabled === false && thinkingIds.includes("off" as HarnessThinkingOptionId)) {
+  } else if (
+    config.thinking?.enabled === false &&
+    thinkingIds.includes("off" as HarnessThinkingOptionId)
+  ) {
     defaultThinkingOptionId = harnessThinkingOptionIdSchema.parse("off");
   } else if (thinkingIds.length > 0) {
     defaultThinkingOptionId = thinkingIds.includes("medium" as HarnessThinkingOptionId)
@@ -236,7 +247,9 @@ export function readKimiEffectiveConfig(configOptions: unknown[]): {
   return {
     ...(modelOptions?.currentValue ? { modelAlias: modelOptions.currentValue } : {}),
     ...(thinking.success ? { thinkingOptionId: thinking.data } : {}),
-    ...(isKimiModeId(modeOptions?.currentValue) ? { permissionModeId: modeOptions.currentValue } : {}),
+    ...(isKimiModeId(modeOptions?.currentValue)
+      ? { permissionModeId: modeOptions.currentValue }
+      : {}),
   };
 }
 
@@ -299,14 +312,16 @@ export function buildModelCatalogFromAcp(
   }
 
   const currentModelAlias = modelOptions?.currentValue;
-  const defaultModel = currentModelAlias && models.some((m) => decodeKimiModelRefId(m.ref.id) === currentModelAlias)
-    ? encodeKimiModelRef(currentModelAlias)
-    : models[0]?.ref;
+  const defaultModel =
+    currentModelAlias && models.some((m) => decodeKimiModelRefId(m.ref.id) === currentModelAlias)
+      ? encodeKimiModelRef(currentModelAlias)
+      : models[0]?.ref;
 
   const currentThinking = thinkingOptions?.currentValue;
-  const defaultThinkingOptionId = currentThinking && thinkingIds.includes(currentThinking as HarnessThinkingOptionId)
-    ? harnessThinkingOptionIdSchema.parse(currentThinking)
-    : thinkingIds[0];
+  const defaultThinkingOptionId =
+    currentThinking && thinkingIds.includes(currentThinking as HarnessThinkingOptionId)
+      ? harnessThinkingOptionIdSchema.parse(currentThinking)
+      : thinkingIds[0];
 
   return harnessModelCatalogSchema.parse({
     models,

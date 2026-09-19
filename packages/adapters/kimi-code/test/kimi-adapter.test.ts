@@ -12,10 +12,7 @@ import {
   nativeSessionRefSchema,
 } from "@codexhost/shared-contracts";
 
-import {
-  KimiAdapter,
-  type KimiAcpTransportLike,
-} from "../src/kimi-adapter.js";
+import { KimiAdapter, type KimiAcpTransportLike } from "../src/kimi-adapter.js";
 import { KimiExecutableError } from "../src/command.js";
 import { KimiTransportError } from "../src/acp-transport.js";
 import type { SessionEventHandler } from "../src/acp-transport.js";
@@ -46,10 +43,17 @@ class FakeTransport implements KimiAcpTransportLike {
     this.openKinds.push(input.kind);
     this.pendingSessionEvents.push({
       type: "commands.update",
-      commands: [{ name: "compact", description: "Compact the current session", input: { hint: "instructions" } }],
+      commands: [
+        {
+          name: "compact",
+          description: "Compact the current session",
+          input: { hint: "instructions" },
+        },
+      ],
     });
     return {
-      sessionId: input.kind === "fork" ? "session-forked-123" : (input.sessionId || "session-created"),
+      sessionId:
+        input.kind === "fork" ? "session-forked-123" : input.sessionId || "session-created",
       configOptions: this.configOptions(),
     };
   });
@@ -188,7 +192,6 @@ effort = "medium"
   });
 
   describe("open()", () => {
-
     it("forks the latest native checkpoint through ACP", async () => {
       const sessionId = "session-to-fork";
       const sessionDir = path.join(tempDir, ".kimi-code", "sessions", sessionId);
@@ -207,7 +210,12 @@ effort = "medium"
       await writeFile(
         path.join(mainHomeDir, "wire.jsonl"),
         [
-          JSON.stringify({ type: "turn.prompt", turnId: 0, input: [{ type: "text", text: "hello" }], time: 1 }),
+          JSON.stringify({
+            type: "turn.prompt",
+            turnId: 0,
+            input: [{ type: "text", text: "hello" }],
+            time: 1,
+          }),
           JSON.stringify({ type: "turn.ended", turnId: 0, reason: "completed", time: 2 }),
         ].join("\n") + "\n",
         "utf8",
@@ -220,7 +228,11 @@ effort = "medium"
 
       const result = await adapter.open({
         kind: "fork",
-        sourceRef: { formatVersion: 1, harnessId: harnessIdSchema.parse("kimi-code"), nativeSessionId: sessionId },
+        sourceRef: {
+          formatVersion: 1,
+          harnessId: harnessIdSchema.parse("kimi-code"),
+          nativeSessionId: sessionId,
+        },
         checkpoint: {
           formatVersion: 1,
           harnessId: harnessIdSchema.parse("kimi-code"),
@@ -255,9 +267,19 @@ effort = "medium"
       await writeFile(
         path.join(mainHomeDir, "wire.jsonl"),
         [
-          JSON.stringify({ type: "turn.prompt", turnId: 0, input: [{ type: "text", text: "first" }], time: 1 }),
+          JSON.stringify({
+            type: "turn.prompt",
+            turnId: 0,
+            input: [{ type: "text", text: "first" }],
+            time: 1,
+          }),
           JSON.stringify({ type: "turn.ended", turnId: 0, reason: "completed", time: 2 }),
-          JSON.stringify({ type: "turn.prompt", turnId: 1, input: [{ type: "text", text: "second" }], time: 3 }),
+          JSON.stringify({
+            type: "turn.prompt",
+            turnId: 1,
+            input: [{ type: "text", text: "second" }],
+            time: 3,
+          }),
           JSON.stringify({ type: "turn.ended", turnId: 1, reason: "completed", time: 4 }),
         ].join("\n") + "\n",
         "utf8",
@@ -270,7 +292,11 @@ effort = "medium"
 
       const result = await adapter.open({
         kind: "fork",
-        sourceRef: { formatVersion: 1, harnessId: harnessIdSchema.parse("kimi-code"), nativeSessionId: sessionId },
+        sourceRef: {
+          formatVersion: 1,
+          harnessId: harnessIdSchema.parse("kimi-code"),
+          nativeSessionId: sessionId,
+        },
         checkpoint: {
           formatVersion: 1,
           harnessId: harnessIdSchema.parse("kimi-code"),
@@ -286,14 +312,6 @@ effort = "medium"
       });
       expect(fakeTransport.openKinds).not.toContain("fork");
     });
-
-
-
-
-
-
-
-
 
     it("creates new session and applies options", async () => {
       const adapter = new KimiAdapter(
@@ -337,13 +355,15 @@ effort = "medium"
       );
       if (result.ok) {
         const commands = await result.value.commands?.list();
-        expect(commands?.ok && commands.value.commands).toEqual([{
-          id: "compact",
-          invocation: "/compact",
-          label: "compact",
-          argumentMode: "text",
-          description: "Compact the current session",
-        }]);
+        expect(commands?.ok && commands.value.commands).toEqual([
+          {
+            id: "compact",
+            invocation: "/compact",
+            label: "compact",
+            argumentMode: "text",
+            description: "Compact the current session",
+          },
+        ]);
       }
     });
 
@@ -392,10 +412,12 @@ effort = "medium"
         expect(result.value.initialState.effectivePermissionModeId).toBe("plan");
       }
       expect(fakeTransport.openKinds).toContain("load");
-      expect(fakeTransport.configOptionsSet).toEqual(expect.arrayContaining([
-        { configId: "thinking", value: "high" },
-        { configId: "mode", value: "plan" },
-      ]));
+      expect(fakeTransport.configOptionsSet).toEqual(
+        expect.arrayContaining([
+          { configId: "thinking", value: "high" },
+          { configId: "mode", value: "plan" },
+        ]),
+      );
     });
 
     it("fails open when native configuration rejects a requested value", async () => {
@@ -479,19 +501,15 @@ effort = "medium"
       await adapter.close();
       expect(fakeTransport.close).toHaveBeenCalled();
     });
-
-
-
-
-
-
   });
 
   describe("commandCatalog", () => {
     it("provides default catalog initially and conforms to schema", () => {
       const adapter = new KimiAdapter();
       expect(adapter.commandCatalog).toEqual(KIMI_DEFAULT_COMMAND_CATALOG);
-      expect(harnessCommandCatalogSchema.parse(adapter.commandCatalog)).toEqual(KIMI_DEFAULT_COMMAND_CATALOG);
+      expect(harnessCommandCatalogSchema.parse(adapter.commandCatalog)).toEqual(
+        KIMI_DEFAULT_COMMAND_CATALOG,
+      );
     });
 
     it("dynamically synchronizes commandCatalog upon session creation", async () => {
@@ -548,7 +566,11 @@ effort = "medium"
       });
 
       expect(adapter.commandCatalog.commands).toHaveLength(3);
-      expect(adapter.commandCatalog.commands.map((c) => c.id)).toEqual(["compact", "clear", "export"]);
+      expect(adapter.commandCatalog.commands.map((c) => c.id)).toEqual([
+        "compact",
+        "clear",
+        "export",
+      ]);
       expect(adapter.commandCatalog.commands[1]?.invocation).toBe("/clear");
       expect(adapter.commandCatalog.commands[1]?.argumentMode).toBe("none");
       expect(adapter.commandCatalog.commands[2]?.argumentMode).toBe("text");

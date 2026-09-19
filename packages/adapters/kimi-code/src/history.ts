@@ -55,7 +55,10 @@ export function createKimiNativeTurnRef(sessionId: string, turnId: number | stri
   });
 }
 
-export function createKimiNativeCheckpointRef(sessionId: string, turnId: number | string): NativeCheckpointRef {
+export function createKimiNativeCheckpointRef(
+  sessionId: string,
+  turnId: number | string,
+): NativeCheckpointRef {
   return nativeCheckpointRefSchema.parse({
     formatVersion: 1,
     harnessId: kimiHarnessId,
@@ -68,8 +71,10 @@ export function getKimiCodeHome(
   homeDirectory?: string,
   environment: NodeJS.ProcessEnv = process.env,
 ): string {
-  return environment.KIMI_CODE_HOME ||
-    (homeDirectory ? path.join(homeDirectory, ".kimi-code") : path.join(os.homedir(), ".kimi-code"));
+  return (
+    environment.KIMI_CODE_HOME ||
+    (homeDirectory ? path.join(homeDirectory, ".kimi-code") : path.join(os.homedir(), ".kimi-code"))
+  );
 }
 
 export interface KimiSessionIndexEntry {
@@ -170,14 +175,17 @@ export interface KimiNativeTurnBuilder {
   reason?: string;
   model?: string;
   contentParts: Array<{ text: string; thought?: boolean; uuid?: string; order: number }>;
-  toolCalls: Map<string, {
-    toolCallId: string;
-    name: string;
-    args: unknown;
-    display?: unknown;
-    result?: unknown;
-    order: number;
-  }>;
+  toolCalls: Map<
+    string,
+    {
+      toolCallId: string;
+      name: string;
+      args: unknown;
+      display?: unknown;
+      result?: unknown;
+      order: number;
+    }
+  >;
   fileHistoryTracked: Map<string, { key: string | null; version: number }>;
   fileHistoryCheckpoint: Map<string, { key: string; version: number; size?: number }>;
 }
@@ -263,7 +271,11 @@ export async function parseKimiWireLog(
       const turn = getOrCreateTurn(turnId);
       if (typeof record.reason === "string") turn.reason = record.reason;
       if (typeof record.time === "number") turn.completedAtMs = record.time;
-      if (typeof record.durationMs === "number" && turn.startedAtMs !== undefined && !turn.completedAtMs) {
+      if (
+        typeof record.durationMs === "number" &&
+        turn.startedAtMs !== undefined &&
+        !turn.completedAtMs
+      ) {
         turn.completedAtMs = turn.startedAtMs + record.durationMs;
       }
     } else if (type === "agent.turn.ended") {
@@ -272,7 +284,11 @@ export async function parseKimiWireLog(
       if (turn.completedAtMs === undefined && typeof record.time === "number") {
         turn.completedAtMs = record.time;
       }
-      if (record.outcome === "cancelled" || record.outcome === "interrupted" || record.outcome === "aborted") {
+      if (
+        record.outcome === "cancelled" ||
+        record.outcome === "interrupted" ||
+        record.outcome === "aborted"
+      ) {
         turn.reason = "cancelled";
       } else if (record.outcome === "failed") {
         turn.reason = "failed";
@@ -280,12 +296,17 @@ export async function parseKimiWireLog(
         turn.reason = "completed";
       }
     } else if (type === "prompt.completed") {
-      const turnId = typeof record.turnId === "number" ? record.turnId : Array.from(turns.keys()).pop() ?? 0;
+      const turnId =
+        typeof record.turnId === "number" ? record.turnId : (Array.from(turns.keys()).pop() ?? 0);
       const turn = getOrCreateTurn(turnId);
       if (turn.completedAtMs === undefined && typeof record.time === "number") {
         turn.completedAtMs = record.time;
       }
-      if (record.reason === "cancelled" || record.reason === "user_cancelled" || record.reason === "aborted") {
+      if (
+        record.reason === "cancelled" ||
+        record.reason === "user_cancelled" ||
+        record.reason === "aborted"
+      ) {
         turn.reason = "cancelled";
       } else if (record.reason === "failed" || record.reason === "error") {
         turn.reason = "failed";
@@ -293,11 +314,13 @@ export async function parseKimiWireLog(
         turn.reason = "completed";
       }
     } else if (type === "turn.cancel") {
-      const turnId = typeof record.turnId === "number" ? record.turnId : Array.from(turns.keys()).pop() ?? 0;
+      const turnId =
+        typeof record.turnId === "number" ? record.turnId : (Array.from(turns.keys()).pop() ?? 0);
       const turn = getOrCreateTurn(turnId);
       turn.reason = "cancelled";
     } else if (type === "turn.step.interrupted") {
-      const turnId = typeof record.turnId === "number" ? record.turnId : Array.from(turns.keys()).pop() ?? 0;
+      const turnId =
+        typeof record.turnId === "number" ? record.turnId : (Array.from(turns.keys()).pop() ?? 0);
       const turn = getOrCreateTurn(turnId);
       if (record.reason === "error") {
         turn.reason = "failed";
@@ -305,7 +328,8 @@ export async function parseKimiWireLog(
         turn.reason = "cancelled";
       }
     } else if (type === "usage.record") {
-      const turnId = typeof record.turnId === "number" ? record.turnId : Array.from(turns.keys()).pop() ?? 0;
+      const turnId =
+        typeof record.turnId === "number" ? record.turnId : (Array.from(turns.keys()).pop() ?? 0);
       const turn = getOrCreateTurn(turnId);
       if (typeof record.model === "string") {
         turn.model = record.model;
@@ -342,24 +366,26 @@ export async function parseKimiWireLog(
 
       const eventType = event.type;
       const rawTurnId = event.turnId;
-      const turnId = typeof rawTurnId === "number"
-        ? rawTurnId
-        : typeof rawTurnId === "string"
-          ? Number.parseInt(rawTurnId, 10)
-          : Array.from(turns.keys()).pop() ?? 0;
+      const turnId =
+        typeof rawTurnId === "number"
+          ? rawTurnId
+          : typeof rawTurnId === "string"
+            ? Number.parseInt(rawTurnId, 10)
+            : (Array.from(turns.keys()).pop() ?? 0);
       const turn = getOrCreateTurn(turnId);
 
       if (eventType === "content.part") {
         const part = event.part as Record<string, unknown> | undefined;
         if (part) {
           const isThought = part.type === "thought" || part.type === "think";
-          const text = typeof part.text === "string"
-            ? part.text
-            : typeof part.think === "string"
-              ? part.think
-              : typeof part.thought === "string"
-                ? part.thought
-                : "";
+          const text =
+            typeof part.text === "string"
+              ? part.text
+              : typeof part.think === "string"
+                ? part.think
+                : typeof part.thought === "string"
+                  ? part.thought
+                  : "";
           if (text || isThought) {
             turn.contentParts.push({
               text: text || "思考中...",
@@ -370,7 +396,10 @@ export async function parseKimiWireLog(
           }
         }
       } else if (eventType === "tool.call") {
-        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : (event.uuid as string) || "unknown";
+        const toolCallId =
+          typeof event.toolCallId === "string"
+            ? event.toolCallId
+            : (event.uuid as string) || "unknown";
         const name = typeof event.name === "string" ? event.name : "Tool";
         const args = event.args ?? {};
         const display = event.display;
@@ -453,18 +482,31 @@ export async function parseKimiWireLog(
 
     // 2. Tool calls
     for (const [toolCallId, call] of turn.toolCalls.entries()) {
-      const itemId = hostItemIdSchema.parse(`item:${turnId}:tool:${toolCallId.replace(/[^A-Za-z0-9._~-]/g, "_")}`);
+      const itemId = hostItemIdSchema.parse(
+        `item:${turnId}:tool:${toolCallId.replace(/[^A-Za-z0-9._~-]/g, "_")}`,
+      );
       sourceToolItemIds.push(itemId);
 
       const canonicalName = canonicalizeKimiToolName(call.name, undefined, call.args);
-      const isBash = canonicalName.toLowerCase() === "bash" || canonicalName.toLowerCase() === "shell" || canonicalName.toLowerCase() === "terminal";
-      const resultObj = (call.result && typeof call.result === "object") ? (call.result as Record<string, unknown>) : undefined;
-      const outputText = resultObj?.output ? String(resultObj.output) : (call.result ? JSON.stringify(call.result) : undefined);
+      const isBash =
+        canonicalName.toLowerCase() === "bash" ||
+        canonicalName.toLowerCase() === "shell" ||
+        canonicalName.toLowerCase() === "terminal";
+      const resultObj =
+        call.result && typeof call.result === "object"
+          ? (call.result as Record<string, unknown>)
+          : undefined;
+      const outputText = resultObj?.output
+        ? String(resultObj.output)
+        : call.result
+          ? JSON.stringify(call.result)
+          : undefined;
 
       if (isBash) {
-        const commandText = typeof (call.args as Record<string, unknown>)?.command === "string"
-          ? String((call.args as Record<string, unknown>).command)
-          : JSON.stringify(call.args);
+        const commandText =
+          typeof (call.args as Record<string, unknown>)?.command === "string"
+            ? String((call.args as Record<string, unknown>).command)
+            : JSON.stringify(call.args);
 
         const commandItem: HostCommandExecutionItem = {
           type: "commandExecution",
@@ -481,10 +523,13 @@ export async function parseKimiWireLog(
           type: "toolExecution",
           itemId,
           toolName: canonicalName,
-          arguments: (call.args && typeof call.args === "object" && !Array.isArray(call.args)
-            ? (call.args as JsonObject)
+          arguments:
+            call.args && typeof call.args === "object" && !Array.isArray(call.args)
+              ? (call.args as JsonObject)
+              : {},
+          ...(outputText !== undefined
+            ? { output: { content: [{ type: "text", text: outputText }] } }
             : {}),
-          ...(outputText !== undefined ? { output: { content: [{ type: "text", text: outputText }] } } : {}),
         };
         items.push({
           item: toolItem,
@@ -539,11 +584,8 @@ export async function parseKimiWireLog(
         }
 
         if (oldContent !== newContent) {
-          const kind: "add" | "update" | "delete" = !tracked || tracked.key === null
-            ? "add"
-            : !checkpoint
-              ? "delete"
-              : "update";
+          const kind: "add" | "update" | "delete" =
+            !tracked || tracked.key === null ? "add" : !checkpoint ? "delete" : "update";
 
           const patch = createTwoFilesPatch(filePath, filePath, oldContent, newContent, "", "");
           changes.push({
@@ -572,17 +614,27 @@ export async function parseKimiWireLog(
     let outcome: HistoricalTurnOutcome;
     if (turn.reason === "completed" || turn.reason === "done" || turn.reason === "success") {
       outcome = { status: "succeeded" };
-    } else if (turn.reason === "cancelled" || turn.reason === "user_cancelled" || turn.reason === "aborted") {
+    } else if (
+      turn.reason === "cancelled" ||
+      turn.reason === "user_cancelled" ||
+      turn.reason === "aborted"
+    ) {
       outcome = { status: "cancelled", reason: "Turn was cancelled" };
     } else if (turn.reason === "failed" || turn.reason === "error") {
       outcome = {
         status: "failed",
-        error: { code: "nativeFailure", message: "Turn ended with native failure", retryable: false },
+        error: {
+          code: "nativeFailure",
+          message: "Turn ended with native failure",
+          retryable: false,
+        },
       };
     } else {
       outcome = {
         status: "unknown",
-        reason: turn.reason ? `Unrecognized native reason: ${turn.reason}` : "Missing turn.ended record",
+        reason: turn.reason
+          ? `Unrecognized native reason: ${turn.reason}`
+          : "Missing turn.ended record",
       };
     }
 
@@ -675,15 +727,18 @@ export function extractKimiUsageFromWireLog(
 
   const promptTokens = inputTokens + cachedInputTokens + cacheWriteInputTokens;
   const totalTokens = promptTokens + outputTokens;
-  const windowTokens = contextWindowTokens && contextWindowTokens > 0 ? contextWindowTokens : 200_000;
+  const windowTokens =
+    contextWindowTokens && contextWindowTokens > 0 ? contextWindowTokens : 200_000;
 
   const effectiveUsedTokens = contextUsedTokens ?? (promptTokens > 0 ? promptTokens : undefined);
-  const contextUsagePercent = windowTokens && effectiveUsedTokens !== undefined && windowTokens > 0
-    ? (effectiveUsedTokens / windowTokens) * 100
-    : undefined;
-  const cacheHitRatePercent = promptTokens > 0 && cachedInputTokens !== undefined
-    ? (cachedInputTokens / promptTokens) * 100
-    : undefined;
+  const contextUsagePercent =
+    windowTokens && effectiveUsedTokens !== undefined && windowTokens > 0
+      ? (effectiveUsedTokens / windowTokens) * 100
+      : undefined;
+  const cacheHitRatePercent =
+    promptTokens > 0 && cachedInputTokens !== undefined
+      ? (cachedInputTokens / promptTokens) * 100
+      : undefined;
 
   return parseHostUsage({
     inputTokens,

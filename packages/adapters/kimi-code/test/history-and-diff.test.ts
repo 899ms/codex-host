@@ -46,11 +46,12 @@ describe("Kimi Code History & Diff", () => {
       const sessionDir = path.join(tempDir, "sessions", "ws-1", sessionId);
       await mkdir(path.join(sessionDir, "agents", "main"), { recursive: true });
 
-      const indexContent = JSON.stringify({
-        sessionId,
-        sessionDir,
-        workDir: tempDir,
-      }) + "\n";
+      const indexContent =
+        JSON.stringify({
+          sessionId,
+          sessionDir,
+          workDir: tempDir,
+        }) + "\n";
       await writeFile(path.join(tempDir, "session_index.jsonl"), indexContent, "utf8");
 
       const stateContent = JSON.stringify({
@@ -81,11 +82,12 @@ describe("Kimi Code History & Diff", () => {
 
     it("returns null when session is marked deleted", async () => {
       const sessionId = "deleted-session";
-      const indexContent = JSON.stringify({
-        sessionId,
-        sessionDir: path.join(tempDir, "sessions", sessionId),
-        deleted: true,
-      }) + "\n";
+      const indexContent =
+        JSON.stringify({
+          sessionId,
+          sessionDir: path.join(tempDir, "sessions", sessionId),
+          deleted: true,
+        }) + "\n";
       await writeFile(path.join(tempDir, "session_index.jsonl"), indexContent, "utf8");
 
       const located = await locateKimiSession(sessionId, { kimiCodeHome: tempDir });
@@ -95,10 +97,11 @@ describe("Kimi Code History & Diff", () => {
     it("rejects path traversal outside kimi home", async () => {
       const sessionId = "traversal-session";
       const outsideDir = path.resolve(tempDir, "..", "outside-dir");
-      const indexContent = JSON.stringify({
-        sessionId,
-        sessionDir: outsideDir,
-      }) + "\n";
+      const indexContent =
+        JSON.stringify({
+          sessionId,
+          sessionDir: outsideDir,
+        }) + "\n";
       await writeFile(path.join(tempDir, "session_index.jsonl"), indexContent, "utf8");
 
       await expect(locateKimiSession(sessionId, { kimiCodeHome: tempDir })).rejects.toThrow(
@@ -303,8 +306,6 @@ describe("Kimi Code History & Diff", () => {
   }
 
   describe("readKimiSessionSnapshot", () => {
-
-
     it("reads snapshot using located directory", async () => {
       const sessionId = "session-snap";
       const mainHomeDir = await createSnapshotSession(sessionId);
@@ -336,7 +337,9 @@ describe("Kimi Code History & Diff", () => {
       const mainHomeDir = await createSnapshotSession(sessionId);
       await writeFile(path.join(mainHomeDir, "wire.jsonl"), "");
 
-      await expect(readKimiSessionSnapshot(sessionId, { kimiCodeHome: tempDir })).resolves.toEqual({ turns: [] });
+      await expect(readKimiSessionSnapshot(sessionId, { kimiCodeHome: tempDir })).resolves.toEqual({
+        turns: [],
+      });
     });
 
     it("reports a missing native history instead of returning an empty snapshot", async () => {
@@ -389,7 +392,7 @@ describe("Kimi Code History & Diff", () => {
 
     it("returns null when wire log contains no usage records", () => {
       expect(extractKimiUsageFromWireLog("", 200_000)).toBeNull();
-      expect(extractKimiUsageFromWireLog("{\"type\":\"metadata\"}", 200_000)).toBeNull();
+      expect(extractKimiUsageFromWireLog('{"type":"metadata"}', 200_000)).toBeNull();
     });
 
     it("reads usage for a located session via readKimiSessionUsage", async () => {
@@ -400,14 +403,19 @@ describe("Kimi Code History & Diff", () => {
         JSON.stringify({
           type: "usage.record",
           usage: { inputOther: 200, output: 100, inputCacheRead: 1000, inputCacheCreation: 0 },
-        }) + "\n" +
-        JSON.stringify({
-          type: "token_counting.measured",
-          tokens: 1300,
-        }) + "\n",
+        }) +
+          "\n" +
+          JSON.stringify({
+            type: "token_counting.measured",
+            tokens: 1300,
+          }) +
+          "\n",
       );
 
-      const usage = await readKimiSessionUsage(sessionId, { kimiCodeHome: tempDir, contextWindowTokens: 200_000 });
+      const usage = await readKimiSessionUsage(sessionId, {
+        kimiCodeHome: tempDir,
+        contextWindowTokens: 200_000,
+      });
       expect(usage).toBeDefined();
       expect(usage?.inputTokens).toBe(200);
       expect(usage?.outputTokens).toBe(100);
@@ -417,18 +425,37 @@ describe("Kimi Code History & Diff", () => {
 
     it("routes thoughts to reasoning, commentary to commentary message, and terminal text to final answer", async () => {
       const wire = [
-        JSON.stringify({ type: "turn.prompt", turnId: 0, time: 1000, input: [{ type: "text", text: "write code\n" }] }),
         JSON.stringify({
-          type: "context.append_loop_event",
-          event: { type: "content.part", turnId: 0, part: { type: "thought", text: "Planning quicksort implementation..." } },
+          type: "turn.prompt",
+          turnId: 0,
+          time: 1000,
+          input: [{ type: "text", text: "write code\n" }],
         }),
         JSON.stringify({
           type: "context.append_loop_event",
-          event: { type: "content.part", turnId: 0, part: { type: "text", text: "I will write quicksort.py now." } },
+          event: {
+            type: "content.part",
+            turnId: 0,
+            part: { type: "thought", text: "Planning quicksort implementation..." },
+          },
         }),
         JSON.stringify({
           type: "context.append_loop_event",
-          event: { type: "tool.call", turnId: 0, toolCallId: "call-1", name: "Write", args: { path: "quicksort.py" } },
+          event: {
+            type: "content.part",
+            turnId: 0,
+            part: { type: "text", text: "I will write quicksort.py now." },
+          },
+        }),
+        JSON.stringify({
+          type: "context.append_loop_event",
+          event: {
+            type: "tool.call",
+            turnId: 0,
+            toolCallId: "call-1",
+            name: "Write",
+            args: { path: "quicksort.py" },
+          },
         }),
         JSON.stringify({
           type: "context.append_loop_event",
@@ -436,9 +463,19 @@ describe("Kimi Code History & Diff", () => {
         }),
         JSON.stringify({
           type: "context.append_loop_event",
-          event: { type: "content.part", turnId: 0, part: { type: "text", text: "Successfully created quicksort.py." } },
+          event: {
+            type: "content.part",
+            turnId: 0,
+            part: { type: "text", text: "Successfully created quicksort.py." },
+          },
         }),
-        JSON.stringify({ type: "turn.ended", turnId: 0, reason: "completed", time: 15000, durationMs: 14000 }),
+        JSON.stringify({
+          type: "turn.ended",
+          turnId: 0,
+          reason: "completed",
+          time: 15000,
+          durationMs: 14000,
+        }),
       ].join("\n");
 
       const snapshots = await parseKimiWireLog(wire, "s-fold-1");
@@ -456,7 +493,8 @@ describe("Kimi Code History & Diff", () => {
 
       // Commentary message should have the pre-tool text with phase: commentary
       const commentaryMsg = turn.items.find(
-        (i) => i.item.type === "agentMessage" && (i.item as HostAgentMessageItem).phase === "commentary",
+        (i) =>
+          i.item.type === "agentMessage" && (i.item as HostAgentMessageItem).phase === "commentary",
       );
       expect(commentaryMsg).toBeDefined();
       if (commentaryMsg && commentaryMsg.item.type === "agentMessage") {
@@ -465,7 +503,9 @@ describe("Kimi Code History & Diff", () => {
 
       // Final agent message should have the post-tool text with phase: final_answer
       const finalMsg = turn.items.find(
-        (i) => i.item.type === "agentMessage" && (i.item as HostAgentMessageItem).phase === "final_answer",
+        (i) =>
+          i.item.type === "agentMessage" &&
+          (i.item as HostAgentMessageItem).phase === "final_answer",
       );
       expect(finalMsg).toBeDefined();
       if (finalMsg && finalMsg.item.type === "agentMessage") {
@@ -479,7 +519,12 @@ describe("Kimi Code History & Diff", () => {
 
     it("populates fallback completedAtMs from lastSeenTimeMs when turn has no turn.ended", async () => {
       const wire = [
-        JSON.stringify({ type: "turn.prompt", turnId: 0, time: 2000, input: [{ type: "text", text: "cancelled task" }] }),
+        JSON.stringify({
+          type: "turn.prompt",
+          turnId: 0,
+          time: 2000,
+          input: [{ type: "text", text: "cancelled task" }],
+        }),
         JSON.stringify({
           type: "context.append_loop_event",
           event: { type: "content.part", turnId: 0, part: { type: "text", text: "Working..." } },
@@ -498,5 +543,4 @@ describe("Kimi Code History & Diff", () => {
       expect(turn.outcome.status).toBe("cancelled");
     });
   });
-
 });

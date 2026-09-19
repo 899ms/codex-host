@@ -53,7 +53,8 @@ export function projectKimiApprovalRequest(
   };
 
   for (const option of request.options) {
-    const effect = effectMap[option.kind] ?? (option.kind.startsWith("allow") ? "allowOnce" : "deny");
+    const effect =
+      effectMap[option.kind] ?? (option.kind.startsWith("allow") ? "allowOnce" : "deny");
     const actionId = option.optionId;
     optionIdByActionId.set(actionId, option.optionId);
 
@@ -102,9 +103,10 @@ export function projectKimiElicitationRequest(
 
   const req = request as Record<string, unknown>;
   const requestedSchema = req.requestedSchema as Record<string, unknown> | undefined;
-  const properties = (requestedSchema?.properties && typeof requestedSchema.properties === "object")
-    ? (requestedSchema.properties as Record<string, Record<string, unknown>>)
-    : {};
+  const properties =
+    requestedSchema?.properties && typeof requestedSchema.properties === "object"
+      ? (requestedSchema.properties as Record<string, Record<string, unknown>>)
+      : {};
   const requiredList = Array.isArray(requestedSchema?.required)
     ? (requestedSchema.required as string[])
     : [];
@@ -113,22 +115,28 @@ export function projectKimiElicitationRequest(
     const isArray = prop.type === "array";
     schemaProperties[key] = { type: isArray ? "array" : "string" };
 
-    const promptCandidate = (typeof prop.description === "string" && prop.description.trim())
-      ? prop.description.trim()
-      : (typeof req.message === "string" && req.message.trim())
+    const promptCandidate =
+      typeof prop.description === "string" && prop.description.trim()
+        ? prop.description.trim()
+        : typeof req.message === "string" && req.message.trim()
+          ? req.message.trim()
+          : typeof prop.title === "string" && prop.title.trim()
+            ? prop.title.trim()
+            : key;
+    const prompt =
+      promptCandidate.toLowerCase() === "question" &&
+      typeof req.message === "string" &&
+      req.message.trim()
         ? req.message.trim()
-        : (typeof prop.title === "string" && prop.title.trim())
-          ? prop.title.trim()
-          : key;
-    const prompt = (promptCandidate.toLowerCase() === "question" && typeof req.message === "string" && req.message.trim())
-      ? req.message.trim()
-      : promptCandidate;
+        : promptCandidate;
 
     const options: Array<{ value: string; label: string; description?: string }> = [];
 
     if (isArray && typeof prop.items === "object" && prop.items !== null) {
       const items = prop.items as Record<string, unknown>;
-      const anyOf = Array.isArray(items.anyOf) ? (items.anyOf as Array<Record<string, unknown>>) : [];
+      const anyOf = Array.isArray(items.anyOf)
+        ? (items.anyOf as Array<Record<string, unknown>>)
+        : [];
       for (const item of anyOf) {
         if (typeof item?.const === "string") {
           options.push({
@@ -160,9 +168,12 @@ export function projectKimiElicitationRequest(
   }
 
   const rawTitle = typeof requestedSchema?.title === "string" ? requestedSchema.title.trim() : "";
-  const title = (rawTitle && rawTitle.toLowerCase() !== "ask user question" && rawTitle.toLowerCase() !== "ask question")
-    ? rawTitle
-    : "提问";
+  const title =
+    rawTitle &&
+    rawTitle.toLowerCase() !== "ask user question" &&
+    rawTitle.toLowerCase() !== "ask question"
+      ? rawTitle
+      : "提问";
 
   const interaction: HostQuestionInteraction = {
     type: "question",
@@ -209,13 +220,20 @@ export function canonicalizeKimiToolName(
   const lower = trimmed?.toLowerCase() ?? "";
 
   if (kind === "edit" || lower.startsWith("write") || lower.startsWith("writ")) {
-    const isEdit = isRecord(rawInput) && ("old_string" in rawInput || "oldText" in rawInput || "old" in rawInput);
+    const isEdit =
+      isRecord(rawInput) &&
+      ("old_string" in rawInput || "oldText" in rawInput || "old" in rawInput);
     return isEdit ? "Edit" : "Write";
   }
   if (kind === "edit" || lower.startsWith("edit")) {
     return "Edit";
   }
-  if (kind === "execute" || lower.startsWith("bash") || lower.startsWith("shell") || lower.startsWith("run")) {
+  if (
+    kind === "execute" ||
+    lower.startsWith("bash") ||
+    lower.startsWith("shell") ||
+    lower.startsWith("run")
+  ) {
     return "Bash";
   }
   if (kind === "read" || lower.startsWith("read")) {
@@ -245,7 +263,12 @@ export interface ToolCallAccumulatorState {
 export class KimiToolCallAccumulator {
   private readonly calls = new Map<string, ToolCallAccumulatorState>();
 
-  getOrCreate(toolCallId: string, turnId: HostTurnId, name = "Tool", kind?: string): ToolCallAccumulatorState {
+  getOrCreate(
+    toolCallId: string,
+    turnId: HostTurnId,
+    name = "Tool",
+    kind?: string,
+  ): ToolCallAccumulatorState {
     let state = this.calls.get(toolCallId);
     if (!state) {
       const sanitizedId = toolCallId.replace(/[^A-Za-z0-9._~-]/g, "_");
@@ -281,15 +304,20 @@ export function createHostItemFromToolState(
   cwd?: string,
 ): HostItem {
   const canonicalName = canonicalizeKimiToolName(state.name, state.kind, state.rawInput);
-  const isBash = state.kind === "execute" || canonicalName.toLowerCase() === "bash" || canonicalName.toLowerCase() === "shell" || canonicalName.toLowerCase() === "terminal";
+  const isBash =
+    state.kind === "execute" ||
+    canonicalName.toLowerCase() === "bash" ||
+    canonicalName.toLowerCase() === "shell" ||
+    canonicalName.toLowerCase() === "terminal";
   const rawInput = state.rawInput as Record<string, unknown> | undefined;
 
   if (isBash) {
-    const commandText = typeof rawInput?.command === "string"
-      ? rawInput.command
-      : typeof rawInput?.cmd === "string"
-        ? rawInput.cmd
-        : state.contentAccumulator || "sh";
+    const commandText =
+      typeof rawInput?.command === "string"
+        ? rawInput.command
+        : typeof rawInput?.cmd === "string"
+          ? rawInput.cmd
+          : state.contentAccumulator || "sh";
 
     const item: HostCommandExecutionItem = {
       type: "commandExecution",
@@ -298,18 +326,21 @@ export function createHostItemFromToolState(
       ...(cwd ? { cwd } : {}),
       ...(state.rawOutput !== undefined || state.contentAccumulator
         ? {
-            output: typeof state.rawOutput === "string"
-              ? state.rawOutput
-              : (state.rawOutput ? JSON.stringify(state.rawOutput) : state.contentAccumulator),
+            output:
+              typeof state.rawOutput === "string"
+                ? state.rawOutput
+                : state.rawOutput
+                  ? JSON.stringify(state.rawOutput)
+                  : state.contentAccumulator,
           }
         : {}),
     };
     return item;
   }
 
-  const args: Record<string, unknown> = (rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)
-    ? { ...rawInput }
-    : {}) as Record<string, unknown>;
+  const args: Record<string, unknown> = (
+    rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) ? { ...rawInput } : {}
+  ) as Record<string, unknown>;
 
   if (
     (canonicalName === "Write" || state.kind === "edit") &&
@@ -333,9 +364,12 @@ export function createHostItemFromToolState(
             content: [
               {
                 type: "text" as const,
-                text: typeof state.rawOutput === "string"
-                  ? state.rawOutput
-                  : (state.rawOutput ? JSON.stringify(state.rawOutput) : state.contentAccumulator),
+                text:
+                  typeof state.rawOutput === "string"
+                    ? state.rawOutput
+                    : state.rawOutput
+                      ? JSON.stringify(state.rawOutput)
+                      : state.contentAccumulator,
               },
             ],
           },
@@ -347,14 +381,17 @@ export function createHostItemFromToolState(
 
 export function readAcpToolContentText(content: unknown): string {
   const parts = Array.isArray(content) ? content : [content];
-  return parts.flatMap((part) => {
-    if (!part || typeof part !== "object") return [];
-    const block = part as Record<string, unknown>;
-    const nested = block.type === "content" && block.content && typeof block.content === "object"
-      ? block.content as Record<string, unknown>
-      : block;
-    return nested.type === "text" && typeof nested.text === "string" ? [nested.text] : [];
-  }).join("\n");
+  return parts
+    .flatMap((part) => {
+      if (!part || typeof part !== "object") return [];
+      const block = part as Record<string, unknown>;
+      const nested =
+        block.type === "content" && block.content && typeof block.content === "object"
+          ? (block.content as Record<string, unknown>)
+          : block;
+      return nested.type === "text" && typeof nested.text === "string" ? [nested.text] : [];
+    })
+    .join("\n");
 }
 
 export function parseKimiUsage(
@@ -364,37 +401,49 @@ export function parseKimiUsage(
   const used = typeof update.used === "number" ? update.used : undefined;
   const size = typeof update.size === "number" ? update.size : undefined;
 
-  const inputTokens = typeof update.inputTokens === "number"
-    ? update.inputTokens
-    : typeof update.inputOther === "number"
-      ? update.inputOther
-      : undefined;
-  const outputTokens = typeof update.outputTokens === "number"
-    ? update.outputTokens
-    : typeof update.output === "number"
-      ? update.output
-      : undefined;
-  const cachedInputTokens = typeof update.cachedInputTokens === "number"
-    ? update.cachedInputTokens
-    : typeof update.cachedReadTokens === "number"
-      ? update.cachedReadTokens
-      : typeof update.inputCacheRead === "number"
-        ? update.inputCacheRead
+  const inputTokens =
+    typeof update.inputTokens === "number"
+      ? update.inputTokens
+      : typeof update.inputOther === "number"
+        ? update.inputOther
         : undefined;
-  const cacheWriteInputTokens = typeof update.cacheWriteInputTokens === "number"
-    ? update.cacheWriteInputTokens
-    : typeof update.cachedWriteTokens === "number"
-      ? update.cachedWriteTokens
-      : typeof update.inputCacheCreation === "number"
-        ? update.inputCacheCreation
+  const outputTokens =
+    typeof update.outputTokens === "number"
+      ? update.outputTokens
+      : typeof update.output === "number"
+        ? update.output
         : undefined;
-  const totalTokens = typeof update.totalTokens === "number"
-    ? update.totalTokens
-    : (inputTokens !== undefined || outputTokens !== undefined || cachedInputTokens !== undefined || cacheWriteInputTokens !== undefined)
-      ? (inputTokens ?? 0) + (outputTokens ?? 0) + (cachedInputTokens ?? 0) + (cacheWriteInputTokens ?? 0)
-      : undefined;
+  const cachedInputTokens =
+    typeof update.cachedInputTokens === "number"
+      ? update.cachedInputTokens
+      : typeof update.cachedReadTokens === "number"
+        ? update.cachedReadTokens
+        : typeof update.inputCacheRead === "number"
+          ? update.inputCacheRead
+          : undefined;
+  const cacheWriteInputTokens =
+    typeof update.cacheWriteInputTokens === "number"
+      ? update.cacheWriteInputTokens
+      : typeof update.cachedWriteTokens === "number"
+        ? update.cachedWriteTokens
+        : typeof update.inputCacheCreation === "number"
+          ? update.inputCacheCreation
+          : undefined;
+  const totalTokens =
+    typeof update.totalTokens === "number"
+      ? update.totalTokens
+      : inputTokens !== undefined ||
+          outputTokens !== undefined ||
+          cachedInputTokens !== undefined ||
+          cacheWriteInputTokens !== undefined
+        ? (inputTokens ?? 0) +
+          (outputTokens ?? 0) +
+          (cachedInputTokens ?? 0) +
+          (cacheWriteInputTokens ?? 0)
+        : undefined;
 
-  const windowTokens = size ?? (contextWindowTokens && contextWindowTokens > 0 ? contextWindowTokens : undefined);
+  const windowTokens =
+    size ?? (contextWindowTokens && contextWindowTokens > 0 ? contextWindowTokens : undefined);
   const contextUsed = used ?? (typeof update.tokens === "number" ? update.tokens : undefined);
 
   if (
@@ -408,12 +457,14 @@ export function parseKimiUsage(
 
   const promptTokens = (inputTokens ?? 0) + (cachedInputTokens ?? 0) + (cacheWriteInputTokens ?? 0);
   const effectiveContextUsed = contextUsed ?? (promptTokens > 0 ? promptTokens : undefined);
-  const contextUsagePercent = windowTokens && effectiveContextUsed !== undefined && windowTokens > 0
-    ? (effectiveContextUsed / windowTokens) * 100
-    : undefined;
-  const cacheHitRatePercent = promptTokens > 0 && cachedInputTokens !== undefined
-    ? (cachedInputTokens / promptTokens) * 100
-    : undefined;
+  const contextUsagePercent =
+    windowTokens && effectiveContextUsed !== undefined && windowTokens > 0
+      ? (effectiveContextUsed / windowTokens) * 100
+      : undefined;
+  const cacheHitRatePercent =
+    promptTokens > 0 && cachedInputTokens !== undefined
+      ? (cachedInputTokens / promptTokens) * 100
+      : undefined;
 
   return {
     ...(windowTokens !== undefined ? { contextWindowTokens: windowTokens } : {}),

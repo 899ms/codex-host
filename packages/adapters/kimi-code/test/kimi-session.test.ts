@@ -24,12 +24,14 @@ import type {
   HostQuestionInteraction,
 } from "@codexhost/harness-adapter";
 
-import {
-  KimiSession,
-} from "../src/kimi-session.js";
+import { KimiSession } from "../src/kimi-session.js";
 import { createKimiNativeTurnRef } from "../src/history.js";
 import type { KimiAcpTransportLike } from "../src/kimi-adapter.js";
-import { projectKimiToolUpdate, type ActivePromptHandler, type SessionEventHandler } from "../src/acp-transport.js";
+import {
+  projectKimiToolUpdate,
+  type ActivePromptHandler,
+  type SessionEventHandler,
+} from "../src/acp-transport.js";
 import { encodeKimiModelRef } from "../src/models.js";
 import { KIMI_DEFAULT_COMMAND_CATALOG } from "../src/slash-commands.js";
 
@@ -63,10 +65,7 @@ class MockKimiTransport implements KimiAcpTransportLike {
   }
 
   promptMock = vi.fn(
-    async (
-      _text: string,
-      handler: ActivePromptHandler,
-    ): Promise<PromptResponse> => {
+    async (_text: string, handler: ActivePromptHandler): Promise<PromptResponse> => {
       this.activeHandler = handler;
       return { stopReason: "end_turn" };
     },
@@ -345,27 +344,28 @@ describe("KimiSession", () => {
         cwd: "D:/project",
         initialState: {},
         readNativeSnapshot: async () => ({
-          turns: snapshotReads++ === 0
-            ? []
-            : [
-                {
-                  nativeTurnRef: {
-                    formatVersion: 1,
-                    harnessId: harnessIdSchema.parse("kimi-code"),
-                    nativeSessionId: "session-turn",
-                    nativeTurnKey: "turn:0",
+          turns:
+            snapshotReads++ === 0
+              ? []
+              : [
+                  {
+                    nativeTurnRef: {
+                      formatVersion: 1,
+                      harnessId: harnessIdSchema.parse("kimi-code"),
+                      nativeSessionId: "session-turn",
+                      nativeTurnKey: "turn:0",
+                    },
+                    checkpoint: {
+                      formatVersion: 1,
+                      harnessId: harnessIdSchema.parse("kimi-code"),
+                      nativeSessionId: "session-turn",
+                      checkpointId: "turn:0",
+                    },
+                    input: [{ type: "text", text: "Say hello" }],
+                    items: [],
+                    outcome: { status: "succeeded" },
                   },
-                  checkpoint: {
-                    formatVersion: 1,
-                    harnessId: harnessIdSchema.parse("kimi-code"),
-                    nativeSessionId: "session-turn",
-                    checkpointId: "turn:0",
-                  },
-                  input: [{ type: "text", text: "Say hello" }],
-                  items: [],
-                  outcome: { status: "succeeded" },
-                },
-              ],
+                ],
         }),
       });
 
@@ -397,15 +397,31 @@ describe("KimiSession", () => {
         (o) => o.kind === "event" && o.event.type === "item.started",
       );
       const reasoningStart = itemStarts.find(
-        (s) => s.kind === "event" && s.event.type === "item.started" && s.event.item.type === "reasoning",
+        (s) =>
+          s.kind === "event" &&
+          s.event.type === "item.started" &&
+          s.event.item.type === "reasoning",
       );
       const agentStart = itemStarts.find(
-        (s) => s.kind === "event" && s.event.type === "item.started" && s.event.item.type === "agentMessage",
+        (s) =>
+          s.kind === "event" &&
+          s.event.type === "item.started" &&
+          s.event.item.type === "agentMessage",
       );
-      if (reasoningStart && reasoningStart.kind === "event" && reasoningStart.event.type === "item.started" && reasoningStart.event.item.type === "reasoning") {
+      if (
+        reasoningStart &&
+        reasoningStart.kind === "event" &&
+        reasoningStart.event.type === "item.started" &&
+        reasoningStart.event.item.type === "reasoning"
+      ) {
         expect(reasoningStart.event.item.text).toBe("");
       }
-      if (agentStart && agentStart.kind === "event" && agentStart.event.type === "item.started" && agentStart.event.item.type === "agentMessage") {
+      if (
+        agentStart &&
+        agentStart.kind === "event" &&
+        agentStart.event.type === "item.started" &&
+        agentStart.event.item.type === "agentMessage"
+      ) {
         expect(agentStart.event.item.text).toBe("");
       }
 
@@ -507,14 +523,26 @@ describe("KimiSession", () => {
       );
       await writeFile(
         path.join(sessionDir, "state.json"),
-        JSON.stringify({ id: sessionId, version: 2, cwd: "D:/project", agents: { main: { homedir: mainHomeDir, type: "main" } } }),
+        JSON.stringify({
+          id: sessionId,
+          version: 2,
+          cwd: "D:/project",
+          agents: { main: { homedir: mainHomeDir, type: "main" } },
+        }),
       );
       await writeFile(
         path.join(mainHomeDir, "wire.jsonl"),
         [
-          { type: "turn.prompt", agentId: "main", turnId: 7, input: [{ type: "text", text: "old prompt" }] },
+          {
+            type: "turn.prompt",
+            agentId: "main",
+            turnId: 7,
+            input: [{ type: "text", text: "old prompt" }],
+          },
           { type: "turn.ended", agentId: "main", turnId: 7, reason: "cancelled" },
-        ].map((record) => JSON.stringify(record)).join("\n") + "\n",
+        ]
+          .map((record) => JSON.stringify(record))
+          .join("\n") + "\n",
       );
 
       const transport = new MockKimiTransport();
@@ -546,9 +574,14 @@ describe("KimiSession", () => {
         expect(completed.event.outcome.status).toBe("failed");
         expect(completed.event.nativeTurnRef).toBeUndefined();
       }
-      expect(outputs.some(
-        (output) => output.kind === "event" && output.event.type === "item.started" && output.event.item.type === "fileChange",
-      )).toBe(false);
+      expect(
+        outputs.some(
+          (output) =>
+            output.kind === "event" &&
+            output.event.type === "item.started" &&
+            output.event.item.type === "fileChange",
+        ),
+      ).toBe(false);
       await rm(home, { recursive: true, force: true });
     });
 
@@ -702,13 +735,25 @@ describe("KimiSession", () => {
           o.event.item.type === "commandExecution",
       );
       expect(cmdStarted).toBeDefined();
-      if (cmdStarted && cmdStarted.kind === "event" && cmdStarted.event.type === "item.started" && cmdStarted.event.item.type === "commandExecution") {
+      if (
+        cmdStarted &&
+        cmdStarted.kind === "event" &&
+        cmdStarted.event.type === "item.started" &&
+        cmdStarted.event.item.type === "commandExecution"
+      ) {
         expect(cmdStarted.event.item.command).toBe("cat probe.txt");
       }
       const cmdCompleted = outputs.find(
-        (o) => o.kind === "event" && o.event.type === "item.completed" && o.event.snapshot.item.type === "commandExecution",
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "commandExecution",
       );
-      if (cmdCompleted?.kind === "event" && cmdCompleted.event.type === "item.completed" && cmdCompleted.event.snapshot.item.type === "commandExecution") {
+      if (
+        cmdCompleted?.kind === "event" &&
+        cmdCompleted.event.type === "item.completed" &&
+        cmdCompleted.event.snapshot.item.type === "commandExecution"
+      ) {
         expect(cmdCompleted.event.snapshot.item.output).toBe("KIMI_PROBE_OK\n");
       }
     });
@@ -765,34 +810,64 @@ describe("KimiSession", () => {
 
       // 1. Reasoning item was started and completed before tool
       const reasoningCompleted = outputs.find(
-        (o) => o.kind === "event" && o.event.type === "item.completed" && o.event.snapshot.item.type === "reasoning",
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "reasoning",
       );
       expect(reasoningCompleted).toBeDefined();
 
       // 2. Tool execution was started with canonical name "Write" (not "Writing note.txt")
       const toolStarted = outputs.find(
-        (o) => o.kind === "event" && o.event.type === "item.started" && o.event.item.type === "toolExecution",
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.started" &&
+          o.event.item.type === "toolExecution",
       );
       expect(toolStarted).toBeDefined();
-      if (toolStarted && toolStarted.kind === "event" && toolStarted.event.type === "item.started" && toolStarted.event.item.type === "toolExecution") {
+      if (
+        toolStarted &&
+        toolStarted.kind === "event" &&
+        toolStarted.event.type === "item.started" &&
+        toolStarted.event.item.type === "toolExecution"
+      ) {
         expect(toolStarted.event.item.toolName).toBe("Write");
-        expect(toolStarted.event.item.arguments).toEqual({ path: "note.txt", content: "Note content" });
+        expect(toolStarted.event.item.arguments).toEqual({
+          path: "note.txt",
+          content: "Note content",
+        });
       }
 
       const toolCompleted = outputs.find(
-        (o) => o.kind === "event" && o.event.type === "item.completed" && o.event.snapshot.item.type === "toolExecution",
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "toolExecution",
       );
       expect(toolCompleted).toBeDefined();
-      if (toolCompleted && toolCompleted.kind === "event" && toolCompleted.event.type === "item.completed" && toolCompleted.event.snapshot.item.type === "toolExecution") {
+      if (
+        toolCompleted &&
+        toolCompleted.kind === "event" &&
+        toolCompleted.event.type === "item.completed" &&
+        toolCompleted.event.snapshot.item.type === "toolExecution"
+      ) {
         expect(toolCompleted.event.snapshot.item.toolName).toBe("Write");
       }
 
       // 3. Final agent message completed
       const agentCompleted = outputs.find(
-        (o) => o.kind === "event" && o.event.type === "item.completed" && o.event.snapshot.item.type === "agentMessage",
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "agentMessage",
       );
       expect(agentCompleted).toBeDefined();
-      if (agentCompleted && agentCompleted.kind === "event" && agentCompleted.event.type === "item.completed" && agentCompleted.event.snapshot.item.type === "agentMessage") {
+      if (
+        agentCompleted &&
+        agentCompleted.kind === "event" &&
+        agentCompleted.event.type === "item.completed" &&
+        agentCompleted.event.snapshot.item.type === "agentMessage"
+      ) {
         expect(agentCompleted.event.snapshot.item.text).toBe("Created note.txt successfully.");
         expect(agentCompleted.event.snapshot.item.phase).toBe("final_answer");
       }
@@ -800,7 +875,13 @@ describe("KimiSession", () => {
       // 4. Verify order of events: reasoning -> tool -> agentMessage
       const eventOrder = outputs
         .filter((o): o is Extract<HarnessOutput, { kind: "event" }> => o.kind === "event")
-        .map((o) => (o.event.type === "item.started" ? `start:${o.event.item.type}` : o.event.type === "item.completed" ? `complete:${o.event.snapshot.item.type}` : o.event.type));
+        .map((o) =>
+          o.event.type === "item.started"
+            ? `start:${o.event.item.type}`
+            : o.event.type === "item.completed"
+              ? `complete:${o.event.snapshot.item.type}`
+              : o.event.type,
+        );
 
       expect(eventOrder).toContain("start:reasoning");
       expect(eventOrder).toContain("start:toolExecution");
@@ -826,10 +907,12 @@ describe("KimiSession", () => {
           toolCall: {
             toolCallId: "call-1",
             title: "Writing probe.txt",
-            content: [{
-              type: "content",
-              content: { type: "text", text: "Requesting approval to Writing probe.txt" },
-            }],
+            content: [
+              {
+                type: "content",
+                content: { type: "text", text: "Requesting approval to Writing probe.txt" },
+              },
+            ],
           },
           options: [
             { optionId: "approve_once", name: "Approve once", kind: "allow_once" },
@@ -904,7 +987,10 @@ describe("KimiSession", () => {
               q0: {
                 type: "string",
                 title: "Color",
-                oneOf: [{ const: "Red", title: "Red" }, { const: "Blue", title: "Blue" }],
+                oneOf: [
+                  { const: "Red", title: "Red" },
+                  { const: "Blue", title: "Blue" },
+                ],
               },
               q1: {
                 type: "array",
@@ -1038,19 +1124,35 @@ describe("KimiSession", () => {
 
       // Verify reasoning item was emitted BEFORE interaction
       const reasoningCompleted = outputs.find(
-        (o) => o.kind === "event" && o.event.type === "item.completed" && o.event.snapshot.item.type === "reasoning",
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "reasoning",
       );
       expect(reasoningCompleted).toBeDefined();
-      if (reasoningCompleted && reasoningCompleted.kind === "event" && reasoningCompleted.event.type === "item.completed" && reasoningCompleted.event.snapshot.item.type === "reasoning") {
+      if (
+        reasoningCompleted &&
+        reasoningCompleted.kind === "event" &&
+        reasoningCompleted.event.type === "item.completed" &&
+        reasoningCompleted.event.snapshot.item.type === "reasoning"
+      ) {
         expect(reasoningCompleted.event.snapshot.item.text).toBe("Thinking about options...");
       }
 
       // Verify final agent message has no commentary phase
       const agentCompleted = outputs.find(
-        (o) => o.kind === "event" && o.event.type === "item.completed" && o.event.snapshot.item.type === "agentMessage",
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "agentMessage",
       );
       expect(agentCompleted).toBeDefined();
-      if (agentCompleted && agentCompleted.kind === "event" && agentCompleted.event.type === "item.completed" && agentCompleted.event.snapshot.item.type === "agentMessage") {
+      if (
+        agentCompleted &&
+        agentCompleted.kind === "event" &&
+        agentCompleted.event.type === "item.completed" &&
+        agentCompleted.event.snapshot.item.type === "agentMessage"
+      ) {
         expect(agentCompleted.event.snapshot.item.text).toBe("Answer complete.");
         expect(agentCompleted.event.snapshot.item.phase).toBeUndefined();
       }
@@ -1064,7 +1166,9 @@ describe("KimiSession", () => {
       });
 
       expect(eventKinds.indexOf("start:reasoning")).toBeLessThan(eventKinds.indexOf("interaction"));
-      expect(eventKinds.indexOf("interaction")).toBeLessThan(eventKinds.indexOf("start:agentMessage"));
+      expect(eventKinds.indexOf("interaction")).toBeLessThan(
+        eventKinds.indexOf("start:agentMessage"),
+      );
     });
 
     it("rejects interaction response with mismatched type or action", async () => {
@@ -1239,16 +1343,22 @@ describe("KimiSession", () => {
         cwd: "D:/project",
         initialState: {},
         readNativeSnapshot: async () => ({
-          turns: snapshotReads++ === 0
-            ? []
-            : [
-                {
-                  nativeTurnRef: { formatVersion: 1, harnessId: harnessIdSchema.parse("kimi-code"), nativeSessionId: "s-fold-reg", nativeTurnKey: "turn:0" },
-                  input: [{ type: "text", text: "write algorithm\n" }],
-                  items: [],
-                  outcome: { status: "succeeded" },
-                },
-              ],
+          turns:
+            snapshotReads++ === 0
+              ? []
+              : [
+                  {
+                    nativeTurnRef: {
+                      formatVersion: 1,
+                      harnessId: harnessIdSchema.parse("kimi-code"),
+                      nativeSessionId: "s-fold-reg",
+                      nativeTurnKey: "turn:0",
+                    },
+                    input: [{ type: "text", text: "write algorithm\n" }],
+                    items: [],
+                    outcome: { status: "succeeded" },
+                  },
+                ],
         }),
       });
 
@@ -1282,7 +1392,9 @@ describe("KimiSession", () => {
         commentaryMsg.event.type === "item.completed" &&
         commentaryMsg.event.snapshot.item.type === "agentMessage"
       ) {
-        expect(commentaryMsg.event.snapshot.item.text).toBe("No existing python files found. Writing quicksort...");
+        expect(commentaryMsg.event.snapshot.item.text).toBe(
+          "No existing python files found. Writing quicksort...",
+        );
         expect(commentaryMsg.event.snapshot.item.phase).toBe("commentary");
       }
 
@@ -1300,7 +1412,10 @@ describe("KimiSession", () => {
 
       // No fake reasoning items were generated
       const reasoningItems = outputs.filter(
-        (o) => o.kind === "event" && o.event.type === "item.completed" && o.event.snapshot.item.type === "reasoning",
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "reasoning",
       );
       expect(reasoningItems).toHaveLength(0);
 
@@ -1314,8 +1429,12 @@ describe("KimiSession", () => {
         return o.kind;
       });
 
-      expect(eventTypes.indexOf("complete:agentMessage")).toBeLessThan(eventTypes.indexOf("start:toolExecution"));
-      expect(eventTypes.indexOf("complete:toolExecution")).toBeLessThan(eventTypes.lastIndexOf("start:agentMessage"));
+      expect(eventTypes.indexOf("complete:agentMessage")).toBeLessThan(
+        eventTypes.indexOf("start:toolExecution"),
+      );
+      expect(eventTypes.indexOf("complete:toolExecution")).toBeLessThan(
+        eventTypes.lastIndexOf("start:agentMessage"),
+      );
     });
 
     it("correlates Native Turn with trailing newline in user input without 2000ms delay", async () => {
@@ -1327,16 +1446,22 @@ describe("KimiSession", () => {
         cwd: "D:/project",
         initialState: {},
         readNativeSnapshot: async () => ({
-          turns: snapshotReads++ === 0
-            ? []
-            : [
-                {
-                  nativeTurnRef: { formatVersion: 1, harnessId: harnessIdSchema.parse("kimi-code"), nativeSessionId: "s-correlate-reg", nativeTurnKey: "turn:0" },
-                  input: [{ type: "text", text: "test input\n" }], // Kimi writes with \n
-                  items: [],
-                  outcome: { status: "succeeded" },
-                },
-              ],
+          turns:
+            snapshotReads++ === 0
+              ? []
+              : [
+                  {
+                    nativeTurnRef: {
+                      formatVersion: 1,
+                      harnessId: harnessIdSchema.parse("kimi-code"),
+                      nativeSessionId: "s-correlate-reg",
+                      nativeTurnKey: "turn:0",
+                    },
+                    input: [{ type: "text", text: "test input\n" }], // Kimi writes with \n
+                    items: [],
+                    outcome: { status: "succeeded" },
+                  },
+                ],
         }),
       });
 

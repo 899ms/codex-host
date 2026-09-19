@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InitializeResponse, PromptResponse } from "@agentclientprotocol/sdk";
 import type { HarnessOutput, HostTurnSnapshot } from "@codexhost/harness-adapter";
-import { harnessIdSchema, hostTurnIdSchema } from "@codexhost/shared-contracts";
+import { hostTurnIdSchema } from "@codexhost/shared-contracts";
 import { KimiAdapter, type KimiAcpTransportLike } from "../src/kimi-adapter.js";
 import { KimiSession } from "../src/kimi-session.js";
 import {
@@ -80,32 +80,15 @@ describe("Kimi PR review regressions", () => {
     ).toEqual([]);
   });
 
-  it.each(["fork", "rollbackLastTurn"] as const)(
-    "rejects unsupported %s before native side effects",
-    async (kind) => {
-      const transport = new Transport();
-      const createTransport = vi.fn(() => transport);
-      const adapter = new KimiAdapter({}, { resolveExecutable: () => "kimi", createTransport });
-      const sourceRef = createKimiNativeSessionRef("source", process.cwd());
-      const result = await adapter.open(
-        kind === "fork"
-          ? {
-              kind,
-              sourceRef,
-              cwd: process.cwd(),
-              checkpoint: {
-                formatVersion: 1,
-                harnessId: harnessIdSchema.parse("kimi-code"),
-                nativeSessionId: "source",
-                checkpointId: "turn:0",
-              },
-            }
-          : { kind, sourceRef, cwd: process.cwd() },
-      );
-      expect(result).toMatchObject({ ok: false, error: { code: "unsupported" } });
-      expect(createTransport).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects rollbackLastTurn before native side effects", async () => {
+    const transport = new Transport();
+    const createTransport = vi.fn(() => transport);
+    const adapter = new KimiAdapter({}, { resolveExecutable: () => "kimi", createTransport });
+    const sourceRef = createKimiNativeSessionRef("source", process.cwd());
+    const result = await adapter.open({ kind: "rollbackLastTurn", sourceRef, cwd: process.cwd() });
+    expect(result).toMatchObject({ ok: false, error: { code: "unsupported" } });
+    expect(createTransport).not.toHaveBeenCalled();
+  });
 
   it("rejects an unverified unattended execution policy before creating a session", async () => {
     const transport = new Transport();

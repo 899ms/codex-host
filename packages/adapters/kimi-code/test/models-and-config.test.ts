@@ -113,7 +113,9 @@ default_model = "test"
     });
 
     it("throws on invalid toml syntax", () => {
-      expect(() => parseKimiConfigToml("invalid = [toml")).toThrow(/Failed to parse Kimi config.toml/);
+      expect(() => parseKimiConfigToml("invalid = [toml")).toThrow(
+        /Failed to parse Kimi config.toml/,
+      );
     });
   });
 

@@ -1,8 +1,5 @@
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
-import type {
-  HarnessCommandInvocation,
-  HarnessResult,
-} from "@codexhost/harness-adapter";
+import type { HarnessCommandInvocation, HarnessResult } from "@codexhost/harness-adapter";
 import {
   harnessCommandCatalogSchema,
   type HarnessCommandCatalog,

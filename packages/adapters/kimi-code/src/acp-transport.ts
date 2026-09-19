@@ -67,7 +67,16 @@ export type KimiTransportEvent =
   | { type: "agent.text"; text: string }
   | { type: "agent.thought"; text: string }
   | { type: "tool.call"; toolCallId: string; name: string; kind?: string; args?: unknown }
-  | { type: "tool.update"; toolCallId: string; name?: string; kind?: string; status?: string; rawInput?: unknown; rawOutput?: unknown; content?: unknown }
+  | {
+      type: "tool.update";
+      toolCallId: string;
+      name?: string;
+      kind?: string;
+      status?: string;
+      rawInput?: unknown;
+      rawOutput?: unknown;
+      content?: unknown;
+    }
   | { type: "usage"; update: Record<string, unknown> }
   | { type: "config.update"; configOptions: unknown[] }
   | { type: "mode.update"; currentModeId: string }
@@ -79,9 +88,14 @@ export interface ActivePromptHandler {
   onElicitation(request: CreateElicitationRequest): Promise<CreateElicitationResponse>;
 }
 
-export type SessionEventHandler = (event: Extract<KimiTransportEvent, {
-  type: "config.update" | "mode.update" | "commands.update";
-}>) => void;
+export type SessionEventHandler = (
+  event: Extract<
+    KimiTransportEvent,
+    {
+      type: "config.update" | "mode.update" | "commands.update";
+    }
+  >,
+) => void;
 
 export interface KimiAcpTransportOptions {
   cwd: string;
@@ -150,13 +164,15 @@ export function projectKimiCommandsUpdate(
         if (!raw || typeof raw !== "object") return [];
         const command = raw as Record<string, unknown>;
         if (typeof command.name !== "string" || !command.name.trim()) return [];
-        return [{
-          name: command.name,
-          description: typeof command.description === "string" ? command.description : "",
-          ...(command.input && typeof command.input === "object"
-            ? { input: command.input as Exclude<AvailableCommand["input"], undefined> }
-            : {}),
-        }];
+        return [
+          {
+            name: command.name,
+            description: typeof command.description === "string" ? command.description : "",
+            ...(command.input && typeof command.input === "object"
+              ? { input: command.input as Exclude<AvailableCommand["input"], undefined> }
+              : {}),
+          },
+        ];
       })
     : [];
   return { type: "commands.update", commands };
@@ -254,7 +270,9 @@ export class KimiAcpTransport {
       const createdRaw = created as { configOptions?: unknown[]; modes?: unknown };
       return {
         sessionId: created.sessionId,
-        ...(Array.isArray(createdRaw.configOptions) ? { configOptions: createdRaw.configOptions } : {}),
+        ...(Array.isArray(createdRaw.configOptions)
+          ? { configOptions: createdRaw.configOptions }
+          : {}),
         ...(createdRaw.modes !== undefined ? { modes: createdRaw.modes } : {}),
       };
     }
@@ -289,7 +307,9 @@ export class KimiAcpTransport {
       this.#sessionId = forkedSessionId;
       return {
         sessionId: forkedSessionId,
-        ...(Array.isArray(raw.configOptions) ? { configOptions: raw.configOptions as unknown[] } : {}),
+        ...(Array.isArray(raw.configOptions)
+          ? { configOptions: raw.configOptions as unknown[] }
+          : {}),
         ...(raw.modes !== undefined ? { modes: raw.modes } : {}),
       };
     }
@@ -323,7 +343,9 @@ export class KimiAcpTransport {
     const raw = (loaded && typeof loaded === "object" ? loaded : {}) as Record<string, unknown>;
     return {
       sessionId: input.sessionId,
-      ...(Array.isArray(raw.configOptions) ? { configOptions: raw.configOptions as unknown[] } : {}),
+      ...(Array.isArray(raw.configOptions)
+        ? { configOptions: raw.configOptions as unknown[] }
+        : {}),
       ...(raw.modes !== undefined ? { modes: raw.modes } : {}),
     };
   }
@@ -357,10 +379,7 @@ export class KimiAcpTransport {
     }
   }
 
-  async prompt(
-    text: string,
-    handler: ActivePromptHandler,
-  ): Promise<PromptResponse> {
+  async prompt(text: string, handler: ActivePromptHandler): Promise<PromptResponse> {
     const connection = this.#connection;
     const sessionId = this.#sessionId;
     if (!connection || !sessionId || this.#closed) {
@@ -423,15 +442,21 @@ export class KimiAcpTransport {
         // Ignore
       }
 
-      const timer = setTimeout(() => {
-        try {
-          child.kill("SIGTERM");
-        } catch {
-          // Ignore
-        }
-      }, Math.min(2500, this.#closeTimeoutMs));
+      const timer = setTimeout(
+        () => {
+          try {
+            child.kill("SIGTERM");
+          } catch {
+            // Ignore
+          }
+        },
+        Math.min(2500, this.#closeTimeoutMs),
+      );
 
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, this.#closeTimeoutMs))]);
+      await Promise.race([
+        exited,
+        new Promise((resolve) => setTimeout(resolve, this.#closeTimeoutMs)),
+      ]);
       clearTimeout(timer);
 
       if (child.exitCode === null) {
@@ -483,7 +508,11 @@ export class KimiAcpTransport {
     });
 
     child.on("error", (error) => {
-      this.#fault(new KimiTransportError("unavailable", `Process error: ${error.message}`, { diagnostic: this.#stderrTail }));
+      this.#fault(
+        new KimiTransportError("unavailable", `Process error: ${error.message}`, {
+          diagnostic: this.#stderrTail,
+        }),
+      );
     });
 
     child.on("exit", (code, signal) => {
@@ -514,9 +543,12 @@ export class KimiAcpTransport {
 
     const client: Client = {
       sessionUpdate: (params: SessionNotification) => this.#handleSessionUpdate(params),
-      requestPermission: (params: RequestPermissionRequest) => this.#handleRequestPermission(params),
-      unstable_createElicitation: (params: CreateElicitationRequest) => this.#handleCreateElicitation(params),
-      extMethod: (method: string, params: Record<string, unknown>) => this.#handleExtMethod(method, params),
+      requestPermission: (params: RequestPermissionRequest) =>
+        this.#handleRequestPermission(params),
+      unstable_createElicitation: (params: CreateElicitationRequest) =>
+        this.#handleCreateElicitation(params),
+      extMethod: (method: string, params: Record<string, unknown>) =>
+        this.#handleExtMethod(method, params),
       extNotification: () => this.#handleExtNotification(),
     };
 
@@ -551,10 +583,14 @@ export class KimiAcpTransport {
     } catch (error) {
       await this.close().catch(() => undefined);
       if (error instanceof KimiTransportError) throw error;
-      throw new KimiTransportError("unavailable", `Failed to initialize Kimi ACP: ${error instanceof Error ? error.message : String(error)}`, {
-        cause: error,
-        diagnostic: this.#stderrTail,
-      });
+      throw new KimiTransportError(
+        "unavailable",
+        `Failed to initialize Kimi ACP: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          cause: error,
+          diagnostic: this.#stderrTail,
+        },
+      );
     }
   }
 
@@ -562,7 +598,8 @@ export class KimiAcpTransport {
     const update = notification.update as Record<string, unknown>;
     if (!update) return;
 
-    const sessionUpdate = typeof update.sessionUpdate === "string" ? update.sessionUpdate : undefined;
+    const sessionUpdate =
+      typeof update.sessionUpdate === "string" ? update.sessionUpdate : undefined;
     const textEvent = projectKimiTextUpdate(update);
     const toolEvent = projectKimiToolUpdate(update);
     const commandsEvent = projectKimiCommandsUpdate(update);
@@ -607,13 +644,20 @@ export class KimiAcpTransport {
     return { action: "cancel" };
   }
 
-  async #handleExtMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async #handleExtMethod(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     if (method === "elicitation/create") {
-      const res = await this.#handleCreateElicitation(params as unknown as CreateElicitationRequest);
+      const res = await this.#handleCreateElicitation(
+        params as unknown as CreateElicitationRequest,
+      );
       return res as unknown as Record<string, unknown>;
     }
     if (method === "session/request_permission") {
-      const res = await this.#handleRequestPermission(params as unknown as RequestPermissionRequest);
+      const res = await this.#handleRequestPermission(
+        params as unknown as RequestPermissionRequest,
+      );
       return res as unknown as Record<string, unknown>;
     }
     throw new Error(`Unsupported client method: ${method}`);

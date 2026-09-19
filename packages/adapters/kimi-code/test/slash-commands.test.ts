@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
-import {
-  harnessCommandCatalogSchema,
-  hostTurnIdSchema,
-} from "@codexhost/shared-contracts";
+import { harnessCommandCatalogSchema, hostTurnIdSchema } from "@codexhost/shared-contracts";
 
 import {
   buildKimiCommandCatalog,
@@ -222,7 +219,8 @@ describe("slash-commands", () => {
 
   describe("formatKimiCommandOutput", () => {
     it("formats /help output into a structured Markdown bullet list", () => {
-      const raw = "Available commands:\n/compact — Compact context\n/status — Current status\n/usage — Token usage";
+      const raw =
+        "Available commands:\n/compact — Compact context\n/status — Current status\n/usage — Token usage";
       const formatted = formatKimiCommandOutput(raw);
       expect(formatted).toContain("### Available Commands\n");
       expect(formatted).toContain("- **`/compact`** — Compact context");
@@ -231,7 +229,8 @@ describe("slash-commands", () => {
     });
 
     it("formats /status output into a structured Markdown list with bold labels", () => {
-      const raw = "Session: session_123\nModel: relay (thinking: on)\nMode: default\nWorking directory: D:\\project";
+      const raw =
+        "Session: session_123\nModel: relay (thinking: on)\nMode: default\nWorking directory: D:\\project";
       const formatted = formatKimiCommandOutput(raw);
       expect(formatted).toContain("### Session Status\n");
       expect(formatted).toContain("- **Session**: `session_123`");
