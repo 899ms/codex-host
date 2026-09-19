@@ -11,8 +11,10 @@ export const WORKBUDDY_MACOS_CLI =
 const windowsRoots = [
   "${LOCALAPPDATA}/Programs/WorkBuddy AI",
   "${LOCALAPPDATA}/Programs/WorkBuddy",
+  "${LOCALAPPDATA}/Programs/WorkBuddyAI",
   "${ProgramFiles}/WorkBuddy AI",
   "${ProgramFiles}/WorkBuddy",
+  "${ProgramFiles}/WorkBuddyAI",
 ];
 const macSpec: HarnessDiscoverySpec = {
   id: "workbuddy",
@@ -37,7 +39,7 @@ export function resolveWorkBuddyInstallDirectory(
   const paths = targetPath(platform);
   const entries =
     platform === "win32"
-      ? ["WorkBuddy.exe", "WorkBuddy AI.exe"]
+      ? ["WorkBuddy.exe", "WorkBuddy AI.exe", "WorkBuddyAI.exe"]
       : platform === "darwin"
         ? [paths.join("Contents", "MacOS", "Electron")]
         : [];
@@ -64,7 +66,7 @@ export function resolveWorkBuddyBundle(
     platform === "darwin"
       ? [macSpec]
       : platform === "win32"
-        ? ["WorkBuddy AI", "WorkBuddy"].map((command) => ({
+        ? ["WorkBuddy AI", "WorkBuddy", "WorkBuddyAI"].map((command) => ({
             id: "workbuddy",
             command,
             installRoots: { windows: windowsRoots },

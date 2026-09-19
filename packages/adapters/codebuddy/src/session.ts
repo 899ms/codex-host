@@ -168,7 +168,7 @@ export class CodeBuddySession implements HarnessSession {
             if (this.#replaying) return;
             if (this.subagents.update(update)) return;
             if (update.sessionUpdate === "config_option_update" && this.#config)
-              this.#apply(configuration(update.configOptions));
+              this.#apply(configuration(update.configOptions, this.profile));
             if (
               update.sessionUpdate === "usage_update" &&
               typeof update.used === "number" &&
@@ -260,7 +260,7 @@ export class CodeBuddySession implements HarnessSession {
           }
         : {}),
     });
-    this.#apply(configuration(opened.configOptions), false);
+    this.#apply(configuration(opened.configOptions, this.profile), false);
     if (this.input.kind === "create" && this.input.executionPolicy === "unattended-full-access") {
       // Unlike bypassPermissions, the native fullAccess option also covers HIGH/CRITICAL actions.
       await this.#configure("mode", "fullAccess");
@@ -302,10 +302,11 @@ export class CodeBuddySession implements HarnessSession {
 
   async #configure(id: string, value: string) {
     const option = this.#config?.options.find((option) => option.id === id);
-    if (
-      !Array.isArray(option?.options) ||
-      !option.options.some((option) => record(option).value === value)
-    )
+    const listed =
+      Array.isArray(option?.options) &&
+      option.options.some((option) => record(option).value === value);
+    const allowedProductModel = id === "model" && this.profile.allowUnlistedModelSelection;
+    if (!listed && !allowedProductModel)
       throw new CodeBuddyError(
         "invalidRequest",
         `Unavailable ${this.profile.displayName} ${id} selection`,
@@ -314,7 +315,7 @@ export class CodeBuddySession implements HarnessSession {
     const result = await this.#client.configure(this.#ref.nativeSessionId, id, value);
     if (this.#closed || this.#fault)
       throw new CodeBuddyError("invalidState", "Session closed during configuration");
-    this.#apply(confirmedConfiguration(result, id, value));
+    this.#apply(confirmedConfiguration(result, id, value, this.profile));
   }
 
   async #snapshot(): Promise<HostThreadSnapshot> {
@@ -601,7 +602,7 @@ export class CodeBuddySession implements HarnessSession {
       if (this.#closed) return;
       this.#client = this.#createClient();
       const loaded = await this.#openClient();
-      this.#apply(configuration(loaded.configOptions));
+      this.#apply(configuration(loaded.configOptions, this.profile));
       if (saved.effectiveModel) await this.#configure("model", nativeModel(saved.effectiveModel));
       if (saved.effectiveThinkingOptionId)
         await this.#configure("thought_level", saved.effectiveThinkingOptionId);

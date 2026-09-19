@@ -124,7 +124,7 @@ export class CodeBuddyAdapter implements HarnessAdapter {
       this.#inspections.add(client);
       await client.initialize();
       const opened = await client.open(cwd);
-      const config = configuration(opened.configOptions);
+      const config = configuration(opened.configOptions, this.#profile);
       return harnessInspectionSchema.parse({
         status: "ready",
         catalog: config.catalog,

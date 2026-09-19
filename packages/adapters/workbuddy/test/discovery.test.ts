@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { workBuddyInvocation } from "../src/command.js";
 
 describe("WorkBuddy app discovery", () => {
-  it.each(["WorkBuddy.exe", "WorkBuddy AI.exe"])(
+  it.each(["WorkBuddy.exe", "WorkBuddy AI.exe", "WorkBuddyAI.exe"])(
     "finds %s inside a selected installation directory",
     (name) => {
       const directory = "D:\\自定义 WorkBuddy";
@@ -36,6 +36,11 @@ describe("WorkBuddy app discovery", () => {
       "D:\\Custom Apps\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy",
     ],
     [
+      "win32",
+      "D:\\Custom Apps\\WorkBuddyAI.exe",
+      "D:\\Custom Apps\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy",
+    ],
+    [
       "darwin",
       "/custom/WorkBuddy AI.app/Contents/MacOS/Electron",
       "/custom/WorkBuddy AI.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy",
@@ -63,6 +68,7 @@ describe("WorkBuddy app discovery", () => {
     ["C:\\Users\\Test\\AppData\\Local\\Programs\\WorkBuddy AI", "WorkBuddy AI.exe"],
     ["C:\\Program Files\\WorkBuddy", "WorkBuddy.exe"],
     ["D:\\Portable WorkBuddy", "WorkBuddy.exe"],
+    ["D:\\Portable WorkBuddy", "WorkBuddyAI.exe"],
   ])("finds a Windows app in %s", (root, name) => {
     const executable = `${root}\\${name}`;
     const cli = `${root}\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy`;
