@@ -74,8 +74,8 @@ const inspection = {
 
 describe("Renderer fixed Model request client", () => {
   it("validates launch setting requests and responses on the selected request client", async () => {
-    const harnessId = harnessIdSchema.parse("zcode");
-    const result = { path: "D:\\Apps\\zcode.cjs", restartRequired: true };
+    const harnessId = harnessIdSchema.parse("workbuddy");
+    const result = { path: "D:\\Apps\\WorkBuddy", restartRequired: true };
     const sendRequest = vi.fn().mockResolvedValue(result);
     const client = createRendererModelClient([{ sendRequest }]);
     if (!client) throw new Error("Expected a model client");
