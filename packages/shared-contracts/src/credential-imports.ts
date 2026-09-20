@@ -57,6 +57,8 @@ export const credentialOtherLoginSchema = z
     type: z.enum(["oauth", "api_key", "unknown"]),
     /** Best-effort account label (e.g. the email in a Codex token), derived locally when present. */
     label: z.string().min(1).max(512).optional(),
+    /** Recognized credential vendor, derived from the OAuth token issuer. Absent when unknown. */
+    vendor: z.enum(["openai-codex", "xai"]).optional(),
   })
   .strict();
 export type CredentialOtherLogin = z.infer<typeof credentialOtherLoginSchema>;

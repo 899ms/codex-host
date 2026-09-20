@@ -53,22 +53,42 @@ function parseAuth(raw: string | undefined): Record<string, unknown> {
   if (!object(value)) throw new Error("Invalid Pi auth store");
   return value;
 }
-/** Best-effort account label from an OpenAI-style access token; the token itself never leaves. */
-function accountLabel(credential: unknown): string | undefined {
-  if (!object(credential) || credential.type !== "oauth") return undefined;
+/**
+ * What an OAuth credential in Pi actually is, read from its access token's own claims. Issuer plus
+ * client id are the same pair the Codex and Grok exporters verify, so a credential is only labelled
+ * when it is the kind codexhost already understands, whatever the user named the Pi entry. The
+ * token itself never leaves this function.
+ */
+const OAUTH_VENDORS = [
+  {
+    issuer: "https://auth.openai.com",
+    client: "app_EMoamEEZ73f0CkXaXp7hrann",
+    vendor: "openai-codex",
+  },
+  { issuer: "https://auth.x.ai", client: "b1a00492-073a-47ea-816f-4c329264a828", vendor: "xai" },
+] as const;
+function describeOauth(credential: unknown): { label?: string; vendor?: "openai-codex" | "xai" } {
+  if (!object(credential) || credential.type !== "oauth") return {};
   const token = credential.access;
-  if (typeof token !== "string") return undefined;
+  if (typeof token !== "string") return {};
+  let claims: unknown;
   try {
-    const claims: unknown = JSON.parse(
-      Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"),
-    );
-    if (!object(claims)) return undefined;
-    const profile = claims["https://api.openai.com/profile"];
-    const email = object(profile) ? profile.email : claims.email;
-    return typeof email === "string" && email.length > 0 && email.length <= 512 ? email : undefined;
+    claims = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"));
   } catch {
-    return undefined;
+    return {};
   }
+  if (!object(claims)) return {};
+  const match = OAUTH_VENDORS.find(
+    (candidate) => claims.iss === candidate.issuer && claims.client_id === candidate.client,
+  );
+  const profile = claims["https://api.openai.com/profile"];
+  const email = object(profile) ? profile.email : claims.email;
+  return {
+    ...(typeof email === "string" && email.length > 0 && email.length <= 512
+      ? { label: email }
+      : {}),
+    ...(match ? { vendor: match.vendor } : {}),
+  };
 }
 function writeAuth(filename: string, content: string): void {
   const temporary = `${filename}.${randomUUID()}.tmp`;
@@ -241,12 +261,14 @@ export function createPiCredentialImports(
   return {
     providers: ["openai-codex", "xai"],
     async list() {
-      // Unsupported/missing Pi must not advertise an actionable target.
+      // Unsupported/missing Pi must not advertise an actionable target. A Pi that was never run has
+      // no agent directory to import into, so it is not a target either and nothing is shown.
+      if (!existsSync(agentDir)) throw new Error("Pi has no configuration directory");
       await resolve();
       return ownedRecords(readAuth());
     },
     async listOthers() {
-      // Provider, type and a best-effort account label only. Values and expiries never leave here.
+      // Provider, type, and a locally derived account label and vendor. No values, no expiries.
       const auth = readAuth();
       const ours = new Set(ownedRecords(auth).map((record) => record.name));
       const result = new Map<string, CredentialOtherLogin>();
@@ -255,11 +277,10 @@ export function createPiCredentialImports(
       for (const [provider, credential] of Object.entries(auth)) {
         if (!usable(provider)) continue;
         const type = object(credential) ? credential.type : undefined;
-        const label = accountLabel(credential);
         result.set(provider, {
           provider,
           type: type === "oauth" || type === "api_key" ? type : "unknown",
-          ...(label ? { label } : {}),
+          ...describeOauth(credential),
         });
       }
       // Custom Providers can keep their key in models.json instead. Providers configured there that

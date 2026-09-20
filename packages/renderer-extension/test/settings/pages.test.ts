@@ -363,6 +363,25 @@ describe("Credential import controls", () => {
     scope.abort();
   });
 
+  it("hides the whole Pi surface when Pi is not an import target", async () => {
+    const doc = new FakeDocument();
+    const root = new FakeElement("div", doc);
+    const scope = new AbortController();
+    // A missing or unconfigured Pi reports no target at all.
+    const credentialImports = vi.fn(async () => ({ sources: [source], targets: [] }));
+    const controls = mountCredentialImports(
+      root as unknown as HTMLElement,
+      scope.signal,
+      () => ({ credentialImports }) as never,
+      credentialImportChinese,
+      () => {},
+    );
+    await controls.refresh();
+    expect((controls.section as unknown as FakeElement).hidden).toBe(true);
+    expect(controls.button("codex", source.label)).toBeNull();
+    scope.abort();
+  });
+
   it("lists every login in Pi in one list, with actions only on codexhost's own copies", async () => {
     const ours = {
       name: "codex",
@@ -374,7 +393,7 @@ describe("Credential import controls", () => {
       [source],
       [
         { provider: "anthropic", type: "oauth" },
-        { provider: "codex1", type: "oauth", label: "me@example.com" },
+        { provider: "codex1", type: "oauth", label: "me@example.com", vendor: "openai-codex" },
         { provider: "openai-codex", type: "api_key" },
       ],
     );
@@ -389,10 +408,29 @@ describe("Credential import controls", () => {
     expect(text).toContain("anthropic");
     expect(text).toContain("openai-codex");
     expect(text).toContain("API Key");
-    const others = descendants(section).filter((element) =>
+    // Pi's own logins start collapsed behind a disclosure and carry no actions.
+    const group = elementWithClass(section, "settings-pi-accounts__others");
+    expect(group.hidden).toBe(true);
+    const toggle = elementWithClass(section, "settings-pi-accounts__toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(visibleText(toggle)).toContain(credentialImportChinese.othersTitle);
+    expect(visibleText(toggle)).toContain("3");
+    toggle.dispatch("click");
+    expect(group.hidden).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const others = descendants(group).filter((element) =>
       element.className.split(" ").includes("settings-pi-accounts__row--other"),
     );
     expect(others).toHaveLength(3);
+    // A recognized vendor gets the account table's own mark; the rest keep the neutral Pi mark.
+    expect(others[1]?.getAttribute("aria-label")).toBe("me@example.com · Codex");
+    expect(others[1]?.children.find((child) => child instanceof FakeElement)?.dataset.agent).toBe(
+      "codex",
+    );
+    expect(
+      others[0]?.children.find((child) => child instanceof FakeElement)?.dataset.agent,
+    ).toBeUndefined();
+    expect(others[0]?.getAttribute("aria-label")).toBe("anthropic");
     for (const row of others) {
       expect(descendants(row).some((element) => element.tagName === "button")).toBe(false);
     }

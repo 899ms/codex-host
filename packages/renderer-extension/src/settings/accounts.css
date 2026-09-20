@@ -168,16 +168,6 @@
   gap: 11px;
   min-width: 0;
 }
-.settings-account-row__mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: light-dark(#67558d, #c3baff);
-  background: light-dark(#f0ecf7, #353044);
-  border: 1px solid light-dark(#d9d0e6, #4d435f);
-  border-radius: 10px;
-}
 .settings-account-row__identity {
   min-width: 0;
 }
@@ -588,6 +578,9 @@
 .settings-pi-accounts__row + .settings-pi-accounts__row {
   border-top: 1px solid var(--settings-divider);
 }
+.settings-pi-accounts__others > .settings-pi-accounts__row:first-child {
+  border-top: 1px solid var(--settings-divider);
+}
 .settings-pi-accounts__row:hover {
   background: light-dark(#f7f7fa, #26262a);
 }
@@ -598,6 +591,44 @@
   color: var(--settings-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
+}
+/* Disclosure for Pi's own logins: a quiet strip that reads as a divider until opened. */
+.settings-pi-accounts__toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 10px 16px;
+  color: var(--settings-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.settings-pi-accounts__row + .settings-pi-accounts__toggle {
+  border-top: 1px solid var(--settings-divider);
+}
+.settings-pi-accounts__toggle:hover {
+  color: var(--settings-text);
+  background: var(--settings-hover);
+}
+.settings-pi-accounts__toggle > svg {
+  flex: none;
+  transition: transform 120ms ease;
+}
+.settings-pi-accounts__toggle[aria-expanded="true"] > svg {
+  transform: rotate(90deg);
+}
+.settings-pi-accounts__toggle-count {
+  font-variant-numeric: tabular-nums;
+}
+.settings-pi-accounts__others[hidden] {
+  display: none;
+}
+.settings-pi-accounts__others > .settings-pi-accounts__row {
+  border-top: 1px solid var(--settings-divider);
 }
 .settings-pi-accounts__other-mark {
   color: var(--settings-subtle);

@@ -6,7 +6,7 @@ import {
   type CredentialOtherLogin,
   type CredentialSource,
 } from "@codexhost/shared-contracts";
-import { KNOWN_RENDERER_AGENTS } from "../agent-selection-state.js";
+import { KNOWN_RENDERER_AGENTS, type RendererAgent } from "../agent-selection-state.js";
 import { createRendererAgentIcon, RENDERER_AGENT_LABELS } from "../renderer-agent-icon.js";
 import type { CredentialImportMessages } from "./credential-import-messages.js";
 import { createRendererSettingsIcon } from "./icons.js";
@@ -26,6 +26,12 @@ interface DialogState {
 }
 
 const TARGET_HARNESS_ID = "pi";
+
+/** Vendors codexhost recognizes in a Pi OAuth credential, mapped to the mark shown for them. */
+const VENDOR_AGENTS = {
+  "openai-codex": "codex",
+  xai: "grok",
+} as const satisfies Record<NonNullable<CredentialOtherLogin["vendor"]>, RendererAgent>;
 
 function formatImportedAt(value: string): string {
   const date = new Date(value);
@@ -81,6 +87,8 @@ export function mountCredentialImports(
   let snapshot: CredentialImportsResult = { sources: [], targets: [] };
   let busy = false;
   let dialog: HTMLDialogElement | undefined;
+  // Pi's own logins are context, not something to act on, so they start collapsed.
+  let othersExpanded = false;
   const targetButtons = new Map<string, HTMLElement>();
 
   const importedRecords = (): readonly CredentialImportRecord[] =>
@@ -100,6 +108,25 @@ export function mountCredentialImports(
   sectionHeader.append(createRendererAgentIcon("pi", 16, document), sectionTitle, sectionCount);
   const card = document.createElement("div");
   card.className = "settings-pi-accounts__card";
+  const othersToggle = document.createElement("button");
+  othersToggle.type = "button";
+  othersToggle.className = "settings-pi-accounts__toggle";
+  othersToggle.setAttribute("aria-expanded", "false");
+  const othersLabel = document.createElement("span");
+  othersLabel.textContent = messages.othersTitle;
+  const othersCount = document.createElement("span");
+  othersCount.className = "settings-pi-accounts__toggle-count";
+  othersToggle.append(createRendererSettingsIcon("chevron-right", 14), othersLabel, othersCount);
+  const othersList = document.createElement("div");
+  othersList.className = "settings-pi-accounts__others";
+  othersList.hidden = true;
+  othersList.id = "settings-pi-accounts-others";
+  othersToggle.setAttribute("aria-controls", othersList.id);
+  othersToggle.addEventListener("click", () => {
+    othersExpanded = !othersExpanded;
+    othersList.hidden = !othersExpanded;
+    othersToggle.setAttribute("aria-expanded", String(othersExpanded));
+  });
   section.append(sectionHeader, card);
   const rows = new Map<string, HTMLElement>();
 
@@ -109,23 +136,25 @@ export function mountCredentialImports(
     if (className) part.className = className;
     return part;
   };
+  /** Vendor mark, matching the account table above so the same credential always looks the same. */
+  const createMark = (agent: RendererAgent | undefined): HTMLElement => {
+    const mark = document.createElement("div");
+    mark.setAttribute("aria-hidden", "true");
+    mark.className = agent
+      ? "settings-harness-account__logo"
+      : "settings-harness-account__logo settings-pi-accounts__other-mark";
+    if (agent) mark.dataset.agent = agent;
+    mark.append(createRendererAgentIcon(agent ?? "pi", 26, document));
+    return mark;
+  };
   const renderRow = (record: CredentialImportRecord): HTMLElement => {
     const row = document.createElement("div");
     row.className = "settings-pi-accounts__row";
     row.tabIndex = -1;
     row.dataset.importName = record.name;
     row.setAttribute("aria-label", record.source.label);
-    const mark = document.createElement("div");
-    mark.setAttribute("aria-hidden", "true");
     const agent = KNOWN_RENDERER_AGENTS.find((candidate) => candidate === record.source.harnessId);
-    if (agent === "codex") {
-      // Same terminal mark the account table uses for the current Codex identity.
-      mark.className = "settings-account-row__mark";
-      mark.append(createRendererSettingsIcon("terminal", 17));
-    } else {
-      mark.className = "settings-harness-account__logo";
-      if (agent) mark.append(createRendererAgentIcon(agent, 26, document));
-    }
+    const mark = createMark(agent);
     const identity = document.createElement("div");
     identity.className = "settings-pi-accounts__identity";
     const label = document.createElement("strong");
@@ -191,11 +220,15 @@ export function mountCredentialImports(
   const renderOtherRow = (login: CredentialOtherLogin): HTMLElement => {
     const row = document.createElement("div");
     row.className = "settings-pi-accounts__row settings-pi-accounts__row--other";
-    row.setAttribute("aria-label", login.label ?? login.provider);
-    const mark = document.createElement("div");
-    mark.className = "settings-harness-account__logo settings-pi-accounts__other-mark";
-    mark.setAttribute("aria-hidden", "true");
-    mark.append(createRendererAgentIcon("pi", 18, document));
+    // A recognized OAuth vendor gets its own mark; anything else keeps the neutral Pi mark.
+    const agent = login.vendor ? VENDOR_AGENTS[login.vendor] : undefined;
+    row.setAttribute(
+      "aria-label",
+      [login.label ?? login.provider, agent && RENDERER_AGENT_LABELS[agent]]
+        .filter(Boolean)
+        .join(" · "),
+    );
+    const mark = createMark(agent);
     const identity = document.createElement("div");
     identity.className = "settings-pi-accounts__identity";
     const title = document.createElement("strong");
@@ -235,7 +268,15 @@ export function mountCredentialImports(
       card.replaceChildren(empty);
       return;
     }
-    card.replaceChildren(...records.map(renderRow), ...others.map(renderOtherRow));
+    const content: HTMLElement[] = records.map(renderRow);
+    if (others.length > 0) {
+      othersCount.textContent = String(others.length);
+      othersList.hidden = !othersExpanded;
+      othersToggle.setAttribute("aria-expanded", String(othersExpanded));
+      othersList.replaceChildren(...others.map(renderOtherRow));
+      content.push(othersToggle, othersList);
+    }
+    card.replaceChildren(...content);
   };
 
   const run = async (request: CredentialImportsRequest): Promise<boolean> => {

@@ -45,7 +45,7 @@ const { outputFiles } = await build({
             calls.imports.push(request);
             if (request.action === "import") imported.push({name:request.name,source:sources.find(s=>s.id===request.sourceId),importedAt:"2026-09-10T08:20:00Z"});
             if (request.action === "remove") imported = imported.filter(r=>r.name!==request.name);
-            return {sources,targets:[{harnessId:"pi",providers:["openai-codex","xai"],imports:imported,others:[{provider:"anthropic",type:"oauth"},{provider:"codex1",type:"oauth",label:"same@example.com"},{provider:"openai-codex",type:"api_key"}]}]};
+            return {sources,targets:[{harnessId:"pi",providers:["openai-codex","xai"],imports:imported,others:[{provider:"anthropic",type:"oauth"},{provider:"codex1",type:"oauth",label:"same@example.com",vendor:"openai-codex"},{provider:"openai-codex",type:"api_key"}]}]};
           },
           ...(scenario === "external" ? {listHarnessAccounts: async () => ({accounts:harnessAccounts})} : {}),
           listCodexAccounts: async () => accountSnapshot(),
@@ -162,12 +162,21 @@ test("confirms imports and lists the copy in a dedicated Pi section, including a
   const box = await mark.boundingBox();
   expect(box?.width ?? 99).toBeLessThanOrEqual(28);
   const pi = page.getByRole("region", { name: "Pi 中的账号" });
-  // Logins Pi already had are listed beside codexhost's own copies, read-only.
-  const others = pi.locator(".settings-pi-accounts__row--other");
+  // Logins Pi already had sit behind a disclosure that starts collapsed.
+  const group = pi.locator(".settings-pi-accounts__others");
+  const toggle = pi.getByRole("button", { name: /Pi 自有配置/ });
+  await expect(group).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(group).toBeVisible();
+  const others = group.locator(".settings-pi-accounts__row--other");
   await expect(others).toHaveCount(3);
   await expect(others.nth(0)).toContainText("anthropic");
   await expect(others.nth(1)).toContainText("same@example.com");
   await expect(others.nth(1)).toContainText("codex1");
+  // A recognized OAuth vendor carries the same mark the account table uses for that credential.
+  await expect(others.nth(1).locator('[data-agent="codex"]')).toHaveCount(1);
+  await expect(others.nth(0).locator(".settings-pi-accounts__other-mark")).toHaveCount(1);
   await expect(others.nth(2)).toContainText("API Key");
   await expect(others.getByRole("button")).toHaveCount(0);
   await mark.click();

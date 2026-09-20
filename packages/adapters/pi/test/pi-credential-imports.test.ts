@@ -196,6 +196,38 @@ describe("Pi credential imports", () => {
     expect(JSON.stringify(others)).not.toContain("existing");
     expect(others?.some((entry) => entry.provider === "codex")).toBe(false);
   });
+  it("names the OAuth vendor from the token issuer, whatever the Pi entry is called", async () => {
+    const { authPath, imports } = setup();
+    const token = (claims: object) =>
+      `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig-secret`;
+    const oauth = (claims: object) => ({
+      type: "oauth",
+      access: token(claims),
+      refresh: "r-secret",
+      expires: 1,
+    });
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        "my-codex": oauth({
+          iss: "https://auth.openai.com",
+          client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+          "https://api.openai.com/profile": { email: "me@example.com" },
+        }),
+        "my-grok": oauth({
+          iss: "https://auth.x.ai",
+          client_id: "b1a00492-073a-47ea-816f-4c329264a828",
+        }),
+        // Same issuer, a different app: not a credential kind codexhost claims to recognize.
+        other: oauth({ iss: "https://auth.openai.com", client_id: "app_other" }),
+      }),
+    );
+    expect(await imports.listOthers?.()).toEqual([
+      { provider: "my-codex", type: "oauth", label: "me@example.com", vendor: "openai-codex" },
+      { provider: "my-grok", type: "oauth", vendor: "xai" },
+      { provider: "other", type: "oauth" },
+    ]);
+  });
   it("derives an account label from a token email locally without returning the token", async () => {
     const { authPath, imports } = setup();
     const token = (claims: object) =>
@@ -264,6 +296,12 @@ describe("Pi credential imports", () => {
     });
     expect(readFileSync(modelsPath, "utf8")).toBe(models);
     expect(existsSync(path.join(home, "extensions/codexhost-account-codex"))).toBe(false);
+  });
+  it("is not an import target when Pi has no configuration directory", async () => {
+    const { home, imports } = setup();
+    rmSync(home, { recursive: true, force: true });
+    // The host drops a target whose listing throws, so the whole Pi surface disappears.
+    await expect(imports.list()).rejects.toThrow();
   });
   it("returns no other logins when Pi has no auth store or models file", async () => {
     const { authPath, imports } = setup();

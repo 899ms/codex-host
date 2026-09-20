@@ -10,7 +10,6 @@ import {
   type AccountUsageDisplay,
   type AccountUsageViewState,
 } from "./accounts-usage.js";
-import { createRendererSettingsIcon } from "./icons.js";
 import type { RendererSettingsMessages } from "./localization.js";
 
 let resetDetailsSequence = 0;
@@ -184,9 +183,10 @@ export function renderAccountRows(
   const personCell = document.createElement("td");
   personCell.className = "settings-account-person-cell";
   const mark = document.createElement("div");
-  mark.className = "settings-account-row__mark";
+  mark.className = "settings-harness-account__logo";
+  mark.dataset.agent = "codex";
   mark.setAttribute("aria-hidden", "true");
-  mark.append(createRendererSettingsIcon("terminal", 17));
+  mark.append(createRendererAgentIcon("codex", 26, document));
   personCell.append(
     createAccountPerson(document, messages, {
       name: name.full,
