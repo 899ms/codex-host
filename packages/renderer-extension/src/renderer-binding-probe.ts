@@ -561,6 +561,15 @@ export function shouldTransferComposerState(
 ): boolean {
   if (!sourceTarget || !replacementTarget) return false;
   if (sourceTarget === replacementTarget) return true;
+  // Target discovery creates fresh arrays, even for the same unsent draft.
+  if (
+    (sourceTarget[0] === "default" || sourceTarget[0] === "conversation") &&
+    typeof sourceTarget[1] === "string" &&
+    sourceTarget[1].length > 0 &&
+    sourceTarget.length === replacementTarget.length &&
+    sourceTarget.every((value, index) => value === replacementTarget[index])
+  )
+    return true;
   return (
     (sourcePhase === "locked" || submissionPending) &&
     sourceTarget[0] === "default" &&
