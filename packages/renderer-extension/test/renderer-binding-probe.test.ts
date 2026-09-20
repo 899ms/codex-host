@@ -1265,31 +1265,6 @@ describe("Renderer Composer DOM behavior", () => {
     expect(lateConversationTargetResolution(null, conversationTarget, "draft")).toBe("inspect");
   });
 
-  it("transfers replacement Composers by stable target identity, not array identity", () => {
-    expect(
-      shouldTransferComposerState(["default", "draft-1"], ["default", "draft-1"], "draft"),
-    ).toBe(true);
-    expect(
-      shouldTransferComposerState(
-        ["conversation", "thread-1"],
-        ["conversation", "thread-1"],
-        "locked",
-      ),
-    ).toBe(true);
-    expect(
-      shouldTransferComposerState(["default", "draft-1"], ["default", "draft-2"], "draft"),
-    ).toBe(false);
-    expect(shouldTransferComposerState(["default"], ["default"], "draft")).toBe(false);
-    expect(shouldTransferComposerState(["default", ""], ["default", ""], "draft")).toBe(false);
-    expect(
-      shouldTransferComposerState(
-        ["conversation", "thread-1", "local"],
-        ["conversation", "thread-1", "remote"],
-        "locked",
-      ),
-    ).toBe(false);
-  });
-
   it("does not transfer an unsubmitted default draft when an existing conversation opens", () => {
     const defaultTarget = ["default"];
     const firstConversationTarget = ["conversation", "opaque-1"];

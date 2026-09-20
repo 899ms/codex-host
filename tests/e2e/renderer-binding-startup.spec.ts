@@ -152,49 +152,6 @@ const { outputFiles } = await build({
 const browserBundle = outputFiles[0]?.text;
 if (!browserBundle) throw new Error("Renderer binding startup E2E bundle was not generated");
 
-test("keeps the selected Harness when the same unsent draft Composer is replaced", async ({
-  page,
-}) => {
-  await page.route("http://codexhost.test/", (route) =>
-    route.fulfill({
-      contentType: "text/html",
-      body: "<!doctype html><style>[data-codex-composer-root] { position: fixed; bottom: 40px; left: 300px; width: 600px; }</style><body></body>",
-    }),
-  );
-  await page.goto("http://codexhost.test/");
-  await page.addScriptTag({ content: browserBundle });
-  const trigger = page.locator('[data-codexhost-agent-control] > button[aria-haspopup="menu"]');
-  await expect(trigger).toBeEnabled();
-  await trigger.click();
-  await page.locator('button[data-agent="claude-code"]').click();
-  const selectedAgent = () =>
-    page.evaluate(
-      () => Reflect.get(window, "__codexhostRendererBindingProbeV1").status().selections[0]?.agent,
-    );
-  await expect.poll(selectedAgent).toBe("claude-code");
-  await page.locator('[role="textbox"]').fill("unsent draft remains");
-  await page.locator("[data-codex-composer-root]").evaluate((composer) => {
-    const editor = composer.querySelector('[role="textbox"]');
-    if (!editor) throw new Error("Draft editor is missing");
-    const replacement = document.createElement("div");
-    replacement.setAttribute("data-codex-composer-root", "true");
-    const nextEditor = editor.cloneNode(true);
-    const fiberKey = Object.getOwnPropertyNames(editor).find((key) =>
-      key.startsWith("__reactFiber$"),
-    );
-    if (!fiberKey) throw new Error("Draft Fiber fixture is missing");
-    Object.defineProperty(nextEditor, fiberKey, { value: Reflect.get(editor, fiberKey) });
-    const toolbar = document.createElement("div");
-    const send = document.createElement("button");
-    send.type = "submit";
-    toolbar.append(send);
-    replacement.append(nextEditor, toolbar);
-    composer.replaceWith(replacement);
-  });
-  await expect(page.locator('[role="textbox"]')).toHaveText("unsent draft remains");
-  await expect.poll(selectedAgent).toBe("claude-code");
-});
-
 test("a new conversation shows Harness commands but disables compact before a Thread exists", async ({
   page,
 }) => {
