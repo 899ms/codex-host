@@ -1,3 +1,8 @@
+import {
+  credentialImportEnglish,
+  credentialImportChinese,
+  type CredentialImportMessages,
+} from "./credential-import-messages.js";
 import type { DefaultRendererSettingsPageId } from "./pages.js";
 
 export const RENDERER_SETTINGS_LOCALES = ["en", "zh-CN"] as const;
@@ -18,6 +23,7 @@ export interface RendererSettingsLanguageControl {
 }
 
 export interface RendererSettingsMessages {
+  readonly credentialImports: CredentialImportMessages;
   readonly locale: RendererSettingsLocale;
   readonly title: string;
   readonly close: string;
@@ -101,13 +107,10 @@ export interface RendererSettingsMessages {
   readonly accountColumnAccount: string;
   readonly accountConnected: string;
   readonly accountDefaultBadge: string;
-  readonly accountColumnActions: string;
   readonly accountSearch: string;
   readonly accountEmpty: string;
   readonly accountNoMatches: string;
-  readonly accountNativeManaged: string;
   readonly accountNativeManagementHint: string;
-  readonly accountDetailsClose: string;
   readonly accountDefaultHint: string;
   readonly accountCreditsRemaining: string;
   readonly accountCreditsLoading: string;
@@ -238,6 +241,7 @@ export interface RendererSettingsMessages {
 }
 
 const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
+  credentialImports: credentialImportEnglish,
   locale: "en",
   title: "Settings",
   close: "Close settings",
@@ -339,15 +343,12 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   accountConnected: "Accounts",
   accountDefaultBadge: "Current",
   accountColumnAccount: "Account",
-  accountColumnActions: "Manage",
   accountSearch: "Search accounts or Agents…",
   accountEmpty:
     "No current identities found. Sign in through Codex Desktop or your Harness's native client.",
   accountNoMatches: "No matching accounts.",
-  accountNativeManaged: "Native management",
   accountNativeManagementHint:
     "This account comes from {harness}'s native authentication. This page only displays identity and limits; manage sign-in, sign-out and switching in the native client.",
-  accountDetailsClose: "Close account details",
   accountDefaultHint: "This is the current identity for all Codex Threads.",
   accountCreditsRemaining: "Remaining",
   accountCreditsLoading: "Loading limits…",
@@ -499,6 +500,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
 });
 
 const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
+  credentialImports: credentialImportChinese,
   locale: "zh-CN",
   title: "设置",
   close: "关闭设置",
@@ -595,14 +597,11 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   accountConnected: "账号",
   accountDefaultBadge: "当前",
   accountColumnAccount: "账号",
-  accountColumnActions: "管理",
   accountSearch: "搜索账号或 Agent…",
   accountEmpty: "尚未识别到当前身份，请在 Codex Desktop 或对应 Harness 的原生客户端登录。",
   accountNoMatches: "没有匹配的账号。",
-  accountNativeManaged: "原生管理",
   accountNativeManagementHint:
     "此账号来自 {harness} 的原生登录。这里只读展示身份与额度；登录、退出和切换请在其原生客户端中完成。",
-  accountDetailsClose: "关闭账号详情",
   accountDefaultHint: "所有 Codex 会话当前使用此身份。",
   accountCreditsRemaining: "剩余",
   accountCreditsLoading: "正在读取额度…",

@@ -2,6 +2,7 @@ import {
   harnessIdSchema,
   hostThreadIdSchema,
   type CodexAccountListResult,
+  type CredentialImportsRequest,
   type HarnessAccountInspectResult,
   type HarnessAccountListResult,
   type HarnessAccountSourceListResult,
@@ -18,6 +19,11 @@ vi.mock("../../src/settings/icons.js", () => ({
 }));
 
 import { RendererSettingsPageScope } from "../../src/settings/core.js";
+import {
+  defaultImportName,
+  mountCredentialImports,
+} from "../../src/settings/credential-imports.js";
+import { credentialImportChinese } from "../../src/settings/credential-import-messages.js";
 import { createHarnessAccounts } from "../../src/settings/harness-accounts.js";
 import { rendererSettingsMessages } from "../../src/settings/localization.js";
 import { createRendererModelClient } from "../../src/renderer-model-client.js";
@@ -51,6 +57,32 @@ class FakeElement {
   tabIndex = 0;
   disabled = false;
   focused = false;
+  open = false;
+  parent: FakeElement | undefined;
+  get isConnected(): boolean {
+    return Boolean(this.parent);
+  }
+  showModal(): void {
+    this.open = true;
+  }
+  close(): void {
+    this.open = false;
+    this.dispatch("close");
+  }
+  remove(): void {
+    if (this.parent) {
+      const index = this.parent.children.indexOf(this);
+      if (index >= 0) this.parent.children.splice(index, 1);
+    }
+    this.parent = undefined;
+  }
+  querySelector(selector: string): FakeElement | null {
+    return (
+      descendants(this).find(
+        (element) => selector === "[role=alert]" && element.getAttribute("role") === "alert",
+      ) ?? null
+    );
+  }
   scrollLeft = 0;
   scrollWidth = 0;
   clientWidth = 0;
@@ -69,6 +101,7 @@ class FakeElement {
   }
 
   append(...children: unknown[]): void {
+    for (const child of children) if (child instanceof FakeElement) child.parent = this;
     this.children.push(...children);
   }
 
@@ -214,6 +247,245 @@ function visibleText(root: FakeElement): string {
     .filter(Boolean)
     .join(" ");
 }
+
+describe("Credential import controls", () => {
+  const source = {
+    id: "source-a",
+    harnessId: "codex",
+    label: "a@example.com",
+    provider: "openai-codex" as const,
+  };
+  const wait = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const buttonNamed = (root: FakeElement, text: string): FakeElement => {
+    const button = descendants(root).find(
+      (element) => element.tagName === "button" && element.textContent === text,
+    );
+    if (!button) throw new Error(`Expected button ${text}`);
+    return button;
+  };
+  const mount = (
+    imports: () => unknown[],
+    sources: unknown[] = [source],
+    others: unknown[] = [],
+  ) => {
+    const doc = new FakeDocument();
+    const root = new FakeElement("div", doc);
+    const scope = new AbortController();
+    const credentialImports = vi.fn(async (request: CredentialImportsRequest) => {
+      if (request.action === "import") {
+        imports().push({
+          name: request.name,
+          source,
+          importedAt: "2026-01-01T00:00:00Z",
+        });
+      }
+      if (request.action === "remove") {
+        imports().splice(
+          imports().findIndex((record) => (record as { name: string }).name === request.name),
+          1,
+        );
+      }
+      return {
+        sources,
+        targets: [
+          { harnessId: "pi", providers: ["openai-codex" as const], imports: imports(), others },
+        ],
+      };
+    });
+    const controls = mountCredentialImports(
+      root as unknown as HTMLElement,
+      scope.signal,
+      () => ({ credentialImports }) as never,
+      credentialImportChinese,
+      () => {},
+    );
+    return { root, scope, credentialImports, controls };
+  };
+
+  it("renders no target for an incompatible or unknown login", async () => {
+    const { controls, scope } = mount(() => []);
+    expect(controls.button("codex", source.label)).toBeNull();
+    await controls.refresh();
+    expect(controls.button("claude-code", "person@example.com")).toBeNull();
+    expect(controls.button("codex", source.label)).not.toBeNull();
+    scope.abort();
+  });
+
+  it("requires confirmation, then lists the copy in the Pi section and removes it", async () => {
+    const imports: unknown[] = [];
+    const { root, scope, credentialImports, controls } = mount(() => imports);
+    const section = controls.section as unknown as FakeElement;
+    expect(section.hidden).toBe(true);
+    await controls.refresh();
+    expect(section.hidden).toBe(false);
+    expect(visibleText(section)).toContain(credentialImportChinese.sectionEmpty);
+    const first = controls.button("codex", source.label) as unknown as FakeElement;
+    expect(first.title).toBe(credentialImportChinese.add);
+    expect(first.dataset.state).toBeUndefined();
+    first.dispatch("click");
+    expect(credentialImports).toHaveBeenCalledTimes(1);
+    expect(visibleText(root)).toContain("保留全部已有 Provider 配置");
+    buttonNamed(root, credentialImportChinese.confirm).dispatch("click");
+    await wait();
+    expect(credentialImports).toHaveBeenLastCalledWith(
+      { action: "import", sourceId: source.id, name: "codex", confirmed: true },
+      "pi",
+    );
+    expect(visibleText(root)).toContain(credentialImportChinese.doneTitle);
+    expect(visibleText(root)).toContain("无需重启");
+    buttonNamed(root, credentialImportChinese.close).dispatch("click");
+
+    const imported = controls.button("codex", source.label) as unknown as FakeElement;
+    expect(imported.dataset.state).toBe("imported");
+    expect(imported.title).toContain("已复制");
+    expect(visibleText(section)).toContain(source.label);
+    expect(visibleText(section)).toContain("codex/…");
+    expect(visibleText(section)).toContain(credentialImportChinese.copied);
+    // The icon of an existing copy moves focus to its row instead of opening another dialog.
+    imported.dispatch("click");
+    expect(descendants(root).filter((element) => element.tagName === "dialog")).toHaveLength(0);
+
+    buttonNamed(section, credentialImportChinese.rowRemove).dispatch("click");
+    expect(credentialImports).toHaveBeenCalledTimes(2);
+    expect(visibleText(root)).toContain("不影响来源登录");
+    const dialog = descendants(root).find((element) => element.tagName === "dialog");
+    if (!dialog) throw new Error("Expected remove dialog");
+    buttonNamed(dialog, credentialImportChinese.remove).dispatch("click");
+    await wait();
+    expect(credentialImports).toHaveBeenLastCalledWith(
+      { action: "remove", name: "codex", confirmed: true },
+      "pi",
+    );
+    expect(visibleText(section)).toContain(credentialImportChinese.sectionEmpty);
+    expect((controls.button("codex", source.label) as unknown as FakeElement).dataset.state).toBe(
+      undefined,
+    );
+    scope.abort();
+  });
+
+  it("lists every login in Pi in one list, with actions only on codexhost's own copies", async () => {
+    const ours = {
+      name: "codex",
+      source,
+      importedAt: "2026-01-01T00:00:00Z",
+    };
+    const { controls, scope } = mount(
+      () => [ours],
+      [source],
+      [
+        { provider: "anthropic", type: "oauth" },
+        { provider: "codex1", type: "oauth", label: "me@example.com" },
+        { provider: "openai-codex", type: "api_key" },
+      ],
+    );
+    const section = controls.section as unknown as FakeElement;
+    await controls.refresh();
+    const text = visibleText(section);
+    // 1 codexhost copy + 3 logins Pi already had.
+    expect(text).toContain("4");
+    expect(text).toContain(source.label);
+    expect(text).toContain("me@example.com");
+    expect(text).toContain("codex1");
+    expect(text).toContain("anthropic");
+    expect(text).toContain("openai-codex");
+    expect(text).toContain("API Key");
+    const others = descendants(section).filter((element) =>
+      element.className.split(" ").includes("settings-pi-accounts__row--other"),
+    );
+    expect(others).toHaveLength(3);
+    for (const row of others) {
+      expect(descendants(row).some((element) => element.tagName === "button")).toBe(false);
+    }
+    expect(buttonNamed(section, credentialImportChinese.rowRemove).disabled).toBe(false);
+    scope.abort();
+  });
+
+  it("shows the empty guidance only when Pi has no logins at all", async () => {
+    const { controls, scope } = mount(() => []);
+    await controls.refresh();
+    expect(visibleText(controls.section as unknown as FakeElement)).toContain(
+      credentialImportChinese.sectionEmpty,
+    );
+    scope.abort();
+  });
+
+  it("keeps a copy of a non-current login listed without warnings or a re-copy button", async () => {
+    const other = {
+      name: "codex",
+      source: { ...source, id: "gone", label: "old@example.com" },
+      importedAt: "2026-01-01T00:00:00Z",
+    };
+    const { controls, scope } = mount(() => [other]);
+    const section = controls.section as unknown as FakeElement;
+    await controls.refresh();
+    expect(visibleText(section)).toContain("old@example.com");
+    expect(visibleText(section)).not.toContain("退出");
+    expect(
+      descendants(section).some(
+        (element) =>
+          element.tagName === "button" &&
+          element.textContent === credentialImportChinese.rowReimport,
+      ),
+    ).toBe(false);
+    expect(buttonNamed(section, credentialImportChinese.rowRemove).disabled).toBe(false);
+    scope.abort();
+  });
+
+  it("adds a second account beside the first under an account-specific default name", async () => {
+    const first = {
+      name: "codex",
+      source: { ...source, id: "gone", label: "old@example.com" },
+      importedAt: "2026-01-01T00:00:00Z",
+    };
+    const imports: unknown[] = [first];
+    const { root, scope, credentialImports, controls } = mount(() => imports);
+    await controls.refresh();
+    (controls.button("codex", source.label) as unknown as FakeElement).dispatch("click");
+    const input = descendants(root).find((element) => element.tagName === "input");
+    expect(input?.value).toBe("codex-a");
+    buttonNamed(root, credentialImportChinese.confirm).dispatch("click");
+    await wait();
+    expect(credentialImports).toHaveBeenLastCalledWith(
+      { action: "import", sourceId: source.id, name: "codex-a", confirmed: true },
+      "pi",
+    );
+    const section = controls.section as unknown as FakeElement;
+    expect(visibleText(section)).toContain("old@example.com");
+    expect(visibleText(section)).toContain("a@example.com");
+    scope.abort();
+  });
+});
+
+describe("Default import entry names", () => {
+  const record = (name: string) => ({
+    name,
+    source: { id: name, harnessId: "codex", label: "x", provider: "openai-codex" as const },
+    importedAt: "2026-01-01T00:00:00Z",
+  });
+  const codex = (label: string) => ({
+    id: "s",
+    harnessId: "codex",
+    label,
+    provider: "openai-codex" as const,
+  });
+  it("uses the plain name first, then the account, then a number", () => {
+    expect(defaultImportName(codex("a@x.com"), [])).toBe("codex");
+    expect(defaultImportName(codex("Ann.Lee+work@x.com"), [record("codex")])).toBe(
+      "codex-ann-lee-work",
+    );
+    expect(defaultImportName(codex("a@x.com"), [record("codex"), record("codex-a")])).toBe(
+      "codex2",
+    );
+    expect(defaultImportName(codex("Codex"), [record("codex")])).toBe("codex2");
+    expect(defaultImportName(codex("___@x.com"), [record("codex")])).toBe("codex2");
+    expect(
+      defaultImportName({ ...codex("9s74@relay.com"), provider: "xai" }, [record("grok")]),
+    ).toBe("grok-9s74");
+    expect(
+      defaultImportName(codex(`${"a".repeat(80)}@x.com`), [record("codex")]).length,
+    ).toBeLessThanOrEqual(48);
+  });
+});
 
 describe("Read-only Harness accounts", () => {
   const result: HarnessAccountListResult = {
@@ -821,7 +1093,11 @@ describe("Renderer Codex Accounts page", () => {
     );
     expect(visibleText(content)).toContain("work@example.com");
     expect(visibleText(content)).toContain("2 张");
-    expect(visibleText(content)).not.toContain("登录");
+    expect(
+      descendants(content)
+        .filter((element) => element.tagName === "button")
+        .map((element) => element.textContent),
+    ).not.toContain("登录");
     expect(visibleText(content)).not.toContain("添加 Codex 账号");
     expect(descendants(content).some(({ textContent }) => textContent === "使用重置")).toBe(false);
     scope.dispose();

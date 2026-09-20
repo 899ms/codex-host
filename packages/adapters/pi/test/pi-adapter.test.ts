@@ -370,6 +370,24 @@ async function nextInteraction(
   return output.interaction;
 }
 
+describe("Pi adapter credential imports wiring", () => {
+  it("exposes the read-only other-logins listing through the adapter, not just the inner module", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pi-adapter-others-"));
+    try {
+      await writeFile(
+        path.join(directory, "auth.json"),
+        JSON.stringify({ anthropic: { type: "oauth", access: "a-secret" } }),
+      );
+      const adapter = new PiAdapter({ environment: { PI_CODING_AGENT_DIR: directory } });
+      expect(await adapter.credentialImports.listOthers?.()).toEqual([
+        { provider: "anthropic", type: "oauth" },
+      ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Pi HarnessAdapter Session", () => {
   it("maps synchronous workflow partial results and reads the final child through the live parent", async () => {
     const { adapter, transports } = fixture();

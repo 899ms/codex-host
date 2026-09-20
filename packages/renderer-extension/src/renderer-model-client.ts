@@ -97,6 +97,14 @@ import {
 
 export const HARNESS_INSPECT_METHOD = "codexhost/harness/inspect";
 export const HARNESS_PLUGIN_LIST_METHOD = "codexhost/harness/plugins/list";
+import {
+  CREDENTIAL_IMPORTS_METHOD,
+  credentialImportsParamsSchema,
+  credentialImportsResultSchema,
+  type CredentialImportsRequest,
+  type CredentialImportsResult,
+} from "@codexhost/shared-contracts";
+
 export const HARNESS_ACCOUNT_SOURCES_METHOD = "codexhost/harness/accounts/sources";
 export const HARNESS_ACCOUNT_INSPECT_METHOD = "codexhost/harness/accounts/inspect";
 export const HARNESS_WEB_UI_OPEN_METHOD = "codexhost/harness/web-ui/open";
@@ -193,6 +201,10 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   listHarnessAccountSources?(): Promise<HarnessAccountSourceListResult>;
   inspectHarnessAccount?(input: HarnessAccountInspectParams): Promise<HarnessAccountInspectResult>;
   listHarnessAccounts?(input?: HarnessAccountListParams): Promise<HarnessAccountListResult>;
+  credentialImports?(
+    request: CredentialImportsRequest,
+    targetHarnessId?: string,
+  ): Promise<CredentialImportsResult>;
   listCodexAccounts(): Promise<CodexAccountListResult>;
   refreshCodexAccounts(): Promise<CodexAccountListResult>;
   subscribeCodexAccounts?(listener: (state: CodexAccountChanged) => void): () => void;
@@ -490,6 +502,17 @@ export function createRendererModelClient(
         await manager.sendRequest(
           HARNESS_ACCOUNT_INSPECT_METHOD,
           harnessAccountInspectParamsSchema.parse(input),
+        ),
+      );
+    },
+    async credentialImports(
+      request: CredentialImportsRequest,
+      targetHarnessId?: string,
+    ): Promise<CredentialImportsResult> {
+      return credentialImportsResultSchema.parse(
+        await manager.sendRequest(
+          CREDENTIAL_IMPORTS_METHOD,
+          credentialImportsParamsSchema.parse({ request, targetHarnessId }),
         ),
       );
     },

@@ -1165,6 +1165,14 @@ export function installCurrentRendererAdapter(): {
       if (!client.listHarnessAccounts) throw new Error("Harness account inspection is unavailable");
       return client.listHarnessAccounts(input);
     },
+    credentialImports: (
+      request: Parameters<NonNullable<RendererModelClient["credentialImports"]>>[0],
+      targetHarnessId?: string,
+    ) => {
+      const client = currentModelClient();
+      if (!client.credentialImports) throw new Error("Credential imports are unavailable");
+      return client.credentialImports(request, targetHarnessId);
+    },
     listCodexAccounts: () => currentModelClient().listCodexAccounts(),
     refreshCodexAccounts: () => {
       const client = currentModelClient();

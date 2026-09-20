@@ -1,3 +1,4 @@
+import { createPiCredentialImports } from "./pi-credential-imports.js";
 import { persistEmptyPiSession, readPiEmptySessionConfiguration } from "./pi-empty-session.js";
 import { createTwoFilesPatch, parsePatch } from "diff";
 import { randomUUID } from "node:crypto";
@@ -7,6 +8,7 @@ import {
   HarnessOutputChannel,
   validateHostQuestionResponse,
   type HarnessAdapter,
+  type HarnessCredentialImports,
   type HarnessCommandAccepted,
   type HarnessCommandCapability,
   type HarnessCommandInvocation,
@@ -1930,6 +1932,7 @@ class PiHarnessSession implements HarnessSession {
 }
 
 export class PiAdapter implements HarnessAdapter {
+  readonly credentialImports: HarnessCredentialImports;
   readonly commandCatalog = piCommandCatalog;
   readonly harnessId: HarnessId = piHarnessId;
   readonly subagents: HarnessSubagentCapability = {
@@ -2045,6 +2048,19 @@ export class PiAdapter implements HarnessAdapter {
       createTransport: (sessionOptions) => new PiRpcSession({ ...options, ...sessionOptions }),
     },
   ) {
+    const imports = createPiCredentialImports(options);
+    const updateCatalog = async (operation: Promise<void>): Promise<void> => {
+      await operation;
+      this.#inspectionCache.clear();
+    };
+    this.credentialImports = {
+      providers: imports.providers,
+      list: () => imports.list(),
+      listOthers: () => imports.listOthers?.() ?? Promise.resolve([]),
+      add: (name, credential) => updateCatalog(imports.add(name, credential)),
+      reimport: (name, credential) => updateCatalog(imports.reimport(name, credential)),
+      remove: (name) => updateCatalog(imports.remove(name)),
+    };
     this.#createTransport = dependencies.createTransport;
     this.#importIndex = new PiSessionImportIndex({ ...process.env, ...options.environment });
     this.#closeTimeoutMs = options.closeTimeoutMs ?? 2_000;
