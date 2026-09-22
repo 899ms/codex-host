@@ -7,6 +7,7 @@ import {
   isRendererModelPickerDisabled,
   type RendererModelControlView,
 } from "../src/renderer-model-picker.js";
+import type { RendererRequestOptions } from "../src/renderer-request-sender.js";
 import type { installRendererSidebarAgentIcons } from "../src/renderer-sidebar-agent-icons.js";
 import type { RendererConnectionDiagnostics } from "../src/settings/connections-page.js";
 import type { RendererSessionImportClient } from "../src/settings/session-import-page.js";
@@ -228,6 +229,101 @@ afterEach(() => {
 });
 
 describe("Renderer binding Host-scoped Claude catalogs", () => {
+  it.each([
+    { pendingHarness: "pi", modelFirst: true },
+    { pendingHarness: "claude-code", modelFirst: true },
+    { pendingHarness: "claude-code", modelFirst: false },
+  ] as const)(
+    "loads the current remote Model while $pendingHarness is queued (Model completes first: $modelFirst)",
+    async ({ pendingHarness, modelFirst }) => {
+      installFakeBrowser();
+      const pending = Promise.withResolvers<ReturnType<typeof readyInspection>>();
+      const catalog = Promise.withResolvers<ReturnType<typeof readyInspection>>();
+      if (modelFirst) catalog.resolve(readyInspection());
+      const local = {
+        inspectHarness: vi.fn(async () => readyInspection()),
+      };
+      const remote = {
+        inspectHarness: vi.fn(
+          async (input: { harnessId: string }, options?: RendererRequestOptions) => {
+            if (!options) return catalog.promise;
+            return input.harnessId === pendingHarness ? pending.promise : readyInspection();
+          },
+        ),
+        inspectThread: vi.fn(async () => ({
+          owner: "external" as const,
+          harnessId: "claude-code",
+          transportModelId:
+            "codexhost/claude-code-native@claude-model-v1.b3B1cw@bypassPermissions@auto",
+          effectiveModel: harnessModelRefSchema.parse({ id: "claude-model-v1.b3B1cw" }),
+          history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
+          locked: true,
+        })),
+        inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+        inspectThreadUsage: vi.fn(async () => ({ threadId: "thread-a", usage: null })),
+      };
+      const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+      const probe = installRendererBindingProbe({
+        enabledAgents: ["codex", "pi", "claude-code"],
+        defaultAgent: "codex",
+      });
+      try {
+        probe.setAdapter(
+          { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+          undefined,
+          undefined,
+          {
+            ...remote,
+            currentHostId: () => "remote-host",
+            clientForHost: (hostId: string) => (hostId === "local" ? local : remote),
+            subscribeThreadUsage: () => () => undefined,
+          } as never,
+        );
+        await vi.waitFor(() => {
+          expect(probe.lockedSelection()?.agent).toBe("claude-code");
+          expect(remote.inspectHarness).toHaveBeenCalledWith({ harnessId: "claude-code" });
+          expect(testState.renderedModelViews.at(-1)).toMatchObject({
+            status: modelFirst ? "ready" : "loading",
+          });
+        });
+        expect(remote.inspectHarness).toHaveBeenCalledWith(
+          { harnessId: "pi", refresh: false },
+          { priority: "background" },
+        );
+        expect(remote.inspectHarness).toHaveBeenCalledWith(
+          { harnessId: "claude-code", refresh: false },
+          { priority: "background" },
+        );
+        expect(local.inspectHarness).toHaveBeenCalledWith(
+          { harnessId: "pi", refresh: false },
+          { priority: "background" },
+        );
+        expect(remote.inspectThread).toHaveBeenCalledWith({ threadId: "thread-a" });
+        expect(probe.status().availability[pendingHarness]).toBe("checking");
+        const foregroundCalls = () =>
+          remote.inspectHarness.mock.calls.filter(([, options]) => options === undefined).length;
+        expect(foregroundCalls()).toBe(1);
+        const renderedBeforeDiscovery = testState.renderedModelViews.length;
+        pending.resolve(readyInspection());
+        await vi.waitFor(() => expect(probe.status().availability[pendingHarness]).toBe("ready"));
+        expect(foregroundCalls()).toBe(1);
+        if (modelFirst) {
+          expect(testState.renderedModelViews.slice(renderedBeforeDiscovery)).not.toContainEqual(
+            expect.objectContaining({ status: "loading" }),
+          );
+        }
+        catalog.resolve(readyInspection());
+        await vi.waitFor(() =>
+          expect(testState.renderedModelViews.at(-1)).toMatchObject({ status: "ready" }),
+        );
+      } finally {
+        probe.dispose();
+        pending.resolve(readyInspection());
+        catalog.resolve(readyInspection());
+      }
+    },
+  );
+
   it("waits for Host ownership rather than probing local when the route is unknown", async () => {
     installFakeBrowser();
     const inspectHarness = vi.fn(async () => {
@@ -747,12 +843,8 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
   it("loads an external catalog for a draft mounted before the Adapter", async () => {
     installFakeBrowser();
     testState.modelTarget = ["default"];
-    let claudeInspections = 0;
     const hostA = {
-      inspectHarness: vi.fn(async () => {
-        claudeInspections += 1;
-        return readyInspection();
-      }),
+      inspectHarness: vi.fn(async () => readyInspection()),
     };
     const modelControl = {
       currentHostId: () => "host-a",
@@ -771,12 +863,14 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     probe.setAdapter(
       { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
       undefined,
-      undefined,
+      () => true,
       modelControl as never,
     );
 
-    await vi.waitFor(() => expect(claudeInspections).toBeGreaterThanOrEqual(2));
-    expect(testState.renderedModelViews.at(-1)).not.toMatchObject({ status: "error" });
+    await vi.waitFor(() =>
+      expect(testState.renderedModelViews.at(-1)).toMatchObject({ status: "ready" }),
+    );
+    expect(hostA.inspectHarness).toHaveBeenCalledWith({ harnessId: "claude-code" });
   });
 
   it("reloads a ready draft catalog when the Composer changes Hosts", async () => {

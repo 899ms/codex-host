@@ -350,6 +350,15 @@ describe("Renderer Composer DOM behavior", () => {
   });
 
   it("keeps a ready external Model catalog stable during repeated availability checks", () => {
+    expect(shouldReloadExternalCatalogAfterAvailabilityRefresh("checking", "ready", true)).toBe(
+      false,
+    );
+    expect(shouldReloadExternalCatalogAfterAvailabilityRefresh("checking", "ready", false)).toBe(
+      true,
+    );
+    expect(
+      shouldReloadExternalCatalogAfterAvailabilityRefresh("checking", "ready", true, true),
+    ).toBe(true);
     expect(shouldReloadExternalCatalogAfterAvailabilityRefresh("ready", "ready", true)).toBe(false);
     expect(shouldReloadExternalCatalogAfterAvailabilityRefresh("ready", "ready", false)).toBe(true);
     expect(shouldReloadExternalCatalogAfterAvailabilityRefresh("error", "ready", true)).toBe(true);

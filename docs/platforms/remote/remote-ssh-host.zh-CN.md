@@ -85,6 +85,8 @@ Renderer 按明确的 Host ID 从 Desktop 原生 Host registry 取得当前请�
 
 本地和远程连接各自持有请求客户端及提交策略。切换 Composer 不会销毁另一端策略，也不会把本地选择的 Harness carrier 复制到远程原生 Codex。每次请求和切换读取当前原生连接，不必等待 Controller 下一次轮询；Controller 的周期协调用于安装与恢复，而不是决定 Host 路由。连接替换仅使该 Host 的旧客户端失效，已发送请求不重放，旧客户端不得发起新请求。同一 Host 重连后，由当前 Composer 恢复已确认的草稿选择；跨 Host 切换则重新读取目标 Host 的 Model 和 Permission Mode 目录，不沿用另一端的目录。设置覆盖层临时移除所有 Composer 时可以继续查询已发现的原生 registry；查询仍读取 registry 的当前条目，不复活断线连接。多个 Composer 的 Host 身份冲突时，无目标的活动路由仍拒绝猜测，但明确指定 Host 的查询不受影响。
 
+Harness 全量可用性检查（包括重试和重新诊断）使用 Desktop 原生 `background` 请求优先级；当前 Thread 的归属识别和当前 Harness 的配置目录查询保留默认交互优先级，避免批量检测占满交互请求额度。当前 Harness 仍在后台检查时，Model 目录直接以交互优先级查询，不先等待该检查完成；后台随后确认 ready，也不会重复启动同一连接上仍有效的前台目录查询，或让已就绪的 Model 再次进入加载状态。明确重新诊断仍会重新加载目录。检查结果仍逐项更新，不等待整批完成。调度元数据通过同一 Host 的原生请求客户端传递，不写入 Host RPC 参数；并发限制由 Desktop 负责，不创建额外 SSH 连接，也不占用原生 Thread/Turn 操作的 `critical` 优先级。
+
 当前 Codex 身份和额度按 Host 隔离；本地账号不会出现在远程输入框中。切换 Host 或更换连接客户端后，旧请求的结果不能覆盖当前输入框。SSH 使用远端原生单账号认证，不转发本地凭据。Composer 只有一个 Codex 入口，没有 per-draft 账号选择。
 
 原生 Codex 端点明确返回“不支持 `codexhost/thread/inspect`”时，会通过同一 Host 连接的原生 `thread/read` 核对 Thread ID、CLI 版本和 Provider 元数据，排除 codexhost 的外部 Thread 标记；验证成功后保留普通 Codex 和远程原生认证，不创建账号绑定。超时、断线、无效响应或无法确认归属时，Agent 控件显示 `!` 和错误说明，而不是持续显示加载动画；重新聚焦窗口会重试。归属尚未确认时仍阻止提交，不把外部 Harness 或连接故障静默改判为 Codex。

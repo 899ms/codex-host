@@ -220,7 +220,10 @@ export function shouldReloadExternalCatalogAfterAvailabilityRefresh(
   configurationReady: boolean,
   explicitRefresh = false,
 ): boolean {
-  return explicitRefresh || previous !== next || !configurationReady;
+  // A foreground inspection may already have loaded this catalog while the
+  // initial background discovery was queued. Do not blank it a second time.
+  const initialDiscoveryReady = previous === "checking" && next === "ready";
+  return explicitRefresh || (!initialDiscoveryReady && previous !== next) || !configurationReady;
 }
 
 function isExternalConfigurationReadyView(
@@ -546,6 +549,13 @@ interface MountedComposer {
   commandRequestGeneration: number;
 }
 
+interface MountedCatalogRequest {
+  client: RendererModelClient;
+  hostId: string;
+  agent: ExternalRendererAgent;
+  generation: number;
+}
+
 interface PendingComposerReplacement {
   source: MountedComposer;
   sourceModelTarget: readonly unknown[] | null;
@@ -669,6 +679,7 @@ export function installRendererBindingProbe(
     ...(options.defaultAgent ? { defaultAgent: options.defaultAgent } : {}),
   });
   const mountedByComposer = new Map<Element, MountedComposer>();
+  const catalogRequests = new WeakMap<MountedComposer, MountedCatalogRequest>();
   const pendingReplacements = new Map<Element, PendingComposerReplacement>();
   let disposed = false;
   const disposeReasoningSoftWrap = installReasoningTranscriptSoftWrap(document);
@@ -1259,20 +1270,16 @@ export function installRendererBindingProbe(
     }
     if (isDraft) mounted.hostId = requestHostId;
     const availability = hostHarnessAvailabilityState(requestHostId).availability[agent];
-    if (availability !== "ready") {
+    // The selected Harness inspection already validates availability. Waiting
+    // for its background discovery first would defeat interactive scheduling.
+    if (availability !== "ready" && availability !== "checking") {
       mounted.modelView = {
-        status:
-          adapterStatus.state !== "ready" || availability === "checking"
-            ? "waitingForAdapter"
-            : "error",
+        status: adapterStatus.state === "ready" ? "error" : "waitingForAdapter",
         thinkingSelectionSupported: false,
-        ...(availability && availability !== "checking"
-          ? { error: `${agent} runtime is ${availability}` }
-          : {}),
+        ...(availability ? { error: `${agent} runtime is ${availability}` } : {}),
       };
       mounted.permissionModeView = { status: "idle" };
       renderMounted(mounted);
-      if (availability === "checking") void refreshHarnessAvailability();
       return;
     }
     mounted.modelView = {
@@ -1283,6 +1290,7 @@ export function installRendererBindingProbe(
     renderMounted(mounted);
     if (adapterStatus.state !== "ready") return;
     const generation = controller.beginModelRequest(mounted.composer);
+    let catalogRequest: MountedCatalogRequest | undefined;
     try {
       if (!requestModelControl || !requestHostId) {
         throw new Error("External configuration control is unavailable");
@@ -1291,6 +1299,8 @@ export function installRendererBindingProbe(
       if (!client) {
         throw new Error(`Renderer Model request manager is unavailable for Host ${requestHostId}`);
       }
+      catalogRequest = { client, hostId: requestHostId, agent, generation };
+      catalogRequests.set(mounted, catalogRequest);
       const inspection = await client.inspectHarness({
         harnessId: externalHarnessIds[agent],
       });
@@ -1505,6 +1515,9 @@ export function installRendererBindingProbe(
         };
       }
     } finally {
+      if (catalogRequest && catalogRequests.get(mounted) === catalogRequest) {
+        catalogRequests.delete(mounted);
+      }
       if (isCurrentModelRequest(mounted, generation)) renderMounted(mounted);
     }
   };
@@ -2100,10 +2113,12 @@ export function installRendererBindingProbe(
           let nextError: CodexhostError | undefined;
           let webUiAvailable = false;
           try {
-            const inspection = await client.inspectHarness({
-              harnessId: externalHarnessIds[agent],
-              refresh,
-            });
+            // Bulk discovery must not occupy the native interactive slots needed
+            // to identify the visible Thread and load its selected configuration.
+            const inspection = await client.inspectHarness(
+              { harnessId: externalHarnessIds[agent], refresh },
+              { priority: "background" },
+            );
             status = inspection.status === "ready" ? "ready" : inspection.status;
             webUiAvailable =
               hostId === "local" &&
@@ -2153,8 +2168,15 @@ export function installRendererBindingProbe(
           }
           for (const mounted of mountedByComposer.values()) {
             const composerState = controller.get(mounted.composer);
+            const pendingCatalog = catalogRequests.get(mounted);
+            const loadingCurrentCatalog =
+              pendingCatalog?.client === client &&
+              pendingCatalog.hostId === hostId &&
+              pendingCatalog.agent === agent &&
+              isCurrentModelRequest(mounted, pendingCatalog.generation);
             if (
               composerState.agent === agent &&
+              (status !== "ready" || !loadingCurrentCatalog || (refresh && force)) &&
               shouldReloadExternalCatalogAfterAvailabilityRefresh(
                 previousStatus,
                 status,
