@@ -25,19 +25,19 @@ codexhost remote status
 如果 `codex` 已经指向 OpenCodex 或其他包装器，请显式传入真正的官方 Codex 可执行文件：
 
 ```bash
-codexhost remote install \
-  --stock-codex /absolute/path/to/official/codex \
-  --claude-command /absolute/path/to/claude
+codexhost remote install --stock-codex /absolute/path/to/official/codex
 ```
 
 该命令会：
 
 - 把打包的原生 Shim 安装为 `~/.codexhost/remote/bin/codex`。在托管远程环境中，只有精确匹配默认形式的 `app-server --listen unix://` 会启动脱离会话的 listener；Shim 会先等新的 control socket 可连接，再让 Codex Desktop 的后台 SSH bootstrap 返回；
 - 把远程 Mapping Store 数据隔离在 `~/.codexhost/remote/data`；
-- 在 `.zshenv`、`.bashrc` 或显式指定的 profile 中加入一段带标记的环境配置；该配置仅在 SSH 会话中生效，因此同一台机器上的本地 Shell 和本地 codexhost Desktop 不会继承远程 Host 所有权；对于 `.bashrc`，受 SSH 条件保护的配置会放在 Ubuntu 等 Linux 发行版常见的非交互提前退出判断之前；该配置既设置 `CODEX_INSTALL_DIR`，也为原生入口提供官方 Codex、Node、Host Runtime、数据目录和可选 Claude Code 的绝对路径；
+- 在 `.zshenv`、`.bashrc` 或显式指定的 profile 中加入一段带标记的环境配置；该配置仅在 SSH 会话中生效，因此同一台机器上的本地 Shell 和本地 codexhost Desktop 不会继承远程 Host 所有权；对于 `.bashrc`，受 SSH 条件保护的配置会放在 Ubuntu 等 Linux 发行版常见的非交互提前退出判断之前；该配置既设置 `CODEX_INSTALL_DIR`，也为原生入口提供官方 Codex、Node、Host Runtime 和数据目录的绝对路径；
 - 修改 profile 前写入带时间戳的备份；
 - 记录已安装原生入口的摘要，因此旧版本包内 runtime 被清理后，后续卸载仍可校验该入口；
 - 保持原有 `codex` 命令和 OpenCodex 配置不变。
+
+`remote install` 不探测或固定外部 Harness 可执行文件，也不再接受 `--claude-command`。Claude Code 每次启动新的原生进程时，复用 Adapter 在远端机器上的现有发现逻辑：先查远端 `PATH`，再查支持的安装目录；已有进程和缓存的可用性检查不会在每条消息时重新扫描。用户显式设置的 `CODEXHOST_CLAUDE_COMMAND` 仍优先于自动发现，与本地行为一致。
 
 在 macOS 上，`remote install` 还会为当前用户安装名为
 `ai.bytepioneer.codexhost.native-harness-broker` 的 LaunchAgent。该 Agent 只允许在已登录的
@@ -98,6 +98,8 @@ Harness 全量可用性检查（包括重试和重新诊断）使用 Desktop 原
 远程 Claude Code 进程使用开发机上的 cwd 和账号。为了让 Codex Desktop 渲染，提示词、流式输出、工具状态、审批和 Diff 会通过现有 SSH 通道投影；凭据文件不会被转发。
 
 ## 诊断与回滚
+
+如果旧安装曾生成固定的 Claude 路径，用新版重新执行 `remote install` 重写托管 profile 配置块，再从新的 SSH Shell 停止、启动 Remote Host 并重连 Desktop。已打开的 Shell 仍保留旧环境变量，重新安装不会清除它们；无需修改 Claude 凭据或原生历史。
 
 设置中的“重新诊断连接”会重新解析已知 Host 的当前原生 manager，并分别刷新 Harness 检查；不会重启 Desktop、创建第二条 SSH 传输或自动在远端安装软件。连接不可用与 Harness 未安装是不同的诊断结果，断线期间收到的旧检查结果不能将该 Host 重新标成可用。
 

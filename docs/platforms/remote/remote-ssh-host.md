@@ -25,19 +25,19 @@ codexhost remote status
 If `codex` already resolves to OpenCodex or another wrapper, pass the real official Codex executable explicitly:
 
 ```bash
-codexhost remote install \
-  --stock-codex /absolute/path/to/official/codex \
-  --claude-command /absolute/path/to/claude
+codexhost remote install --stock-codex /absolute/path/to/official/codex
 ```
 
 The command:
 
 - installs the packaged native Shim as `~/.codexhost/remote/bin/codex`. In the managed remote environment, the exact default `app-server --listen unix://` invocation starts a detached listener, waits until a freshly created control socket accepts connections, and then lets Codex Desktop's background SSH bootstrap return;
 - stores remote Mapping Store data separately under `~/.codexhost/remote/data`;
-- adds one marked environment block to `.zshenv`, `.bashrc`, or the explicitly selected profile. The block activates only for an SSH session, so local shells and a local codexhost Desktop on the same machine do not inherit remote Host ownership. In `.bashrc`, the guarded block is placed before the standard non-interactive early-return guard used by Linux distributions such as Ubuntu. It selects `CODEX_INSTALL_DIR` and supplies the absolute stock Codex, Node, Host Runtime, data, and optional Claude Code paths used by the native entrypoint;
+- adds one marked environment block to `.zshenv`, `.bashrc`, or the explicitly selected profile. The block activates only for an SSH session, so local shells and a local codexhost Desktop on the same machine do not inherit remote Host ownership. In `.bashrc`, the guarded block is placed before the standard non-interactive early-return guard used by Linux distributions such as Ubuntu. It selects `CODEX_INSTALL_DIR` and supplies the absolute stock Codex, Node, Host Runtime, and data paths used by the native entrypoint;
 - writes a timestamped profile backup before changing it;
 - records the installed native entrypoint digest so a later uninstall can still verify it after an older package runtime has been removed;
 - leaves the existing `codex` command and OpenCodex configuration untouched.
+
+`remote install` does not discover or pin external Harness executables and no longer accepts `--claude-command`. Claude Code uses its existing Adapter discovery on the remote machine whenever a new native process starts: remote `PATH` first, then supported installation directories. Existing processes and cached availability checks are not rescanned on every message. An explicitly configured `CODEXHOST_CLAUDE_COMMAND` still overrides discovery, just as it does locally.
 
 On macOS, `remote install` also installs
 `ai.bytepioneer.codexhost.native-harness-broker` as a current-user LaunchAgent. The agent is
@@ -105,6 +105,8 @@ A newly opened task in a remote project remains a draft and should allow Agent s
 The remote Claude Code process sees the remote cwd and account. Prompts, streamed output, tool status, approvals, and diffs are projected through the existing SSH channel so Codex Desktop can render them; credential files are not forwarded.
 
 ## Diagnose and roll back
+
+If an older installation generated a fixed Claude path, re-run the updated `remote install` to rewrite its managed profile block, then use a fresh SSH shell to stop and start the Remote Host and reconnect Desktop. An already-open shell retains its old environment variables; reinstallation does not clear them. No Claude credentials or native history need to be changed.
 
 Settings' connection diagnostics resolve the current native manager again for each known Host and refresh their Harness checks independently. They do not restart Desktop, create another SSH transport, or install remote software. An unavailable connection is distinct from a missing Harness, and late inspection replies cannot mark a disconnected Host ready again.
 
