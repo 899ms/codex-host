@@ -1152,6 +1152,7 @@
 
 .settings-connection-inspector__body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   gap: 12px;
   padding: 12px;
@@ -1250,6 +1251,7 @@
 }
 
 .settings-connection-error-summary {
+  overflow-wrap: anywhere;
   padding: 13px 14px;
   color: var(--settings-danger);
   background: var(--settings-danger-bg);
