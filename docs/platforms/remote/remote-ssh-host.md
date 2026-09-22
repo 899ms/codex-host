@@ -1,17 +1,17 @@
-# Remote SSH Harness Host
+# Remote Harnesses over SSH
 
-Use Harnesses that are installed and authenticated only on a controlled machine (including Claude Code) from your local Codex Desktop, through its native SSH workspace. Credentials stay on the controlled machine and are never forwarded over SSH.
+Use Harnesses that are installed and signed in only on a remote machine — Claude Code included — from your local Codex Desktop, through its native SSH workspace. Your credentials stay on the remote machine and are never sent over SSH.
 
 ## Prerequisites
 
-- Local machine: Codex Desktop and codexhost installed. macOS, Linux, or Windows.
-- Controlled machine: macOS or x64/ARM64 Linux (Windows is not supported yet), with Codex CLI and **the same codexhost version** as the local machine.
-- The target Harness is installed and signed in on the controlled machine.
-- The native Codex Desktop SSH workspace already works (**Settings → Connections → SSH**).
+- **Local machine** (macOS, Linux, or Windows): Codex Desktop and codexhost are installed.
+- **Remote machine** (macOS or x64/ARM64 Linux; Windows isn't supported yet): Codex CLI is installed, along with **the same codexhost version** as your local machine.
+- The Harness you want to use is installed and signed in on the remote machine.
+- Codex Desktop's native SSH workspace already works (**Settings → Connections → SSH**).
 
 ## Install
 
-On the controlled machine:
+On the remote machine, run:
 
 ```bash
 npm install -g @codexhost/cli
@@ -20,32 +20,32 @@ codexhost remote start
 codexhost remote status
 ```
 
-`remote install` only adds a marked block to the Shell profile for SSH sessions (backing up the profile first). Local Shells and your existing `codex` command are not affected. On macOS it also installs a per-user LaunchAgent that starts Claude Code in the logged-in session; it does not read the Keychain or any credentials.
+`remote install` adds a clearly marked block to your shell profile that only applies to SSH sessions, and backs up the profile first. Your local shells and existing `codex` command are left alone. On macOS, it also installs a per-user LaunchAgent that starts Claude Code in your logged-in session. It never reads the Keychain or any credentials.
 
 ## Usage
 
-1. Launch Codex Desktop through codexhost on the local machine.
+1. On your local machine, launch Codex Desktop through codexhost.
 2. Open the SSH workspace.
-3. Pick the target Harness in the composer's Agent / Model selector.
+3. Pick a Harness from the composer's Agent / Model selector.
 
 ## Commands
 
 ```bash
-codexhost remote status     # Show running state and install integrity
-codexhost remote start      # Start (safe to run repeatedly)
-codexhost remote stop       # Stop without affecting other Codex processes
-codexhost remote uninstall  # Uninstall, keeping Thread mapping data
+codexhost remote status     # Check whether it is running and installed correctly
+codexhost remote start      # Start it (safe to run more than once)
+codexhost remote stop       # Stop it without touching other Codex processes
+codexhost remote uninstall  # Uninstall it but keep your Thread mapping data
 ```
 
-After starting, stopping, or uninstalling, reconnect the SSH workspace in Desktop.
+After you start, stop, or uninstall, reconnect the SSH workspace in Codex Desktop.
 
 ## Upgrade
 
-Upgrade both machines to the same version with the same package manager. Then run `codexhost remote install` and `codexhost remote start` again on the controlled machine, and reconnect the SSH workspace.
+Upgrade both machines to the same version using the same package manager. Then rerun `codexhost remote install` and `codexhost remote start` on the remote machine and reconnect the SSH workspace.
 
 ## Troubleshooting
 
-- **`codexhost/harness/inspect is unsupported on this Host connection`**: the SSH connection is not going through codexhost. Make sure the same codexhost version is installed and started on the controlled machine, then reconnect the SSH workspace.
-- **`remote status` reports degraded or asks for a reinstall**: run `codexhost remote install`, then `codexhost remote start`.
-- **A Harness is missing**: check that it is installed and signed in on the controlled machine, then click "Run connection diagnostics" in Settings.
-- **Install fails on macOS with a launchd / `gui/$UID` error**: the controlled machine needs a logged-in graphical session. Log in, then run `codexhost remote install` again.
+- **`codexhost/harness/inspect is unsupported on this Host connection`**: the SSH connection isn't going through codexhost. Make sure the same codexhost version is installed and running on the remote machine, then reconnect the SSH workspace.
+- **`remote status` says degraded or asks you to reinstall**: run `codexhost remote install`, then `codexhost remote start`.
+- **A Harness is missing**: make sure it is installed and signed in on the remote machine, then click **Run connection diagnostics** in Settings.
+- **Install fails on macOS with a launchd / `gui/$UID` error**: the remote Mac needs someone logged in to the desktop. Log in, then run `codexhost remote install` again.

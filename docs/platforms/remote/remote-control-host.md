@@ -1,26 +1,26 @@
-# Remote Control Harness Host (Experimental)
+# Remote Harnesses over Remote Control (Experimental)
 
-Use Harnesses that are installed and authenticated only on a controlled Windows machine from another computer, through Codex Desktop's official Remote Control. No SSH and no new network ports; Harness credentials and project files stay on Windows.
+Use Harnesses that are installed and signed in only on a Windows machine from another computer, through Codex Desktop's official Remote Control. No SSH, no new network ports — Harness credentials and project files never leave the Windows machine.
 
 ## Prerequisites
 
-- The controlled machine runs Windows. macOS is the currently verified controlling side.
-- Both computers have the same codexhost version and launch Codex Desktop through codexhost.
-- Both sides are signed in with the ChatGPT account Remote Control requires, and official pairing is complete.
-- The target Harness is installed and signed in on Windows.
+- The machine you connect to runs Windows. So far, only macOS has been verified as the controlling side.
+- Both computers run the same codexhost version and launch Codex Desktop through codexhost.
+- Both are signed in with the ChatGPT account Remote Control requires, and official pairing is done.
+- The Harness you want to use is installed and signed in on the Windows machine.
 
 ## Connect
 
 1. On Windows, open **Settings → Connections → Control this computer**, enable access, and generate a pairing code.
-2. On the controlling side, open **Settings → Connections → Control other devices**, enter the pairing code, and select the Windows environment.
-3. Open a project in that environment and pick the target Harness in the composer's Agent / Model selector.
+2. On the other computer, open **Settings → Connections → Control other devices**, enter the pairing code, and select the Windows environment.
+3. Open a project in that environment and pick a Harness from the composer's Agent / Model selector.
 
 ## Troubleshooting
 
-First confirm that native Codex tasks run over Remote Control. Pairing failures, missing environments, and account authorization errors belong to official Remote Control, not codexhost.
+First, make sure regular Codex tasks work over Remote Control. Pairing failures, missing environments, and account authorization errors come from Remote Control itself, not codexhost.
 
-- **`unknown variant codexhost/harness/inspect`**: upgrade and restart codexhost on both sides, then reconnect the Remote Control environment.
-- **Bridge fails to start, or `no active process for process handle`**: make sure Codex Desktop on Windows was launched through codexhost, restart the controlled side, and reconnect the environment.
-- **Initialization times out after Windows restarts**: retry the operation.
-- **Native Codex works but no Harnesses appear**: run the connection diagnostics on the controlling side, then check the Harness install and sign-in on Windows.
-- **`Claude inbound is disabled`**: Claude Code integration is turned off in codexhost on Windows. Enable it and retry.
+- **`unknown variant codexhost/harness/inspect`**: upgrade and restart codexhost on both computers, then reconnect the environment.
+- **Bridge fails to start, or `no active process for process handle`**: make sure Codex Desktop on Windows was launched through codexhost, restart it, and reconnect the environment.
+- **Initialization times out after Windows restarts**: just retry.
+- **Codex works but no Harnesses show up**: run connection diagnostics on your computer, then check that the Harness is installed and signed in on Windows.
+- **`Claude inbound is disabled`**: Claude Code integration is turned off in codexhost on the Windows machine. Turn it on and try again.
