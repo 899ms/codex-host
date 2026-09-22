@@ -27,7 +27,6 @@ import {
   resolveCurrentCodexAccountId,
   shouldRefreshCodexAccountsForAdapterState,
   rendererUsageRefreshDelay,
-  shouldApplyDraftAgentCarrier,
   shouldPersistNewThreadConfigurationSelection,
   shouldReloadExternalCatalogAfterAvailabilityRefresh,
   shouldRetryExternalThreadUsage,
@@ -1280,6 +1279,19 @@ describe("Renderer Composer DOM behavior", () => {
     const otherConversationTarget = ["conversation", "opaque-2"];
 
     expect(shouldTransferComposerState(defaultTarget, defaultTarget, "draft")).toBe(true);
+    expect(
+      shouldTransferComposerState(["default", "draft-a"], ["default", "draft-a"], "draft"),
+    ).toBe(true);
+    expect(
+      shouldTransferComposerState(["default", "draft-a"], ["default", "draft-b"], "draft"),
+    ).toBe(false);
+    expect(
+      shouldTransferComposerState(
+        ["conversation", "opaque-1"],
+        ["conversation", "opaque-1"],
+        "locked",
+      ),
+    ).toBe(true);
     expect(shouldTransferComposerState(defaultTarget, firstConversationTarget, "draft")).toBe(
       false,
     );
@@ -1301,14 +1313,6 @@ describe("Renderer Composer DOM behavior", () => {
     expect(isComposerModelWriteAllowed(["conversation", "pi-thread"])).toBe(false);
     expect(isComposerModelWriteAllowed(["conversation", "codex-thread"])).toBe(false);
     expect(isComposerModelWriteAllowed(null)).toBe(false);
-  });
-
-  it("does not emit a base external carrier before its concrete configuration loads", () => {
-    expect(shouldApplyDraftAgentCarrier("codex", undefined)).toBe(true);
-    expect(shouldApplyDraftAgentCarrier("grok", undefined)).toBe(false);
-    expect(
-      shouldApplyDraftAgentCarrier("grok", harnessModelRefSchema.parse({ id: "grok-4.6" })),
-    ).toBe(true);
   });
 
   it("never writes the native Model while repeatedly switching existing conversations", () => {

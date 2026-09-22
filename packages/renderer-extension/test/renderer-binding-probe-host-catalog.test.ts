@@ -24,6 +24,7 @@ const testState = vi.hoisted(() => ({
   sidebarOptions: null as null | Parameters<typeof installRendererSidebarAgentIcons>[0],
   documentListeners: new Map<string, EventListener>(),
   modelTarget: ["conversation", "thread-a"] as readonly unknown[],
+  prewarmClears: 0,
 }));
 
 vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
@@ -83,7 +84,11 @@ vi.mock("../src/versioned-renderer-adapter.js", async (importOriginal) => {
   return {
     ...original,
     findComposerModelTarget: () => testState.modelTarget,
-    waitForRendererDraftPrewarmPolicy: async () => ({ clear: async () => undefined }),
+    waitForRendererDraftPrewarmPolicy: async () => ({
+      clear: async () => {
+        testState.prewarmClears += 1;
+      },
+    }),
   };
 });
 
@@ -175,6 +180,7 @@ function installFakeBrowser(): void {
   testState.getSessionImportClient = null;
   testState.documentListeners.clear();
   testState.modelTarget = ["conversation", "thread-a"];
+  testState.prewarmClears = 0;
   const window_ = {
     addEventListener: listeners.addEventListener.bind(listeners),
     removeEventListener: listeners.removeEventListener.bind(listeners),
@@ -855,6 +861,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       inspectThreadUsage: vi.fn(),
       subscribeThreadUsage: () => () => undefined,
     };
+    const applyAgent = vi.fn(() => true);
     const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
     const probe = installRendererBindingProbe({
       enabledAgents: ["codex", "claude-code"],
@@ -863,10 +870,17 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     probe.setAdapter(
       { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
       undefined,
-      () => true,
+      applyAgent,
       modelControl as never,
     );
 
+    expect(applyAgent).toHaveBeenCalledWith(
+      "claude-code",
+      undefined,
+      undefined,
+      undefined,
+      testState.composer,
+    );
     await vi.waitFor(() =>
       expect(testState.renderedModelViews.at(-1)).toMatchObject({ status: "ready" }),
     );
@@ -919,6 +933,43 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
         selected: readyInspection().catalog.defaultModel,
       }),
     );
+  });
+
+  it("reapplies the selected carrier and clears destination prewarm when a draft changes Hosts", async () => {
+    installFakeBrowser();
+    testState.modelTarget = ["default"];
+    let hostId = "local";
+    const local = { inspectHarness: vi.fn(async () => readyInspection()) };
+    const remote = { inspectHarness: vi.fn(async () => readyInspection()) };
+    const applyAgent = vi.fn(() => true);
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code"],
+      defaultAgent: "claude-code",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      applyAgent,
+      {
+        currentHostId: () => hostId,
+        clientForHost: (id: string) => (id === "local" ? local : remote),
+        subscribeThreadUsage: () => () => undefined,
+      } as never,
+    );
+    await vi.waitFor(() =>
+      expect(testState.renderedModelViews.at(-1)).toMatchObject({ status: "ready" }),
+    );
+    const applicationsBeforeSwitch = applyAgent.mock.calls.length;
+    const clearsBeforeSwitch = testState.prewarmClears;
+
+    hostId = "remote";
+    window.dispatchEvent(new Event("codexhost:draft-prewarm-policy-changed"));
+
+    await vi.waitFor(() => expect(remote.inspectHarness).toHaveBeenCalled());
+    expect(applyAgent.mock.calls.length).toBeGreaterThan(applicationsBeforeSwitch);
+    expect(applyAgent.mock.calls.at(-1)?.[0]).toBe("claude-code");
+    expect(testState.prewarmClears).toBeGreaterThan(clearsBeforeSwitch);
   });
 
   it("reloads a same-Host empty Claude catalog on explicit refresh", async () => {

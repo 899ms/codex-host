@@ -570,7 +570,12 @@ export function shouldTransferComposerState(
   submissionPending = false,
 ): boolean {
   if (!sourceTarget || !replacementTarget) return false;
-  if (sourceTarget === replacementTarget) return true;
+  if (
+    sourceTarget.length === replacementTarget.length &&
+    sourceTarget.every((value, index) => value === replacementTarget[index])
+  ) {
+    return true;
+  }
   return (
     (sourcePhase === "locked" || submissionPending) &&
     sourceTarget[0] === "default" &&
@@ -614,13 +619,6 @@ export function scopedComposerTarget(
 
 export function isComposerModelWriteAllowed(target: readonly unknown[] | null): boolean {
   return target?.[0] === "default";
-}
-
-export function shouldApplyDraftAgentCarrier(
-  agent: RendererAgent,
-  model: HarnessModelRef | undefined,
-): boolean {
-  return agent === "codex" || model !== undefined;
 }
 
 export function applyComposerModelWrite(
@@ -1097,6 +1095,24 @@ export function installRendererBindingProbe(
   const clearDraftPrewarm = async (composer: Element): Promise<void> => {
     const policy = await waitForRendererDraftPrewarmPolicy(window, composer);
     await policy.clear();
+  };
+
+  const applyDraftAgentCarrier = (composer: Element, agent: RendererAgent): boolean => {
+    const model = controller.modelForAgent(composer, agent);
+    const hasConcreteModel = model !== undefined;
+    return (
+      applyAdapterAgent?.(
+        agent,
+        model,
+        agent !== "codex" && hasConcreteModel
+          ? controller.thinkingOptionForAgent(composer, agent)
+          : undefined,
+        agent !== "codex" && hasConcreteModel
+          ? controller.permissionModeForAgent(composer, agent)
+          : undefined,
+        composer,
+      ) ?? agent === "codex"
+    );
   };
 
   const applyExternalConfiguration = (
@@ -1947,23 +1963,7 @@ export function installRendererBindingProbe(
     const composerId = controller.get(mounted.composer).composerId;
     controller.invalidateModelRequests(mounted.composer);
     const switching = controller.switchAgent(mounted.composer, agent, {
-      applyAgent(nextAgent) {
-        const model = controller.modelForAgent(mounted.composer, nextAgent);
-        if (!shouldApplyDraftAgentCarrier(nextAgent, model)) return true;
-        return (
-          applyAdapterAgent?.(
-            nextAgent,
-            model,
-            nextAgent !== "codex"
-              ? controller.thinkingOptionForAgent(mounted.composer, nextAgent)
-              : undefined,
-            nextAgent !== "codex"
-              ? controller.permissionModeForAgent(mounted.composer, nextAgent)
-              : undefined,
-            mounted.composer,
-          ) ?? nextAgent === "codex"
-        );
-      },
+      applyAgent: (nextAgent) => applyDraftAgentCarrier(mounted.composer, nextAgent),
       clearPrewarm: () => clearDraftPrewarm(mounted.composer),
     });
     renderMounted(mounted);
@@ -2223,6 +2223,10 @@ export function installRendererBindingProbe(
         mounted.usage = null;
         mounted.accountCredits = null;
         mounted.usageRequestGeneration += 1;
+        const state = controller.get(mounted.composer);
+        if (applyDraftAgentCarrier(mounted.composer, state.agent)) {
+          void clearDraftPrewarm(mounted.composer).catch(() => undefined);
+        }
         void loadExternalCatalog(mounted);
         continue;
       }
@@ -2416,20 +2420,7 @@ export function installRendererBindingProbe(
     };
     mountedByComposer.set(composer, mounted);
     if (isComposerModelWriteAllowed(modelTarget)) {
-      const model = controller.modelForAgent(composer, state.agent);
-      if (shouldApplyDraftAgentCarrier(state.agent, model)) {
-        applyAdapterAgent?.(
-          state.agent,
-          model,
-          state.agent !== "codex"
-            ? controller.thinkingOptionForAgent(composer, state.agent)
-            : undefined,
-          state.agent !== "codex"
-            ? controller.permissionModeForAgent(composer, state.agent)
-            : undefined,
-          composer,
-        );
-      }
+      applyDraftAgentCarrier(composer, state.agent);
     }
     renderMounted(mounted);
     sidebarAgentIcons.refresh();
@@ -2578,22 +2569,8 @@ export function installRendererBindingProbe(
       return state.phase === "locked" && mounted.ownershipStatus === "ready";
     }
     if (!mounted || !isComposerModelWriteAllowed(mounted.modelTarget)) return false;
-    const model = controller.modelForAgent(composer, state.agent);
-    if (!shouldApplyDraftAgentCarrier(state.agent, model)) return false;
-    return applyComposerModelWrite(
-      mounted.modelTarget,
-      () =>
-        applyAdapterAgent?.(
-          state.agent,
-          model,
-          state.agent !== "codex"
-            ? controller.thinkingOptionForAgent(composer, state.agent)
-            : undefined,
-          state.agent !== "codex"
-            ? controller.permissionModeForAgent(composer, state.agent)
-            : undefined,
-          composer,
-        ) ?? state.agent === "codex",
+    return applyComposerModelWrite(mounted.modelTarget, () =>
+      applyDraftAgentCarrier(composer, state.agent),
     );
   };
   const blockEvent = (event: Event): void => {
