@@ -941,7 +941,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     let hostId = "local";
     const local = { inspectHarness: vi.fn(async () => readyInspection()) };
     const remote = { inspectHarness: vi.fn(async () => readyInspection()) };
-    const applyAgent = vi.fn(() => true);
+    const applyAgent = vi.fn<(agent: string) => boolean>(() => true);
     const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
     const probe = installRendererBindingProbe({
       enabledAgents: ["codex", "claude-code"],
