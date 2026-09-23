@@ -97,6 +97,14 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
   </tr>
   <tr>
     <td colspan="2" valign="top">
+      <p><strong>Choose an Agent with #</strong></p>
+      <div align="center">
+        <img width="90%" src="docs/imgs/composer-hash-delegation-menu.png" alt="Typing # in the chat input opens a menu of Agents to delegate tasks to">
+      </div>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
       <p><strong>Usage limits at a glance</strong></p>
       <img src="docs/imgs/grok-usage-limits.png" alt="Remaining allowance and reset times for the five-hour and seven-day windows">
     </td>
@@ -137,6 +145,8 @@ Every Harness gets Codex Desktop's native Edit Diff, Fork, message editing, and 
 </details>
 
 ## Cross-Agent Collaboration
+
+Type `#` in the chat input to choose an Agent to delegate a task to, or to find commands and skills available for the selected Harness.
 
 Ask the current Agent to hand off a self-contained task to another Harness. For example:
 

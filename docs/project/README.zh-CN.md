@@ -97,6 +97,14 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
   </tr>
   <tr>
     <td colspan="2" valign="top">
+      <p><strong>输入 # 选择委派目标</strong></p>
+      <div align="center">
+        <img width="90%" src="../imgs/composer-hash-delegation-menu.png" alt="在聊天输入框输入 # 后，菜单显示可委派任务的 Agent">
+      </div>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
       <p><strong>剩余额度显示</strong></p>
       <img src="../imgs/grok-usage-limits.png" alt="五小时与七天窗口的剩余额度和重置时间">
     </td>
@@ -137,6 +145,8 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 </details>
 
 ## 跨 Agent 协作
+
+在聊天输入框输入 `#`，可以选择要委派任务的 Agent，也可以查找当前所选 Harness 可用的命令和技能。
 
 你可以让当前 Agent 把独立任务交给另一个 Harness。例如：
 
