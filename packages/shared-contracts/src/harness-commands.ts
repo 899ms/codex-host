@@ -22,6 +22,11 @@ export const harnessCommandDescriptorSchema = z
     label: commandLabelSchema,
     description: commandDescriptionSchema.optional(),
     argumentMode: z.enum(["none", "text"]),
+    /**
+     * Native distinction reported by the Harness. Omitted when the Harness does
+     * not tell skills and commands apart; consumers treat that as "command".
+     */
+    kind: z.enum(["command", "skill"]).optional(),
   })
   .strict();
 

@@ -72,6 +72,7 @@ export function commandCatalog(
               name === "compact" || record(entry.input).hint || record(entry._meta).type === "skill"
                 ? "text"
                 : "none",
+            ...(record(entry._meta).type === "skill" ? { kind: "skill" } : {}),
           },
         ],
       });

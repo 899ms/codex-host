@@ -14,14 +14,17 @@
  */
 import {
   DELEGATION_MENTION_PATH_PREFIX,
+  HARNESS_COMMAND_MENTION_PATH_PREFIX,
   delegationMentionPath,
   formatDelegationMentionLink,
+  harnessCommandMentionPath,
 } from "@codexhost/shared-contracts";
 
 import type { HarnessCommandDescriptor } from "@codexhost/shared-contracts";
 
 import type { RendererAgent } from "./agent-selection-state.js";
 import { createRendererAgentIcon } from "./renderer-agent-icon.js";
+import { rendererHarnessCommandExecutesDirectly } from "./renderer-harness-command-claim.js";
 import { rendererHarnessCommandPresentation } from "./renderer-harness-localization.js";
 import {
   deleteNativeRange,
@@ -131,6 +134,10 @@ function commandsTitle(locale: RendererSettingsLocale): string {
   return locale === "zh-CN" ? "命令" : "Commands";
 }
 
+function skillsTitle(locale: RendererSettingsLocale): string {
+  return locale === "zh-CN" ? "技能" : "Skills";
+}
+
 function iconUrl(agent: RendererAgent, ownerDocument: Document): string | null {
   const icon = createRendererAgentIcon(agent, 16, ownerDocument);
   if (icon.tagName.toLowerCase() === "img") return (icon as HTMLImageElement).src || null;
@@ -164,10 +171,17 @@ function syncChipStyle(
     style.setAttribute(STYLE_ATTRIBUTE, "true");
     (ownerDocument.head ?? ownerDocument.documentElement).append(style);
   }
-  const chip = `[agent-mention-path^=${cssString(DELEGATION_MENTION_PATH_PREFIX)}][agent-mention-display-name]`;
+  const chip = [DELEGATION_MENTION_PATH_PREFIX, HARNESS_COMMAND_MENTION_PATH_PREFIX]
+    .map((prefix) => `[agent-mention-path^=${cssString(prefix)}][agent-mention-display-name]`)
+    .join(",");
+  const withPseudo = (pseudo: string): string =>
+    chip
+      .split(",")
+      .map((selector) => `${selector}${pseudo}`)
+      .join(",");
   const rules = [
-    `${chip} > span:last-child{display:none;}`,
-    `${chip}::after{content:attr(agent-mention-display-name);}`,
+    withPseudo(" > span:last-child") + "{display:none;}",
+    withPseudo("::after") + "{content:attr(agent-mention-display-name);}",
     ...targets.flatMap(({ agent }) => {
       if (!cache.has(agent)) cache.set(agent, iconUrl(agent, ownerDocument));
       const url = cache.get(agent);
@@ -201,6 +215,14 @@ export interface RendererDelegationMentionOptions {
   anchorForEditor(editor: HTMLElement): Element | null;
   /** Native commands of the Composer's current Harness, if it has any. */
   readCommands(editor: HTMLElement): RendererDelegationCommandSource | null;
+  /** Called when the menu opens for an editor, e.g. to refresh live commands. */
+  onOpen?(editor: HTMLElement): void;
+}
+
+export interface RendererDelegationMentionControl {
+  /** Re-render the open menu after its data sources changed. */
+  refresh(): void;
+  dispose(): void;
 }
 
 /** Same catalog and selection path as the Composer command (⌘) button. */
@@ -218,9 +240,9 @@ type MenuEntry =
 export function installRendererDelegationMention(
   ownerDocument: Document,
   options: RendererDelegationMentionOptions,
-): () => void {
+): RendererDelegationMentionControl {
   const view = ownerDocument.defaultView;
-  if (!view) return () => undefined;
+  if (!view) return { refresh: () => undefined, dispose: () => undefined };
   const iconCache = new Map<RendererAgent, string | null>();
 
   // Codex's own suggestion menu utilities, so light/dark theming and density
@@ -255,6 +277,7 @@ export function installRendererDelegationMention(
   let activeIndex = 0;
   let composing = false;
   let inserting = false;
+  let openedFor: { node: Text; start: number } | null = null;
 
   const close = (): void => {
     active = null;
@@ -348,20 +371,29 @@ export function installRendererDelegationMention(
     const locale = options.readLocale();
     const rows: HTMLElement[] = [];
     entries = [];
-    if (commands && commands.matches.length > 0) {
-      rows.push(sectionHeader(commandsTitle(locale)));
-      for (const command of commands.matches) {
-        const reason = commands.source.disabledReason(command);
-        const presentation = rendererHarnessCommandPresentation(command, locale);
-        const content = rowContent(null, command.invocation, reason ?? presentation.description);
-        if (reason === null) {
-          rows.push(optionRow({ kind: "command", command, source: commands.source }, content));
-        } else {
-          const disabled = ownerDocument.createElement("div");
-          disabled.setAttribute("aria-disabled", "true");
-          disabled.className = `${ROW_CLASS} opacity-50`;
-          disabled.append(content);
-          rows.push(disabled);
+    if (commands) {
+      // Harnesses that report the distinction get separate Skills; everything
+      // else is a command, like Desktop's own `/` vs `$` split.
+      const groups: [string, HarnessCommandDescriptor[]][] = [
+        [commandsTitle(locale), commands.matches.filter(({ kind }) => kind !== "skill")],
+        [skillsTitle(locale), commands.matches.filter(({ kind }) => kind === "skill")],
+      ];
+      for (const [title, group] of groups) {
+        if (group.length === 0) continue;
+        rows.push(sectionHeader(title));
+        for (const command of group) {
+          const reason = commands.source.disabledReason(command);
+          const presentation = rendererHarnessCommandPresentation(command, locale);
+          const content = rowContent(null, command.invocation, reason ?? presentation.description);
+          if (reason === null) {
+            rows.push(optionRow({ kind: "command", command, source: commands.source }, content));
+          } else {
+            const disabled = ownerDocument.createElement("div");
+            disabled.setAttribute("aria-disabled", "true");
+            disabled.className = `${ROW_CLASS} opacity-50`;
+            disabled.append(content);
+            rows.push(disabled);
+          }
         }
       }
     }
@@ -410,8 +442,14 @@ export function installRendererDelegationMention(
     if (inserting || composing) return;
     const trigger = readTrigger();
     if (!trigger) {
+      openedFor = null;
       close();
       return;
+    }
+    // Notify once per `#` token so a data refresh cannot re-trigger itself.
+    if (openedFor?.node !== trigger.node || openedFor.start !== trigger.start) {
+      openedFor = { node: trigger.node, start: trigger.start };
+      options.onOpen?.(trigger.editor);
     }
     const allTargets = options.readTargets();
     syncChipStyle(ownerDocument, allTargets, iconCache);
@@ -474,12 +512,34 @@ export function installRendererDelegationMention(
     range: NativeTextRange,
     entry: Extract<MenuEntry, { kind: "command" }>,
   ): Promise<void> => {
-    // Remove `#query`, then hand off to the same path as the ⌘ button.
+    const { command, source } = entry;
+    // Commands taking text become a chip in place of `#query`: literal
+    // `/command` text would open Desktop's own `/` menu. The Host restores the
+    // chip to a leading `/command arguments` on submit.
+    if (!rendererHarnessCommandExecutesDirectly(command)) {
+      let path: string | null = null;
+      try {
+        path = harnessCommandMentionPath(command.invocation);
+      } catch {
+        path = null;
+      }
+      if (
+        path &&
+        insertNativeAgentMention(trigger.editor, range, {
+          name: command.invocation,
+          displayName: command.invocation,
+          path,
+        })
+      ) {
+        return;
+      }
+    }
+    // Direct commands (and the no-controller fallback) use the ⌘ button path.
     if (!deleteNativeRange(trigger.editor, range)) {
       if (!(await selectTriggerText(trigger))) return;
       ownerDocument.execCommand("delete");
     }
-    entry.source.select(entry.command);
+    source.select(command);
   };
 
   const choose = async (entry: MenuEntry): Promise<void> => {
@@ -540,7 +600,7 @@ export function installRendererDelegationMention(
   view.addEventListener("resize", onViewportChange);
   view.addEventListener("scroll", onViewportChange, true);
 
-  return () => {
+  const dispose = (): void => {
     view.removeEventListener("keydown", onKeyDown, true);
     ownerDocument.removeEventListener("input", refresh, true);
     ownerDocument.removeEventListener("selectionchange", refresh);
@@ -551,6 +611,13 @@ export function installRendererDelegationMention(
     view.removeEventListener("scroll", onViewportChange, true);
     menu.remove();
     ownerDocument.querySelector(`style[${STYLE_ATTRIBUTE}]`)?.remove();
+  };
+
+  return {
+    refresh: () => {
+      if (openedFor) refresh();
+    },
+    dispose,
   };
 }
 

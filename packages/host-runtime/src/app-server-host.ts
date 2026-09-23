@@ -1,6 +1,7 @@
 import {
   DELEGATION_MENTION_PATH_PREFIX,
   IDLE_RELEASE_SETTINGS_METHOD,
+  restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
 } from "@codexhost/shared-contracts";
@@ -2537,6 +2538,21 @@ export class AppServerHost {
       await this.#writer.json(rpcEnvelope(request, { result: { commands: [] } }));
       return;
     }
+    // A loaded Session reports its live catalog (custom commands, skills). Never
+    // open a Session only to read commands; unloaded Threads use the static one.
+    const loaded = this.#externalRuntime.get(params.data.threadId);
+    if (loaded?.session.commands) {
+      try {
+        const live = await loaded.session.commands.list();
+        if (live.ok) {
+          const catalog = harnessCommandCatalogSchema.parse(live.value);
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(catalog) }));
+          return;
+        }
+      } catch {
+        // Fall back to the static Adapter catalog below.
+      }
+    }
     await this.#writeHarnessCommandCatalog(request, location.record.harnessId);
   }
 
@@ -3568,7 +3584,8 @@ export class AppServerHost {
     }
     let text: string;
     try {
-      text = requestText(params);
+      // `#` menu command chips become a leading `/command` before matching.
+      text = restoreHarnessCommandMentions(requestText(params));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
       return;

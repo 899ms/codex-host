@@ -64,3 +64,44 @@ export function stripDelegationMentions(text: string): DelegationMentionRewrite 
   );
   return { text: rewritten, mentions };
 }
+
+/**
+ * Harness command carrier. Selecting a command in the `#` menu inserts it as a
+ * native agent mention chip instead of literal `/command` text, which would
+ * open Desktop's own `/` menu. The Host restores it to a leading
+ * `/command arguments` before External Harness command matching.
+ */
+export const HARNESS_COMMAND_MENTION_PATH_PREFIX = "subagent://codexhost-command.";
+
+const COMMAND_LINK_PATTERN = /\[@([^\]\n]+)\]\(<?subagent:\/\/codexhost-command\.([^)\s>]+)>?\)/gu;
+
+export function harnessCommandMentionPath(invocation: string): string {
+  const name = invocation.trim().replace(/^\//u, "");
+  if (!name || /\s/u.test(name)) throw new Error(`Invalid Harness command: ${invocation}`);
+  return `${HARNESS_COMMAND_MENTION_PATH_PREFIX}${encodeURIComponent(name).replace(
+    /[()]/gu,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  )}`;
+}
+
+/**
+ * Move the first command carrier to the front as `/command`, keeping the rest
+ * of the text as its arguments. Other command carriers are dropped. Text
+ * without a carrier is returned unchanged.
+ */
+export function restoreHarnessCommandMentions(text: string): string {
+  let invocation: string | null = null;
+  const rest = text.replace(COMMAND_LINK_PATTERN, (match, _label: string, encoded: string) => {
+    if (invocation === null) {
+      try {
+        invocation = `/${decodeURIComponent(encoded)}`;
+      } catch {
+        return match;
+      }
+    }
+    return "";
+  });
+  if (invocation === null) return text;
+  const argumentsText = rest.replace(/[ \t]+/gu, " ").trim();
+  return argumentsText ? `${invocation} ${argumentsText}` : invocation;
+}

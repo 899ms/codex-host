@@ -312,7 +312,10 @@ export const packageMetadata = {
 
 export {
   DELEGATION_MENTION_PATH_PREFIX,
+  HARNESS_COMMAND_MENTION_PATH_PREFIX,
   delegationMentionPath,
+  harnessCommandMentionPath,
+  restoreHarnessCommandMentions,
   formatDelegationMentionLink,
   stripDelegationMentions,
   type DelegationMention,

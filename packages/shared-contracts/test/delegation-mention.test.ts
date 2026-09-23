@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   delegationMentionPath,
   formatDelegationMentionLink,
+  harnessCommandMentionPath,
+  restoreHarnessCommandMentions,
   stripDelegationMentions,
 } from "../src/index.js";
 
@@ -35,5 +37,35 @@ describe("delegation mention carrier", () => {
   it("leaves native custom agent roles and plain text alone", () => {
     const text = "[@reviewer](subagent://reviewer) and #claude";
     expect(stripDelegationMentions(text)).toEqual({ text, mentions: [] });
+  });
+});
+
+describe("Harness command carrier", () => {
+  const link = (invocation: string) => `[@${invocation}](${harnessCommandMentionPath(invocation)})`;
+
+  it("encodes invocations into a Desktop-restorable path", () => {
+    expect(harnessCommandMentionPath("/review")).toBe("subagent://codexhost-command.review");
+    expect(harnessCommandMentionPath("/frontend-design:frontend-design")).toBe(
+      "subagent://codexhost-command.frontend-design%3Afrontend-design",
+    );
+    expect(harnessCommandMentionPath("/a(b)")).toBe("subagent://codexhost-command.a%28b%29");
+    expect(() => harnessCommandMentionPath("/two words")).toThrow();
+  });
+
+  it("restores the chip as a leading command with the remaining text as arguments", () => {
+    expect(restoreHarnessCommandMentions(`${link("/review")} PR 42`)).toBe("/review PR 42");
+    expect(restoreHarnessCommandMentions(`please ${link("/eli5")}  quantum`)).toBe(
+      "/eli5 please quantum",
+    );
+    expect(restoreHarnessCommandMentions(link("/frontend-design:frontend-design"))).toBe(
+      "/frontend-design:frontend-design",
+    );
+    expect(restoreHarnessCommandMentions(`${link("/a")} x ${link("/b")}`)).toBe("/a x");
+  });
+
+  it("leaves text without a command chip unchanged", () => {
+    const text = "[@Claude Code](subagent://codexhost.claude-code) /usage";
+    expect(restoreHarnessCommandMentions(text)).toBe(text);
+    expect(stripDelegationMentions(`${link("/review")}`).mentions).toEqual([]);
   });
 });
