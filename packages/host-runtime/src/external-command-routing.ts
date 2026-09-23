@@ -1,5 +1,9 @@
 import type { HarnessSession } from "@codexhost/harness-adapter";
 import type { JsonObject } from "@codexhost/protocol-core";
+import {
+  harnessCommandCatalogSchema,
+  type HarnessCommandCatalog,
+} from "@codexhost/shared-contracts";
 
 export class ExternalCommandError extends Error {
   constructor(
@@ -12,6 +16,27 @@ export class ExternalCommandError extends Error {
 
 export function isExternalCommandCandidate(text: string): boolean {
   return /^\/[^\s/]+(?:\s|$)/u.test(text.trimStart());
+}
+
+/** Inspection must not hold the Desktop request queue for a native RPC timeout. */
+export async function inspectLiveCommandCatalog(
+  commands: NonNullable<HarnessSession["commands"]>,
+  timeoutMs = 1_000,
+): Promise<HarnessCommandCatalog | null> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      commands.list(),
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+    return result?.ok ? harnessCommandCatalogSchema.parse(result.value) : null;
+  } catch {
+    return null;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 /** Shared by ordinary submissions and stop-then-start steering replacements. */

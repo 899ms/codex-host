@@ -114,6 +114,7 @@ import {
 import { ExternalSteerError, ExternalTurnSteering } from "./external-turn-steering.js";
 import {
   ExternalCommandError,
+  inspectLiveCommandCatalog,
   isExternalCommandCandidate,
   resolveExternalCommand,
 } from "./external-command-routing.js";
@@ -2547,15 +2548,10 @@ export class AppServerHost {
     // open a Session only to read commands; unloaded Threads use the static one.
     const loaded = this.#externalRuntime.get(params.data.threadId);
     if (loaded?.session.commands) {
-      try {
-        const live = await loaded.session.commands.list();
-        if (live.ok) {
-          const catalog = harnessCommandCatalogSchema.parse(live.value);
-          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(catalog) }));
-          return;
-        }
-      } catch {
-        // Fall back to the static Adapter catalog below.
+      const catalog = await inspectLiveCommandCatalog(loaded.session.commands);
+      if (catalog) {
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(catalog) }));
+        return;
       }
     }
     await this.#writeHarnessCommandCatalog(request, location.record.harnessId);
