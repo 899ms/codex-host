@@ -73,7 +73,8 @@ export function stripDelegationMentions(text: string): DelegationMentionRewrite 
  */
 export const HARNESS_COMMAND_MENTION_PATH_PREFIX = "subagent://codexhost-command.";
 
-const COMMAND_LINK_PATTERN = /\[@([^\]\n]+)\]\(<?subagent:\/\/codexhost-command\.([^)\s>]+)>?\)/gu;
+const COMMAND_LINK_PATTERN =
+  /([ \t]*)\[@([^\]\n]+)\]\(<?subagent:\/\/codexhost-command\.([^)\s>]+)>?\)([ \t]*)/gu;
 
 export function harnessCommandMentionPath(invocation: string): string {
   const name = invocation.trim().replace(/^\//u, "");
@@ -91,17 +92,21 @@ export function harnessCommandMentionPath(invocation: string): string {
  */
 export function restoreHarnessCommandMentions(text: string): string {
   let invocation: string | null = null;
-  const rest = text.replace(COMMAND_LINK_PATTERN, (match, _label: string, encoded: string) => {
-    if (invocation === null) {
-      try {
-        invocation = `/${decodeURIComponent(encoded)}`;
-      } catch {
-        return match;
+  const rest = text.replace(
+    COMMAND_LINK_PATTERN,
+    (match, before: string, _label: string, encoded: string, after: string) => {
+      if (invocation === null) {
+        try {
+          invocation = `/${decodeURIComponent(encoded)}`;
+        } catch {
+          return match;
+        }
       }
-    }
-    return "";
-  });
+      // Normalize only the separator left by this chip, not argument whitespace.
+      return before || after ? " " : "";
+    },
+  );
   if (invocation === null) return text;
-  const argumentsText = rest.replace(/[ \t]+/gu, " ").trim();
+  const argumentsText = rest.trim();
   return argumentsText ? `${invocation} ${argumentsText}` : invocation;
 }

@@ -63,6 +63,21 @@ describe("Harness command carrier", () => {
     expect(restoreHarnessCommandMentions(`${link("/a")} x ${link("/b")}`)).toBe("/a x");
   });
 
+  it("preserves internal spaces, tabs and code indentation in command arguments", () => {
+    const argumentsText = "Review this:\n    const x =  1;\n\treturn x;\nname\t\tvalue";
+    expect(restoreHarnessCommandMentions(`${link("/review")} ${argumentsText}`)).toBe(
+      `/review ${argumentsText}`,
+    );
+    expect(
+      restoreHarnessCommandMentions(`keep  these\tcolumns ${link("/review")}  and  these`),
+    ).toBe("/review keep  these\tcolumns and  these");
+    expect(
+      restoreHarnessCommandMentions(
+        `${link("/review")} first  block ${link("/other")} next\t\tblock`,
+      ),
+    ).toBe("/review first  block next\t\tblock");
+  });
+
   it("leaves text without a command chip unchanged", () => {
     const text = "[@Claude Code](subagent://codexhost.claude-code) /usage";
     expect(restoreHarnessCommandMentions(text)).toBe(text);
