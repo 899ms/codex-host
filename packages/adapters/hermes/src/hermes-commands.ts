@@ -1,6 +1,7 @@
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import {
   harnessCommandCatalogSchema,
+  harnessCommandDescriptorSchema,
   type HarnessCommandCatalog,
 } from "@codexhost/shared-contracts";
 import {
@@ -14,17 +15,21 @@ import {
 // invalidate Host history, and queue/steer need overlapping prompt streams.
 
 export function hermesCommandCatalog(commands: readonly AvailableCommand[]): HarnessCommandCatalog {
-  return harnessCommandCatalogSchema.parse({
-    commands: commands
-      .filter((command) => !isExcludedLiveCommand(command.name, "command"))
-      .map((command) => ({
-        id: `hermes.${command.name}`,
-        invocation: `/${command.name}`,
-        label: `/${command.name}`,
-        description: command.description.slice(0, 512) || `Hermes /${command.name}`,
-        argumentMode: command.input ? "text" : "none",
-      })),
+  const seen = new Set<string>();
+  const descriptors = commands.flatMap((command) => {
+    if (isExcludedLiveCommand(command.name, "command")) return [];
+    const parsed = harnessCommandDescriptorSchema.safeParse({
+      id: `hermes.${command.name}`,
+      invocation: `/${command.name}`,
+      label: `/${command.name}`,
+      description: command.description.slice(0, 512) || `Hermes /${command.name}`,
+      argumentMode: command.input ? "text" : "none",
+    });
+    if (!parsed.success || seen.has(parsed.data.id)) return [];
+    seen.add(parsed.data.id);
+    return [parsed.data];
   });
+  return harnessCommandCatalogSchema.parse({ commands: descriptors });
 }
 
 export const HERMES_GATEWAY_COMMANDS: AvailableCommand[] = [
