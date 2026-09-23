@@ -74,6 +74,41 @@ describe("Controller attachment server", () => {
     }
   });
 
+  it("keeps recovery alive after its client disconnects and accepts later attachments", async () => {
+    const port = await availablePort();
+    const recovery = Promise.withResolvers<undefined>();
+    const attach = vi.fn(async () => recovery.promise);
+    const server = await startControllerAttachmentServer({ port, nonce, attach });
+    const first = createConnection({ host: "127.0.0.1", port });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        first.once("error", reject);
+        first.once("connect", () => {
+          first.write(`ATTACH ${nonce}\n`);
+          resolve();
+        });
+      });
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce());
+      await new Promise<void>((resolve) => {
+        first.once("close", () => resolve());
+        first.destroy();
+      });
+
+      await expect(request(port, `ATTACH ${nonce}\n`)).resolves.toBe("busy\n");
+      expect(attach).toHaveBeenCalledOnce();
+
+      recovery.resolve(undefined);
+      await vi.waitFor(async () => {
+        await expect(request(port, `ATTACH ${nonce}\n`)).resolves.toBe("ready\n");
+      });
+      expect(attach).toHaveBeenCalledTimes(2);
+    } finally {
+      first.destroy();
+      recovery.resolve(undefined);
+      await server.close();
+    }
+  });
+
   it("releases a failed attachment so a later retry can recover", async () => {
     const port = await availablePort();
     const attach = vi
