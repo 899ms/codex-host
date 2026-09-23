@@ -356,23 +356,18 @@ export function installRendererDelegationMention(
       : `${Math.min(view.innerHeight - height - VIEWPORT_MARGIN, rect.bottom + MENU_GAP)}px`;
   };
 
-  /** The first section carries a quiet source tag, like Desktop's "Personal". */
-  let sourceTagged = false;
+  /** Every section carries a quiet source tag, like Desktop's "Personal". */
   const sectionHeader = (title: string): HTMLElement => {
     const header = ownerDocument.createElement("div");
     header.className = `${HEADER_CLASS} flex items-center justify-between gap-2`;
     const label = ownerDocument.createElement("span");
     label.className = "min-w-0 truncate";
     label.textContent = title;
-    header.append(label);
-    if (!sourceTagged) {
-      sourceTagged = true;
-      const source = ownerDocument.createElement("span");
-      source.className = "shrink-0 text-sm text-codex-description";
-      source.setAttribute("data-codexhost-source", "");
-      source.textContent = SOURCE_TAG;
-      header.append(source);
-    }
+    const source = ownerDocument.createElement("span");
+    source.className = "shrink-0 text-sm text-codex-description";
+    source.setAttribute("data-codexhost-source", "");
+    source.textContent = SOURCE_TAG;
+    header.append(label, source);
     return header;
   };
 
@@ -390,10 +385,13 @@ export function installRendererDelegationMention(
     const label = ownerDocument.createElement("span");
     label.className = "min-w-0 shrink truncate";
     label.textContent = labelText;
-    const detail = ownerDocument.createElement("span");
-    detail.className = "flex-1 truncate text-codex-description";
-    detail.textContent = detailText;
-    content.append(label, detail);
+    content.append(label);
+    if (detailText) {
+      const detail = ownerDocument.createElement("span");
+      detail.className = "flex-1 truncate text-codex-description";
+      detail.textContent = detailText;
+      content.append(detail);
+    }
     return content;
   };
 
@@ -426,18 +424,13 @@ export function installRendererDelegationMention(
     const locale = options.readLocale();
     const rows: HTMLElement[] = [];
     entries = [];
-    sourceTagged = false;
     if (targets.length > 0) {
       rows.push(sectionHeader(agentsTitle(locale)));
       for (const target of targets) {
         rows.push(
           optionRow(
             { kind: "agent", target },
-            rowContent(
-              createRendererAgentIcon(target.agent, 16, ownerDocument),
-              target.label,
-              target.agent,
-            ),
+            rowContent(createRendererAgentIcon(target.agent, 16, ownerDocument), target.label, ""),
           ),
         );
       }
