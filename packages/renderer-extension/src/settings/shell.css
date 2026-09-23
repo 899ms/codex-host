@@ -1239,11 +1239,13 @@
 .settings-connection-install-callout p,
 .settings-connection-error-summary p,
 .settings-connection-state-summary p,
-.settings-connection-issue-note {
+.settings-connection-issue-note,
+.settings-connection-compatibility {
   margin: 0;
   color: var(--settings-muted);
   font-size: 11px;
   line-height: 16px;
+  overflow-wrap: anywhere;
 }
 
 .settings-connection-install-button {

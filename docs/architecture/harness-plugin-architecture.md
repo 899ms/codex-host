@@ -55,7 +55,7 @@ Codex Desktop 协议、官方 app-server、Renderer 兼容绑定仍是 codexhost
 | OMP | 原生 RPC；权限模式、审批与提问、Subagent、后台自主 Turn、跨目录 Fork/Rollback | 权限切换可能重启原生连接；恢复时可能替换不可用 Model，不能复活旧 Thinking |
 | Grok | ACP 加扩展；审批、压缩、Credits、Fork/跨目录 Fork/Rollback | Permission Mode 在 Session 创建时固定，不能通过恢复后的普通配置写入补设 |
 | OpenCode | SDK/Server 事件流；固定 `/compact`、审批、提问、Diff、Fork/Rollback，不支持跨目录 Fork | 原生权限 API 有累加语义，恢复须尊重原生实际状态，不无条件重放旧权限 |
-| DeepSeek Harness | 插件仅支持精确 `0.1.2-rc.1` / `0.1.5-rc.1`，提供控制状态确认、自主 Turn、导入和托管 Web；Legacy 已移除 | V0/V3 日志与 Assistant 流不同；版本选择、checkpoint 隔离、原生状态确认、事件关联与认证须留在插件 |
+| DeepSeek Harness | 插件在 `0.1.2-rc.1` / `0.1.5-rc.1` / `0.1.5-rc.2` 已验证，其他 SemVer CLI 可尝试托管 Web 与原生协议；提供控制状态确认、自主 Turn 和导入；Legacy 已移除 | V0/V3 日志与 Assistant 流不同；版本选择、checkpoint 隔离、原生状态确认、事件关联与认证须留在插件 |
 | Antigravity | CLI `stream-json`；配置、工具、文件变化投影、Credits；不支持 Fork/Rollback | Adapter 自持历史补充记录及恢复逻辑；不得迁回 Host 或在重构时删除 |
 
 原生会话和恢复适配归插件负责，不意味着所有 Harness 都有可直接读取的完整原生 Transcript。Host 不建立第二份完整正文事实源；插件可以为自身恢复语义维护必要的私有记录。
@@ -446,7 +446,7 @@ Rust 继续拥有原生启动、进程管理、安装与平台集成。若平台
 - OpenCode 不错误重放权限；原生配置确认失败不发布虚假状态。
 - OMP Model 回退、缺失 Thinking、权限重启失败恢复、Subagent 和后台自主 Turn。
 - Claude 本地与 Broker 模式的现有行为、交互回调及后台延续。
-- DeepSeek `0.1.2-rc.1` / `0.1.5-rc.1` 分别验证，覆盖不支持版本拒绝、状态确认、事件关联、导入竞争、忙碌检查及 V0/V3 checkpoint 隔离。
+- DeepSeek `0.1.2-rc.1` / `0.1.5-rc.1` 已分别验证；`0.1.5-rc.2` 的真实 CLI Gate 已在固定依赖和 Web profile 启动时加载的 macOS 环境通过；聚焦测试覆盖非白名单版本探测、状态确认、事件关联、导入竞争、忙碌检查及 V0/V3 checkpoint 隔离。
 - Antigravity 历史补充记录、重启恢复与受支持文件变化展示。
 - 各 Harness 支持的精确 Fork、跨目录限制、Rollback 与稳定 Turn/Checkpoint 身份。
 - Usage/Credits 未知、刷新、失败与 Thread/Host 切换不串用数据。Codex 额度缓存、刷新及失效按 Account 隔离：已有 Thread 使用持久化绑定账号，草稿通过 `codexhost/account/usage/inspect` 按所选 `accountId` 读取；切换账号立即清除旧额度，过期异步响应不得覆盖新选择。未知或不可用账号不回退查询全局默认账号。

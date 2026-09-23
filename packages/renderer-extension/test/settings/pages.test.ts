@@ -767,6 +767,9 @@ describe("Renderer Connections page", () => {
     install.dispatch("click", { stopPropagation() {} });
     const panel = elementWithClass(content, "settings-harness-installation");
     expect(visibleText(panel)).toContain(expected);
+    expect(
+      visibleText(content).includes("已在 DSH 0.1.2-rc.1、0.1.5-rc.1 和 0.1.5-rc.2 上测试。"),
+    ).toBe(agent === "deepseek-harness");
     expect(visibleText(panel)).toContain("请在远程 Host 上安装。");
     expect(visibleText(panel)).not.toMatch(
       /选择本机系统|此页面不会自动执行|Windows ARM64|PATH|WSL|安装完成不代表已就绪/,
@@ -960,6 +963,7 @@ describe("Renderer Connections page", () => {
     );
     if (!dshRow) throw new Error("DeepSeek Harness row is not rendered");
     dshRow.dispatch("click", { target: null });
+    expect(visibleText(content)).toContain("其他版本可以尝试连接，但尚未验证。");
     const open = descendants(content).find(
       ({ dataset }) => dataset.connectionAction === "open-web-ui",
     );

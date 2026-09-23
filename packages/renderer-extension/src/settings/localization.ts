@@ -177,6 +177,7 @@ export interface RendererSettingsMessages {
   readonly launchPathSaveError: string;
   readonly connectionOpenInstallation: string;
   readonly connectionOpenHarnessWeb: string;
+  readonly connectionDeepSeekTestedVersions: string;
   readonly connectionInstall: string;
   readonly connectionInstallDescription: string;
   readonly connectionErrorTitle: string;
@@ -419,6 +420,8 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     "Could not save. Enter an existing absolute installation folder on this Host and check configuration permissions.",
   connectionOpenInstallation: "Show installation instructions",
   connectionOpenHarnessWeb: "Open DeepSeek Harness Web",
+  connectionDeepSeekTestedVersions:
+    "Tested with DSH 0.1.2-rc.1, 0.1.5-rc.1 and 0.1.5-rc.2. Other versions may connect, but have not been verified.",
   connectionInstall: "Install",
   connectionInstallDescription: "This Harness was not detected.",
   connectionErrorTitle: "Connection check failed",
@@ -672,6 +675,8 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   launchPathSaveError: "保存失败。请填写此 Host 上实际存在的安装目录绝对路径，并确认配置目录可写。",
   connectionOpenInstallation: "查看安装指引",
   connectionOpenHarnessWeb: "打开 DeepSeek Harness Web",
+  connectionDeepSeekTestedVersions:
+    "已在 DSH 0.1.2-rc.1、0.1.5-rc.1 和 0.1.5-rc.2 上测试。其他版本可以尝试连接，但尚未验证。",
   connectionInstall: "安装",
   connectionInstallDescription: "尚未检测到该 Harness。",
   connectionErrorTitle: "连接检查失败",
