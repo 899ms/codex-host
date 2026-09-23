@@ -51,6 +51,11 @@ import {
 import { installReasoningTranscriptSoftWrap } from "./renderer-transcript-dom.js";
 import { RendererCodexAccountState } from "./renderer-codex-account-state.js";
 import {
+  createRendererCodexUsageGate,
+  type RendererCodexUsageGate,
+  type RendererCodexUsageGateStatus,
+} from "./renderer-codex-usage-gate.js";
+import {
   decodeAntigravityTransportModelId,
   decodeClaudeTransportModelId,
   decodeDeepSeekHarnessTransportModelId,
@@ -566,6 +571,7 @@ interface MountedComposer {
   composer: Element;
   composerId: string;
   control: ComposerAgentControl;
+  codexUsageGate: RendererCodexUsageGate;
   modelTarget: readonly unknown[] | null;
   modelView: ExternalModelControlView;
   permissionModeView: ExternalPermissionModeControlView;
@@ -892,12 +898,23 @@ export function installRendererBindingProbe(
     );
   };
 
+  const showCodexUsageGateStatus = (
+    mounted: MountedComposer,
+    status: RendererCodexUsageGateStatus,
+  ): void => {
+    const title =
+      status === "unsupported"
+        ? rendererHarnessMessages(settingsLifecycle.locale).codexUsageGateUnavailable
+        : "";
+    if (mounted.control.root.title !== title) mounted.control.root.title = title;
+  };
+
   const renderMounted = (mounted: MountedComposer): void => {
     const accounts = composerCodexAccounts(mounted.composer);
     const currentCodexAccount = accounts?.accounts.find(
       ({ accountId }) => accountId === accounts.readyAccountId,
     );
-    renderComposerAgentControl(
+    const externalSubmissionReady = renderComposerAgentControl(
       mounted.control,
       controller.get(mounted.composer),
       adapterStatus.state,
@@ -911,6 +928,7 @@ export function installRendererBindingProbe(
       currentCodexAccount ?? null,
       mounted.ownershipStatus === "error",
     );
+    showCodexUsageGateStatus(mounted, mounted.codexUsageGate.update(externalSubmissionReady));
     if (mounted.control.usage) {
       mounted.control.usage.onOpen = () => {
         void refreshThreadUsage(
@@ -2464,6 +2482,7 @@ export function installRendererBindingProbe(
       composer,
       composerId: state.composerId,
       control,
+      codexUsageGate: createRendererCodexUsageGate(composer),
       modelTarget,
       modelView: inherited?.modelView ?? { status: "idle" },
       permissionModeView: inherited?.permissionModeView ?? { status: "idle" },
@@ -2542,6 +2561,7 @@ export function installRendererBindingProbe(
           window.clearTimeout(timer);
           usageRefreshTimers.delete(composer);
         }
+        mounted.codexUsageGate.dispose();
         disposeComposerAgentControl(mounted.control);
         mountedByComposer.delete(composer);
         continue;
@@ -2550,6 +2570,7 @@ export function installRendererBindingProbe(
       const hideCodexControls = controller.isSwitching(composer) || state.agent !== "codex";
       reconcileComposerNativeControls(mounted.control, hideCodexControls, hideCodexControls);
       if (refreshTargets) refreshMountedConversationTarget(mounted);
+      showCodexUsageGateStatus(mounted, mounted.codexUsageGate.refresh());
     }
     for (const editor of document.querySelectorAll(EDITOR_SELECTOR)) {
       const composer = composerForEditor(editor);
@@ -3008,6 +3029,7 @@ export function installRendererBindingProbe(
       for (const mounted of mountedByComposer.values()) {
         mounted.usageRequestGeneration += 1;
         usageRefreshAttempts.delete(mounted.composer);
+        mounted.codexUsageGate.dispose();
         disposeComposerAgentControl(mounted.control);
       }
       mountedByComposer.clear();
