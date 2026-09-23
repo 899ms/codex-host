@@ -2,11 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  HarnessResult,
-  HarnessSession,
-  OpenSessionInput,
-} from "@codexhost/harness-adapter";
+import type { HarnessResult, HarnessSession, OpenSessionInput } from "@codexhost/harness-adapter";
 import { FakeHarnessAdapter } from "@codexhost/harness-adapter/testing";
 import { MappingStore } from "@codexhost/mapping-store";
 import {
