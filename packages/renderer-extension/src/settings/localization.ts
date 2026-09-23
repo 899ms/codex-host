@@ -1,3 +1,8 @@
+import {
+  credentialImportEnglish,
+  credentialImportChinese,
+  type CredentialImportMessages,
+} from "./credential-import-messages.js";
 import type { DefaultRendererSettingsPageId } from "./pages.js";
 
 export const RENDERER_SETTINGS_LOCALES = ["en", "zh-CN"] as const;
@@ -18,6 +23,7 @@ export interface RendererSettingsLanguageControl {
 }
 
 export interface RendererSettingsMessages {
+  readonly credentialImports: CredentialImportMessages;
   readonly locale: RendererSettingsLocale;
   readonly title: string;
   readonly close: string;
@@ -101,13 +107,10 @@ export interface RendererSettingsMessages {
   readonly accountColumnAccount: string;
   readonly accountConnected: string;
   readonly accountDefaultBadge: string;
-  readonly accountColumnActions: string;
   readonly accountSearch: string;
   readonly accountEmpty: string;
   readonly accountNoMatches: string;
-  readonly accountNativeManaged: string;
   readonly accountNativeManagementHint: string;
-  readonly accountDetailsClose: string;
   readonly accountDefaultHint: string;
   readonly accountCreditsRemaining: string;
   readonly accountCreditsLoading: string;
@@ -238,6 +241,7 @@ export interface RendererSettingsMessages {
 }
 
 const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
+  credentialImports: credentialImportEnglish,
   locale: "en",
   title: "Settings",
   close: "Close settings",
@@ -339,15 +343,12 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   accountConnected: "Accounts",
   accountDefaultBadge: "Current",
   accountColumnAccount: "Account",
-  accountColumnActions: "Manage",
   accountSearch: "Search accounts or Agents…",
   accountEmpty:
     "No current identities found. Sign in through Codex Desktop or your Harness's native client.",
   accountNoMatches: "No matching accounts.",
-  accountNativeManaged: "Native management",
   accountNativeManagementHint:
     "This account comes from {harness}'s native authentication. This page only displays identity and limits; manage sign-in, sign-out and switching in the native client.",
-  accountDetailsClose: "Close account details",
   accountDefaultHint: "This is the current identity for all Codex Threads.",
   accountCreditsRemaining: "Remaining",
   accountCreditsLoading: "Loading limits…",
@@ -415,11 +416,10 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   launchPathLoadError: "Could not load launch settings. Reopen this detail panel to retry.",
   launchPathSaveError:
     "Could not save. Enter an existing absolute installation folder on this Host and check configuration permissions.",
-  connectionOpenInstallation: "Open official installation page",
+  connectionOpenInstallation: "Show installation instructions",
   connectionOpenHarnessWeb: "Open DeepSeek Harness Web",
   connectionInstall: "Install",
-  connectionInstallDescription:
-    "This Harness was not detected. Follow its official installation guide, then return here and run the check again.",
+  connectionInstallDescription: "This Harness was not detected.",
   connectionErrorTitle: "Connection check failed",
   connectionErrorLog: "Error log",
   connectionOpenIssue: "Open GitHub Issue",
@@ -499,6 +499,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
 });
 
 const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
+  credentialImports: credentialImportChinese,
   locale: "zh-CN",
   title: "设置",
   close: "关闭设置",
@@ -595,14 +596,11 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   accountConnected: "账号",
   accountDefaultBadge: "当前",
   accountColumnAccount: "账号",
-  accountColumnActions: "管理",
   accountSearch: "搜索账号或 Agent…",
   accountEmpty: "尚未识别到当前身份，请在 Codex Desktop 或对应 Harness 的原生客户端登录。",
   accountNoMatches: "没有匹配的账号。",
-  accountNativeManaged: "原生管理",
   accountNativeManagementHint:
     "此账号来自 {harness} 的原生登录。这里只读展示身份与额度；登录、退出和切换请在其原生客户端中完成。",
-  accountDetailsClose: "关闭账号详情",
   accountDefaultHint: "所有 Codex 会话当前使用此身份。",
   accountCreditsRemaining: "剩余",
   accountCreditsLoading: "正在读取额度…",
@@ -668,11 +666,10 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   launchPathLoading: "正在读取启动设置…",
   launchPathLoadError: "无法读取启动设置，请重新打开此详情面板重试。",
   launchPathSaveError: "保存失败。请填写此 Host 上实际存在的安装目录绝对路径，并确认配置目录可写。",
-  connectionOpenInstallation: "前往官方安装页面",
+  connectionOpenInstallation: "查看安装指引",
   connectionOpenHarnessWeb: "打开 DeepSeek Harness Web",
   connectionInstall: "安装",
-  connectionInstallDescription:
-    "尚未检测到该 Harness。请按照官方安装指南完成安装，然后返回此页面重新检查。",
+  connectionInstallDescription: "尚未检测到该 Harness。",
   connectionErrorTitle: "连接检查失败",
   connectionErrorLog: "错误日志",
   connectionOpenIssue: "提交 GitHub Issue",

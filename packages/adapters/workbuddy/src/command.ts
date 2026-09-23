@@ -140,7 +140,7 @@ export function workBuddyInvocation(
   const explicitDesktop =
     explicitExecutable &&
     ((platform === "win32" &&
-      /^(?:WorkBuddy|WorkBuddy AI)\.exe$/iu.test(
+      /^(?:WorkBuddy|WorkBuddy AI|WorkBuddyAI)\.exe$/iu.test(
         targetPath(platform).basename(explicitExecutable),
       )) ||
       (platform === "darwin" &&

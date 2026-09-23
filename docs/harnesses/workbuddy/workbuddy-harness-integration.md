@@ -13,10 +13,10 @@ WorkBuddy 作为独立的 `workbuddy` Harness 运行 WorkBuddy AI 随应用分�
 内置 `product.json` 将产品、认证端点和应用数据目录配置为 WorkBuddy；内部 CLI 入口仍名为 `codebuddy`，不表示它应被发现为独立的 `codebuddy` Harness。插件自动发现应用与其同一安装目录中的内置 CLI，不回退到 PATH 中的独立 CodeBuddy：
 
 - macOS：依次检查 `/Applications`、`~/Applications` 下的 `WorkBuddy AI.app` 和 `WorkBuddy.app`，使用 `Contents/MacOS/Electron` 与 `Contents/Resources/app.asar.unpacked/cli/bin/codebuddy`。
-- Windows：检查 PATH 及 `%LOCALAPPDATA%/Programs`、`%ProgramFiles%` 下的 `WorkBuddy AI`、`WorkBuddy`，匹配 `WorkBuddy AI.exe` 或 `WorkBuddy.exe` 及同目录 `resources/app.asar.unpacked/cli/bin/codebuddy`；不混用不同安装的可执行文件与 CLI。用户标准安装根依据[官方常见问题](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/FAQ)。路径发现和启动参数已通过模拟 Windows 文件布局测试，真实 Windows ACP 启动与会话仍待该平台验收。
+- Windows：检查 PATH 及 `%LOCALAPPDATA%/Programs`、`%ProgramFiles%` 下的 `WorkBuddy AI`、`WorkBuddy`、`WorkBuddyAI`，匹配 `WorkBuddy AI.exe`、`WorkBuddy.exe` 或新版安装器使用的 `WorkBuddyAI.exe`，并配对同目录 `resources/app.asar.unpacked/cli/bin/codebuddy`；不混用不同安装的可执行文件与 CLI。用户标准安装根依据[官方常见问题](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/FAQ)。路径发现和启动参数已通过模拟 Windows 文件布局测试。
 - Linux：官方当前[平台说明](https://www.workbuddy.ai/docs/workbuddy/From-Beginner-to-Expert-Guide/FQA)列出 macOS 和 Windows；没有已确认的 Linux App 安装布局，插件不猜测自动发现路径。
 
-标准布局下只需安装 WorkBuddy App，不需要另外全局安装 CLI，也不要求 App 窗口保持运行；应用内部打包路径并非 WorkBuddy 对外承诺的稳定接口。`CODEXHOST_WORKBUDDY_COMMAND` 支持应用安装目录，也可显式选择支持 `--acp` 的原生 CLI，或 Windows `WorkBuddy.exe` / `WorkBuddy AI.exe`、macOS WorkBuddy 应用内的 `Contents/MacOS/Electron`。明确指定 Desktop 入口时仍校验并使用同安装目录的内置 CLI，缺失时检查失败，不把 EXE 当裸 CLI 启动，也不静默换用其他安装。
+标准布局下只需安装 WorkBuddy App，不需要另外全局安装 CLI，也不要求 App 窗口保持运行；应用内部打包路径并非 WorkBuddy 对外承诺的稳定接口。`CODEXHOST_WORKBUDDY_COMMAND` 支持应用安装目录，也可显式选择支持 `--acp` 的原生 CLI，或 Windows `WorkBuddy.exe` / `WorkBuddy AI.exe` / `WorkBuddyAI.exe`、macOS WorkBuddy 应用内的 `Contents/MacOS/Electron`。明确指定 Desktop 入口时仍校验并使用同安装目录的内置 CLI，缺失时检查失败，不把 EXE 当裸 CLI 启动，也不静默换用其他安装。
 
 连接设置页的本地 WorkBuddy 右侧详情卡片填写应用安装目录，例如 `D:\program\WorkBuddy`，无需填写 `.exe` 或脚本。Adapter 自动校验该目录内的应用与内置脚本；目录不完整时不回退到其他安装。支持保存和清除；设置优先于命令环境变量，清除后恢复环境变量或自动发现。路径保存在 Host 数据目录，重启 codexhost 后应用，不切换运行中的 Session。详见[自定义启动路径设置](../../architecture/harness-plugin-runtime.md#自定义启动路径设置)。
 
@@ -56,9 +56,11 @@ WorkBuddy Profile 声明该目录编码；历史读取、跨目录 Fork 的临�
 
 WorkBuddy App 会把账号、版本和服务可用性共同解析出的产品快照交给其 Hosted CLI。小快照使用 `ACC_PRODUCT_CONFIG_V3`，较大的快照原子写入 WorkBuddy 配置根下的 `cache/acc-product-config-v3.json`，再通过 `ACC_PRODUCT_CONFIG_PATH` 传给子进程。若没有这份上下文，内置 CLI 会回退到随安装包发布的 `product.json`；WorkBuddy AI 5.5.2 内置的默认 `cli` Agent 在该回退配置中只暴露 Fast、Balanced、Primary 和 Deep。
 
-对于自动发现或显式 Desktop 入口配对的内置 CLI，插件会沿用现有的 WorkBuddy 产品快照文件，但不读取、记录它的内容，也不据此拼造 Host 模型目录；某些部署的快照可能包含敏感配置。调用方没有显式设置路径或任一内联产品配置环境变量时，插件检查 WorkBuddy 根目录及其 `cache` 均为非符号链接目录、快照为非符号链接且非空的普通文件，再传递 `ACC_PRODUCT_CONFIG_PATH`。POSIX 平台还校验当前用户所有权、目录不可由其他用户写入、文件不可由组或其他用户读取；Windows 文件隔离依赖原生目录 ACL，插件不以 POSIX mode/uid 判断 ACL。快照缺失或校验失败时保留内置 CLI 的四模型回退；显式指定独立 CLI 时不自动推断 WorkBuddy 私有缓存，但会保留调用方显式提供的产品配置环境。
+对于自动发现或显式 Desktop 入口配对的内置 CLI，插件会沿用现有的 WorkBuddy 产品快照文件。调用方没有显式设置路径或任一内联产品配置环境变量时，插件检查 WorkBuddy 根目录及其 `cache` 均为非符号链接目录、快照为非符号链接且非空的普通文件，再传递 `ACC_PRODUCT_CONFIG_PATH`。POSIX 平台还校验当前用户所有权、目录不可由其他用户写入、文件不可由组或其他用户读取；Windows 文件隔离依赖原生目录 ACL，插件不以 POSIX mode/uid 判断 ACL。快照缺失或校验失败时保留内置 CLI 的回退配置；显式指定独立 CLI 时不自动推断 WorkBuddy 私有缓存，但会保留调用方显式提供的产品配置环境。
 
-最终模型列表仍完全来自 ACP Session 的 `configOptions`，选择模型也等待 ACP 原生确认。`ACC_PRODUCT_CONFIG_PATH` 是 WorkBuddy 第一方 App 到 Hosted CLI 的实际兼容机制，但不是 ACP 标准或已公开承诺稳定的 WorkBuddy API，因此升级 WorkBuddy 后需要通过原生边界测试复核；插件不硬编码当前账号观察到的模型数量、名称或计费标签。小于 WorkBuddy 内联阈值的快照只存在于 App 进程环境且旧缓存会被删除，独立启动的 CodexHost 无法自动取得，这种情况下仍使用原生回退目录。
+macOS 保持 ACP 原生目录和选择行为，不从产品文件追加 Model。Windows 独立启动的 CLI 可能因无法继承 WorkBuddy App 进程内快照而得到不完整的 ACP 目录，因此插件在 Windows 上读取传给当前 CLI 的产品配置作为补偿：以 resolved snapshot 中 `agents[name="cli"].models` 为目录，只关联顶层 `models` 中对应项的 `id`、`name` 和非空 `credits`，不会把供内部 Agent 使用的全部顶层 Model 当作 CLI 目录。结果按原生 ID 与规范化显示名称去重并追加到 ACP Session 的 `configOptions`；ACP 已列出的模型保持在前。`credits` 只作为快照中的不透明倍率标签展示，空值不推断为免费。插件不会读取或投影认证、Endpoint、功能配置等其他快照内容。
+
+WorkBuddy Windows ACP 配置接口允许把上述 CLI 目录中的 Model ID 设为 `currentValue`，即使该 ID 没有重复出现在 ACP option rows 中；因此只有 Windows WorkBuddy Profile 允许这条补偿选择路径。选择仍使用同一个原生 Model ID 并等待 ACP `currentValue` 确认；真正的模型请求、账号授权、服务可用性和计费由后续原生 Turn 决定，Host 不重写路由或模拟响应。`ACC_PRODUCT_CONFIG_PATH` 是 WorkBuddy 第一方 App 到 Hosted CLI 的实际兼容机制，但不是 ACP 标准或已公开承诺稳定的 WorkBuddy API，因此升级 WorkBuddy 后需要通过原生边界测试复核。小于 WorkBuddy 内联阈值的快照只存在于 App 进程环境且旧缓存会被删除，独立启动的 CodexHost 无法自动取得，这种情况下使用内置 `product.json` 作为回退，只能得到安装包内置 CLI 目录，不能复现 App 当前的完整动态目录。
 
 ## Desktop 私有运行时边界
 
@@ -80,7 +82,7 @@ WorkBuddy 插件复用经过验证的 CodeBuddy ACP Session 语义，但保持�
 | Inspect、Create、多个 Turn、可写 Resume | 已实现。创建和恢复使用 WorkBuddy ACP Session；恢复校验 Harness 身份、cwd 与原生 Session 身份。 |
 | 流式文本、Reasoning 与工具 | 按 ACP 事件投影为公共 Item；工具调用、结果和原生权限请求保持同一调用身份。 |
 | Cancel | 使用原生取消；取消后的连接恢复沿用 ACP Session 的进程重建与状态恢复约束，不能把仅收到取消回执当作新 Turn 已可用。 |
-| Model、Thinking、Permission Mode | 使用 ACP 返回的原生配置目录并等待原生确认，不在 Host 中硬编码 WorkBuddy 模型或权限模式。 |
+| Model、Thinking、Permission Mode | macOS 使用 ACP 原生 Model List；Windows 将 resolved snapshot 的 CLI Model 目录与 ACP 配置目录合并去重，并允许选择补充项，选择后等待 ACP `currentValue` 确认。Thinking 和 Permission Mode 仍只使用 ACP 原生选项。 |
 | Question | 使用原生 interruption/question 流程映射到 Host Question；只调用公开会话支持的扩展。 |
 | Usage | 读取原生模型请求用量。未实现账号总额度，也不把 credits 推断为美元。 |
 | Native history | 从隔离的 WorkBuddy 原生历史读取当前父链，保留持久化用户消息 ID；缺失、歧义、损坏或不完整状态不会伪装成成功。 |

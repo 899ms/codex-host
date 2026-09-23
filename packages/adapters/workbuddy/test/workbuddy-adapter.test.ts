@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   codeBuddyProjectSlug,
   CodeBuddyError,
+  modelRef,
   type CodeBuddyClient,
   type CodeBuddyClientFactory,
 } from "@codexhost/adapter-codebuddy";
@@ -78,6 +79,77 @@ describe("WorkBuddy Adapter identity", () => {
         history: { fork: true, forkAcrossCwd: true, rollbackLastTurn: true },
         subagents: { observe: true, readTranscript: true },
       },
+    });
+  });
+
+  it("adds deduplicated WorkBuddy product-file Models to the selectable catalog", async () => {
+    const adapter = new WorkBuddyAdapter({
+      platform: "win32",
+      clientFactory: fakeFactory(),
+      productModels: async () => [
+        { id: "native/model", name: "Native Model" },
+        { id: "glm-5.2", name: "GLM-5.2", credits: "x0.79 credits" },
+        { id: "glm-5.2-alias", name: "glm-5.2", credits: "x0.79 credits" },
+      ],
+    });
+    adapters.push(adapter);
+
+    expect(await adapter.inspect({ cwd: process.cwd() })).toMatchObject({
+      status: "ready",
+      catalog: {
+        models: [{ label: "Native Model" }, { label: "GLM-5.2 · 0.79x" }],
+      },
+    });
+  });
+
+  it("selects a product-file Model even when ACP omits it from the option rows", async () => {
+    const adapter = new WorkBuddyAdapter({
+      platform: "win32",
+      clientFactory: fakeFactory(),
+      productModels: async () => [{ id: "glm-5.2", name: "GLM-5.2" }],
+    });
+    adapters.push(adapter);
+
+    const opened = await adapter.open({
+      kind: "create",
+      cwd: process.cwd(),
+      environment: {},
+      model: modelRef("glm-5.2"),
+    });
+
+    expect(opened).toMatchObject({
+      ok: true,
+      value: {
+        initialState: {
+          effectiveModel: modelRef("glm-5.2"),
+          resolvedModelLabel: "glm-5.2",
+        },
+      },
+    });
+  });
+
+  it("keeps macOS on the ACP catalog and rejects Models omitted by ACP", async () => {
+    const adapter = new WorkBuddyAdapter({
+      platform: "darwin",
+      clientFactory: fakeFactory(),
+      productModels: async () => [{ id: "glm-5.2", name: "GLM-5.2" }],
+    });
+    adapters.push(adapter);
+
+    expect(await adapter.inspect({ cwd: process.cwd() })).toMatchObject({
+      status: "ready",
+      catalog: { models: [{ label: "Native Model" }] },
+    });
+    expect(
+      await adapter.open({
+        kind: "create",
+        cwd: process.cwd(),
+        environment: {},
+        model: modelRef("glm-5.2"),
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "invalidRequest" },
     });
   });
 

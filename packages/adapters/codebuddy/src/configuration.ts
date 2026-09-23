@@ -50,7 +50,10 @@ export function nativeModel(ref: HarnessModelRef): string {
   return value;
 }
 
-export function configuration(value: unknown) {
+export function configuration(
+  value: unknown,
+  profile: CodeBuddyRuntimeProfile = CODEBUDDY_RUNTIME_PROFILE,
+) {
   const options = rows(value);
   const get = (id: string) => options.find((option) => option.id === id) ?? {};
   const model = get("model"),
@@ -64,7 +67,12 @@ export function configuration(value: unknown) {
     ref: modelRef(text(option.value)),
     label: text(option.name),
   }));
-  const currentModel = models.find((item) => item.ref.id === modelRef(text(model.currentValue)).id);
+  const currentModelRef = modelRef(text(model.currentValue));
+  let currentModel = models.find((item) => item.ref.id === currentModelRef.id);
+  if (!currentModel && profile.allowUnlistedModelSelection) {
+    currentModel = { ref: currentModelRef, label: text(model.currentValue) };
+    models.push(currentModel);
+  }
   if (!currentModel)
     throw new CodeBuddyError("protocolError", "ACP did not report a valid current Model");
   const catalog = harnessModelCatalogSchema.parse({
@@ -99,8 +107,13 @@ export function configuration(value: unknown) {
   return { catalog, permissionModes, state, options };
 }
 
-export function confirmedConfiguration(response: unknown, id: string, value: string) {
-  const result = configuration(record(response).configOptions);
+export function confirmedConfiguration(
+  response: unknown,
+  id: string,
+  value: string,
+  profile: CodeBuddyRuntimeProfile = CODEBUDDY_RUNTIME_PROFILE,
+) {
+  const result = configuration(record(response).configOptions, profile);
   if (result.options.find((option) => option.id === id)?.currentValue !== value) {
     throw new CodeBuddyError("protocolError", `ACP did not confirm ${id}`);
   }

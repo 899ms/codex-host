@@ -287,6 +287,17 @@ describe("CodeBuddy native Adapter", () => {
     });
   });
 
+  it("keeps unlisted Model selection disabled for the ordinary CodeBuddy profile", async () => {
+    const { adapter } = setup();
+    const session = await create(adapter);
+
+    expect(
+      await session.execute({ type: "model.select", model: modelRef("not-in-native-options") }),
+    ).toMatchObject({
+      error: { code: "invalidRequest", message: expect.stringContaining("Unavailable CodeBuddy") },
+    });
+  });
+
   it("confirms native configuration and rejects an unacknowledged selection", async () => {
     const { adapter, native } = setup();
     const session = await create(adapter);

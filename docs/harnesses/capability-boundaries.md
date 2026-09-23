@@ -17,6 +17,10 @@ Cursor 当前 ACP 没有 Usage、Fork、回滚或上下文压缩出口。macOS/L
 
 Agent 间任务协作目前是单向的：正常 Cursor Session 可以通过原生 MCP 向其他 Harness 委派、查询及跟进任务。无人值守入站需要确认原生 Full Access 已生效，但 Cursor 的 `--force` 可能被团队策略静默降级，而 ACP 只公布 Agent/Plan/Ask，不能确认最终审批策略，因此仍返回 `unsupported`。这不同于缺少向外委派能力，能力表分别标明。
 
+## Pi subagent 插件
+
+Pi Adapter 接入 `pi-subagents`（nicobailon）的异步 Host 状态与检查协议，以及同步 workflow 的 `workflowChildren` 摘要，复用公共子 Thread 和渲染链路。异步转写是原生有界窗口；同步 workflow 从父结果定位只读子 Session，文件不可用时可展示明确标注的原生结果摘要。没有已支持身份协议的同步单 Agent 调用及其他同名插件不自动兼容。详见 [Pi subagent 映射](pi/pi-subagents.md)。
+
 ## Pi 权限模式
 
 已核对本机 Pi `0.85.1` 的 RPC、get_state 和类型定义，没有原生会话权限模式目录或权限切换入口；其默认工具执行方式不等同于一个可选择的 Permission Mode。`--tools` / `--exclude-tools` 是工具装载过滤，`--approve` 是项目文件信任，均不能冒充统一的只读/询问/完全访问权限策略。

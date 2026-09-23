@@ -3,6 +3,11 @@ import {
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
 } from "@codexhost/shared-contracts";
+import {
+  CREDENTIAL_IMPORTS_METHOD,
+  credentialImportsParamsSchema,
+} from "@codexhost/shared-contracts";
+import { handleCredentialImports } from "./credential-imports.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
@@ -230,6 +235,8 @@ export interface AppServerHostOptions {
   /** Defaults to true. A listener that shares one store across sessions owns closing it. */
   closeMappingStoreOnExit?: boolean;
   spawnOfficial?: typeof spawn;
+  /** Grace period for each official app-server stop step. Tests shorten it. */
+  officialCloseTimeoutMs?: number;
   createOfficialConnection?: () =>
     OfficialAppServerConnection | Promise<OfficialAppServerConnection>;
   accountControl?: CodexAccountControl;
@@ -565,6 +572,9 @@ export class AppServerHost {
                   ...(this.#options.spawnOfficial
                     ? { spawnOfficial: this.#options.spawnOfficial }
                     : {}),
+                  ...(this.#options.officialCloseTimeoutMs === undefined
+                    ? {}
+                    : { closeTimeoutMs: this.#options.officialCloseTimeoutMs }),
                 }),
           ),
       });
@@ -967,6 +977,33 @@ export class AppServerHost {
       request.method === "codexhost/account/refresh"
     ) {
       this.#dispatchDesktopRequest(() => this.#handleCodexAccountRequest(request));
+      return;
+    }
+    if (request.method === CREDENTIAL_IMPORTS_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        if (!credentialImportsParamsSchema.safeParse(request.params).success) {
+          await this.#writer.json(rpcError(request, -32602, "Invalid credential import request"));
+          return;
+        }
+        await this.#waitForPlugins();
+        try {
+          const result = await handleCredentialImports(
+            request.params,
+            this.#externalAdapters.values(),
+            this.#options.environment ?? process.env,
+          );
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        } catch {
+          // Credential/native SDK exceptions can include sensitive input. Never forward them.
+          await this.#writer.json(
+            rpcError(
+              request,
+              -32077,
+              "Credential operation failed. Check the source login, choose an unused Provider name, and verify Pi configuration access.",
+            ),
+          );
+        }
+      });
       return;
     }
     if (request.method === "codexhost/harness/accounts/sources") {

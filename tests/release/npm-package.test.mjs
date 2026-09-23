@@ -227,21 +227,27 @@ syncBuiltinESMExports();
 `,
   );
 
-  return { launcherPath, npmCliPath, preloadPath };
+  return { launcherPath, npmCliPath, preloadPath, platformRoot };
 }
 
-async function runLauncherLifecycle(platform, { noColor = false, tty = false } = {}) {
+async function runLauncherLifecycle(
+  platform,
+  { locale = "en_US.UTF-8", noColor = false, tty = false, platformVersion = "0.1.0" } = {},
+) {
   const root = await temporaryDirectory();
   try {
-    const { launcherPath, npmCliPath, preloadPath } = await createLauncherLifecycleFixture(
-      root,
-      platform,
+    const { launcherPath, npmCliPath, preloadPath, platformRoot } =
+      await createLauncherLifecycleFixture(root, platform);
+    await writeFile(
+      path.join(platformRoot, "package.json"),
+      JSON.stringify({ name: `@codexhost/cli-${platform}-x64`, version: platformVersion }),
     );
     const environment = {
       ...process.env,
       CODEXHOST_STARTUP_TRACE: "1",
       CODEXHOST_TEST_PLATFORM: platform,
       CODEXHOST_TEST_TTY: tty ? "1" : "0",
+      LC_ALL: locale,
       npm_execpath: npmCliPath,
     };
     if (tty) environment.TERM = "xterm-256color";
@@ -388,7 +394,7 @@ describe("npm package release", () => {
     });
   });
 
-  it("generates OpenCode and pinned opencodex notices from repository license assets", async () => {
+  it("generates SDK notices from repository license assets", async () => {
     const root = process.cwd();
     const output = await temporaryDirectory();
     try {
@@ -396,14 +402,6 @@ describe("npm package release", () => {
       const notice = await readFile(path.join(output, "THIRD_PARTY_NOTICES.txt"), "utf8");
       const license = await readFile(
         path.join(output, "licenses/OpenCode-SDK-LICENSE.txt"),
-        "utf8",
-      );
-      const opencodexLicense = await readFile(
-        path.join(output, "licenses/opencodex-LICENSE.txt"),
-        "utf8",
-      );
-      const opencodexSource = await readFile(
-        path.join(root, "third-party/opencodex.LICENSE"),
         "utf8",
       );
       expect(
@@ -424,12 +422,6 @@ describe("npm package release", () => {
       expect(notice).toContain("@opencode-ai/sdk");
       expect(notice).toContain("licenses/OpenCode-SDK-LICENSE.txt");
       expect(license).toContain("Copyright (c) 2025 opencode");
-      expect(notice).toContain(
-        "opencodex native profiles (2d4d7a22381a2e497c2442902104619e25f937c7)",
-      );
-      expect(notice).toContain("License text: licenses/opencodex-LICENSE.txt");
-      expect(opencodexLicense).toBe(opencodexSource);
-      expect(opencodexLicense).toContain("MIT License");
     } finally {
       await rm(output, { recursive: true, force: true });
     }
@@ -465,6 +457,16 @@ describe("npm package release", () => {
     expect(manifest.optionalDependencies).toEqual(
       Object.fromEntries(Object.values(NPM_PLATFORM_PACKAGE_NAMES).map((name) => [name, "0.1.0"])),
     );
+  });
+
+  it("prints the star prompt before npm launch setup begins", () => {
+    const source = createNpmBinLauncherSource({ version: "0.1.0" });
+    const promptCall = source.indexOf("  printStarPrompt();");
+    const platformResolution = source.indexOf("const platformPackages =");
+
+    expect(promptCall).toBeGreaterThanOrEqual(0);
+    expect(promptCall).toBeLessThan(platformResolution);
+    expect(source.match(/\n {2}printStarPrompt\(\);/gu)).toHaveLength(1);
   });
 
   it("injects package resources when the user runs codexhost with no args", () => {
@@ -582,11 +584,30 @@ describe("npm package release", () => {
     expect(result.stderr).toContain("received Launcher ready");
     expect(result.stderr).toContain("Launcher exited after ready");
     expect(result.stdout).toContain(
-      "⭐ Like codexhost? Star us on GitHub: https://github.com/BytePioneer-AI/codex-host",
+      "⭐ If this project helps you, please give us a Star ⭐\n" +
+        "https://github.com/BytePioneer-AI/codex-host",
     );
     expect(readme).toContain("On Windows, the command remains attached until Codex Desktop exits");
     expect(readme).toContain("process trees of completed commands");
   });
+
+  it.each(["win32", "darwin", "linux"])(
+    "rejects mismatched platform payloads before spawning on %s",
+    async (platform) => {
+      for (const platformVersion of ["0.0.9", "0.2.0", null]) {
+        const result = await runLauncherLifecycle(platform, { platformVersion });
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain("platform package version mismatch");
+        expect(result.stderr).toContain(`@codexhost/cli-${platform}-x64`);
+        expect(result.stderr).toContain("expected 0.1.0");
+        expect(result.stderr).toContain(
+          `npm install -g @codexhost/cli@0.1.0 @codexhost/cli-${platform}-x64@0.1.0`,
+        );
+        expect(result.stderr).not.toContain("received Launcher ready");
+        expect(result.stdout).not.toContain("startup:");
+      }
+    },
+  );
 
   it.each(["darwin", "linux"])("returns after the ready handshake on %s", async (platform) => {
     const result = await runLauncherLifecycle(platform);
@@ -596,7 +617,18 @@ describe("npm package release", () => {
     expect(result.stderr).toContain("received Launcher ready");
     expect(result.stderr).not.toContain("Launcher exited after ready");
     expect(result.stdout).toBe(
-      "⭐ Like codexhost? Star us on GitHub: https://github.com/BytePioneer-AI/codex-host\n",
+      "⭐ If this project helps you, please give us a Star ⭐\n" +
+        "https://github.com/BytePioneer-AI/codex-host\n",
+    );
+  });
+
+  it("uses a Chinese star prompt for a Chinese locale", async () => {
+    const result = await runLauncherLifecycle("darwin", { locale: "zh_CN.UTF-8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      "⭐ 如果这个项目对你有帮助，请给我们一个 Star ⭐\n" +
+        "https://github.com/BytePioneer-AI/codex-host\n",
     );
   });
 
@@ -606,12 +638,13 @@ describe("npm package release", () => {
 
     expect(colored.status, colored.stderr).toBe(0);
     expect(colored.stdout).toBe(
-      "\u001B[33m⭐ Like codexhost? Star us on GitHub:\u001B[0m " +
+      "\u001B[33m⭐ If this project helps you, please give us a Star ⭐\u001B[0m\n" +
         "\u001B[36mhttps://github.com/BytePioneer-AI/codex-host\u001B[0m\n",
     );
     expect(plain.status, plain.stderr).toBe(0);
     expect(plain.stdout).toBe(
-      "⭐ Like codexhost? Star us on GitHub: https://github.com/BytePioneer-AI/codex-host\n",
+      "⭐ If this project helps you, please give us a Star ⭐\n" +
+        "https://github.com/BytePioneer-AI/codex-host\n",
     );
   });
 
@@ -688,7 +721,6 @@ describe("npm package release", () => {
       });
       expect(paths).toEqual(expectedNpmPackagePaths(target));
       expect(paths).toContain("licenses/OpenCode-SDK-LICENSE.txt");
-      expect(paths).toContain("licenses/opencodex-LICENSE.txt");
       expect(paths).not.toContain("runtime/node");
       expect(paths).toContain("bin/codexhost");
       expect(paths).toContain("libexec/codexhost-shim");
