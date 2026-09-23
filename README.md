@@ -233,7 +233,7 @@ CodexHost does it differently:
       <sub><strong>Contributions are welcome.</strong></sub>
     </td>
     <td align="center">
-      <img width="230" alt="WeChat group QR code" src="https://github.com/user-attachments/assets/e40b162e-a961-43ac-9728-af59890c4d72" />
+      <img width="230" alt="WeChat group QR code" src="docs/imgs/wechat-qrcode.jpg" />
     </td>
   </tr>
 </table>

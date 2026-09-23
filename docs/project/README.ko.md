@@ -232,7 +232,7 @@ CodexHost는 다른 방식을 택합니다.
       <sub><strong>함께 기여해 주세요.</strong></sub>
     </td>
     <td align="center">
-      <img width="230" alt="위챗 그룹 QR 코드" src="https://github.com/user-attachments/assets/e40b162e-a961-43ac-9728-af59890c4d72" />
+      <img width="230" alt="위챗 그룹 QR 코드" src="../imgs/wechat-qrcode.jpg" />
     </td>
   </tr>
 </table>

@@ -232,7 +232,7 @@ CodexHost 的做法不同：
       <sub><strong>欢迎一起贡献~ </strong></sub>
     </td>
     <td align="center">
-      <img width="230" alt="7ba6eda891ba4c8d091f2a71a8b8e81d" src="https://github.com/user-attachments/assets/0e3c7269-c0c5-4f62-984a-f78b59166d6d" />
+      <img width="230" alt="微信群二维码" src="../imgs/wechat-qrcode.jpg" />
     </td>
   </tr>
 </table>
