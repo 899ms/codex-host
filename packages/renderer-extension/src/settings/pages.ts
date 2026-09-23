@@ -371,9 +371,9 @@ function updatesPage(
         notes.replaceChildren();
       };
 
-      // A request that never reached the update service (bridge unavailable,
-      // timeout) is not something the user can fix by retrying here. Point them
-      // at the manual download and keep the internal detail out of the UI.
+      // Failed requests point at the manual download without exposing internal
+      // detail. A start timeout is handled separately: the Host may still be
+      // updating, so continue reading status rather than retrying the start.
       const renderRequestFailure = (error: unknown): void => {
         console.error("codexhost update request failed", error);
         renderPendingStatus(
@@ -399,11 +399,17 @@ function updatesPage(
             {
               success(result) {
                 const message = statusMessage(result.status, messages);
-                if (isPendingStatus(result.status)) scheduleStatusPoll(client);
                 if (message) renderPendingStatus(result.status, message);
+                if (result.status === null || isPendingStatus(result.status)) {
+                  scheduleStatusPoll(client);
+                }
               },
               failure(error) {
-                renderRequestFailure(error);
+                if (error instanceof RendererUpdateRequestTimeoutError) {
+                  scheduleStatusPoll(client);
+                } else {
+                  renderRequestFailure(error);
+                }
               },
             },
           );
@@ -458,7 +464,11 @@ function updatesPage(
             },
             failure(error) {
               pending = false;
-              renderRequestFailure(error);
+              if (error instanceof RendererUpdateRequestTimeoutError) {
+                scheduleStatusPoll(client, true);
+              } else {
+                renderRequestFailure(error);
+              }
             },
           },
         );

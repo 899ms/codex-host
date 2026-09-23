@@ -20,6 +20,10 @@ vi.mock("../../src/settings/icons.js", () => ({
 
 import { RendererSettingsPageScope } from "../../src/settings/core.js";
 import {
+  RENDERER_UPDATE_REQUEST_TIMEOUT_MS,
+  RendererUpdateRequestTimeoutError,
+} from "../../src/settings/update-request.js";
+import {
   defaultImportName,
   mountCredentialImports,
 } from "../../src/settings/credential-imports.js";
@@ -1241,6 +1245,70 @@ describe("Renderer Codex Accounts page", () => {
 });
 
 describe("Renderer Updates page", () => {
+  it.each(["succeeded", "failed"] as const)(
+    "keeps polling after start/status timeouts until the Host reports %s",
+    async (terminalPhase) => {
+      vi.useFakeTimers();
+      const request = deferred<{ status: UpdateStatus }>();
+      const client = {
+        checkUpdate: vi.fn(async () => updateCheck()),
+        startUpdate: vi.fn(() => request.promise),
+        readUpdateStatus: vi
+          .fn<() => Promise<{ status: UpdateStatus | null }>>()
+          .mockRejectedValueOnce(new RendererUpdateRequestTimeoutError())
+          .mockResolvedValueOnce({ status: null })
+          .mockResolvedValueOnce({ status: updateStatus("prepared") })
+          .mockResolvedValueOnce({ status: updateStatus("downloading") })
+          .mockResolvedValueOnce({ status: updateStatus(terminalPhase) }),
+      };
+      const page = createDefaultRendererSettingsPages(undefined, () => client).find(
+        ({ id }) => id === "updates",
+      );
+      if (!page) throw new Error("Updates page is not registered");
+      const document = new FakeDocument();
+      const content = document.createElement("main");
+      const scope = new RendererSettingsPageScope();
+      const cleanup = page.mount({
+        content: content as unknown as HTMLElement,
+        signal: scope.signal,
+        runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        const panel = elementWithClass(content, "settings-update-panel");
+        const button = descendants(panel).find(({ tagName }) => tagName === "button");
+        if (!button) throw new Error("Update button is not rendered");
+        button.dispatch("click");
+        await vi.advanceTimersByTimeAsync(RENDERER_UPDATE_REQUEST_TIMEOUT_MS);
+        expect(panel.dataset.updateState).toBe("pending");
+        for (const [index, phase] of [
+          "pending",
+          "pending",
+          "prepared",
+          "downloading",
+          terminalPhase,
+        ].entries()) {
+          expect(document.defaultView.setTimeout).toHaveBeenCalledTimes(index + 1);
+          const poll = vi.mocked(document.defaultView.setTimeout).mock.calls.at(-1)?.[0];
+          if (typeof poll !== "function") throw new Error("Missing status poll callback");
+          poll();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(panel.dataset.updateState).toBe(phase);
+        }
+        expect(client.startUpdate).toHaveBeenCalledOnce();
+        expect(client.readUpdateStatus).toHaveBeenCalledTimes(5);
+        expect(document.defaultView.setTimeout).toHaveBeenCalledTimes(5);
+        request.resolve({ status: updateStatus("prepared") });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(panel.dataset.updateState).toBe(terminalPhase);
+      } finally {
+        cleanup?.();
+        scope.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     [updateStatus("prepared"), "正在准备更新..."],
     [updateStatus("waiting-for-exit"), "正在等待应用退出..."],
