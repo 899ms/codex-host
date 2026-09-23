@@ -3,16 +3,20 @@ import {
   harnessCommandCatalogSchema,
   type HarnessCommandCatalog,
 } from "@codexhost/shared-contracts";
-import type { HarnessCommandInvocation, HarnessResult } from "@codexhost/harness-adapter";
+import {
+  isExcludedLiveCommand,
+  type HarnessCommandInvocation,
+  type HarnessResult,
+} from "@codexhost/harness-adapter";
 
-// Model changes use session/set_model so the Host sees confirmed configuration.
-// reset would invalidate Host history; queue/steer need overlapping prompt streams.
-const SUPPORTED_COMMANDS = new Set(["help", "tools", "context", "compress", "version"]);
+// The common exclusions cover Hermes' unsuitable commands: model changes use
+// session/set_model so the Host sees confirmed configuration, reset would
+// invalidate Host history, and queue/steer need overlapping prompt streams.
 
 export function hermesCommandCatalog(commands: readonly AvailableCommand[]): HarnessCommandCatalog {
   return harnessCommandCatalogSchema.parse({
     commands: commands
-      .filter((command) => SUPPORTED_COMMANDS.has(command.name))
+      .filter((command) => !isExcludedLiveCommand(command.name, "command"))
       .map((command) => ({
         id: `hermes.${command.name}`,
         invocation: `/${command.name}`,

@@ -1,9 +1,5 @@
-import {
-  harnessCommandCatalogSchema,
-  harnessCommandDescriptorSchema,
-  type HarnessCommandCatalog,
-  type HarnessCommandDescriptor,
-} from "@codexhost/shared-contracts";
+import { liveHarnessCommandPrompt, mergeLiveHarnessCommands } from "@codexhost/harness-adapter";
+import type { HarnessCommandCatalog } from "@codexhost/shared-contracts";
 
 /** Slash command as reported by the Claude Agent SDK (`supportedCommands`). */
 export interface ClaudeSlashCommand {
@@ -21,9 +17,24 @@ export interface ClaudeSlashCommandSnapshot {
 
 const DYNAMIC_ID_PREFIX = "claude.slash.";
 
-function dynamicCommandId(name: string): string {
-  return `${DYNAMIC_ID_PREFIX}${name.replace(/[^A-Za-z0-9._:-]/gu, "-")}`.slice(0, 128);
-}
+/**
+ * Claude-specific additions to the common exclusions: account and usage
+ * settings, setup doctors, cloud agents, removed or renamed commands, and the
+ * server-driven workflow entry points.
+ */
+const CLAUDE_EXCLUDED_COMMANDS = [
+  "advisor",
+  "agents",
+  "design-consent",
+  "design-revoke",
+  "doctor",
+  "extra-usage",
+  "import",
+  "team-onboarding",
+  "ultrareview",
+  "usage-credits",
+  "workflow-launch-exec",
+];
 
 export function parseClaudeSlashCommands(value: unknown): ClaudeSlashCommand[] {
   if (!Array.isArray(value)) return [];
@@ -42,38 +53,21 @@ export function parseClaudeSlashCommands(value: unknown): ClaudeSlashCommand[] {
   });
 }
 
-/**
- * Built-in commands keep their dedicated handling; every other command the
- * live Session reports is appended. Dynamic entries always accept text so the
- * Composer claims them for the user to complete instead of running blindly.
- */
+/** Built-ins plus the live commands and skills of the started native Session. */
 export function claudeLiveCommandCatalog(
   builtIns: HarnessCommandCatalog,
   snapshot: ClaudeSlashCommandSnapshot | null,
 ): HarnessCommandCatalog {
-  if (!snapshot) return builtIns;
-  const invocations = new Set(builtIns.commands.map(({ invocation }) => invocation));
-  const ids = new Set<string>(builtIns.commands.map(({ id }) => id));
-  const dynamic: HarnessCommandDescriptor[] = [];
-  for (const command of snapshot.commands) {
-    const invocation = `/${command.name}`;
-    const id = dynamicCommandId(command.name);
-    if (invocations.has(invocation) || ids.has(id)) continue;
-    const description = command.description.trim().slice(0, 512);
-    const parsed = harnessCommandDescriptorSchema.safeParse({
-      id,
-      invocation,
-      label: command.name.slice(0, 128),
-      ...(description ? { description } : {}),
-      argumentMode: "text",
-      kind: snapshot.skillNames.has(command.name) ? "skill" : "command",
-    });
-    if (!parsed.success) continue;
-    invocations.add(invocation);
-    ids.add(id);
-    dynamic.push(parsed.data);
-  }
-  return harnessCommandCatalogSchema.parse({ commands: [...builtIns.commands, ...dynamic] });
+  return mergeLiveHarnessCommands(
+    builtIns,
+    DYNAMIC_ID_PREFIX,
+    snapshot?.commands.map((command) => ({
+      name: command.name,
+      description: command.description,
+      kind: snapshot.skillNames.has(command.name) ? ("skill" as const) : ("command" as const),
+    })) ?? null,
+    { names: CLAUDE_EXCLUDED_COMMANDS },
+  );
 }
 
 /** Prompt text for a dynamic command, or null when the id is not dynamic. */
@@ -82,9 +76,5 @@ export function claudeDynamicCommandPrompt(
   commandId: string,
   argumentText: string | undefined,
 ): string | null {
-  if (!commandId.startsWith(DYNAMIC_ID_PREFIX)) return null;
-  const descriptor = catalog.commands.find(({ id }) => id === commandId);
-  if (!descriptor) return null;
-  const text = argumentText?.trim();
-  return text ? `${descriptor.invocation} ${text}` : descriptor.invocation;
+  return liveHarnessCommandPrompt(catalog, DYNAMIC_ID_PREFIX, commandId, argumentText);
 }

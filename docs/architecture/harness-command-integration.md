@@ -19,7 +19,7 @@ Use `none` when the command has no argument and `text` when it accepts trailing 
 
 ## 2. Register it in the owning Adapter
 
-Declare a static `HarnessAdapter.commandCatalog`. Reading this metadata must not call `inspect()`, connect to a native service, or open a Session. Keep `session.commands.list()` consistent with this catalog for existing execution clients. Implement execution in the owning Adapter and validate:
+Declare a static `HarnessAdapter.commandCatalog`. Reading this metadata must not call `inspect()`, connect to a native service, or open a Session. `session.commands.list()` returns the same built-ins, plus any live native commands described in [Live native catalogs](#live-native-catalogs). Implement execution in the owning Adapter and validate:
 
 - command ID;
 - argument shape;
@@ -27,6 +27,8 @@ Declare a static `HarnessAdapter.commandCatalog`. Reading this metadata must not
 - native Harness availability.
 
 Do not add a generic raw-RPC passthrough.
+
+Descriptors may set `kind: "skill"` when the Harness itself reports the entry as a skill; otherwise omit `kind` (treated as a command). Never infer skills from names.
 
 ## 3. Add the native translation
 
@@ -48,6 +50,31 @@ The command button belongs to the active external Harness controls, near the Com
 For typed submission, the Host first checks for a leading slash-command token (ignoring leading whitespace). Only command candidates have trailing whitespace removed before catalog matching; ordinary prompts retain their original text and skip command catalog inspection. Unknown slash commands are rejected.
 
 Only add Renderer-specific code when the command needs a new presentation or interaction.
+
+## Live native catalogs
+
+When a running native Session reports its own commands and skills, the Adapter appends them to its built-ins with `LiveHarnessCommandCatalog` / `mergeLiveHarnessCommands` from `@codexhost/harness-adapter`:
+
+- built-ins keep their dedicated handling and win on name clashes;
+- live entries get a namespaced id (`<harness>.slash.<name>`), `argumentMode: "text"` so the Composer claims them for the user to complete, and `kind` from native metadata;
+- names containing whitespace are skipped;
+- execution sends the native slash text (`/name arguments`) as an ordinary prompt Turn;
+- the listing never starts a native process; before the Session's process starts only built-ins are reported.
+
+Live commands are filtered by a blocklist, never an allowlist. `COMMON_EXCLUDED_LIVE_COMMANDS` in `@codexhost/harness-adapter` lists native commands that replace or reset the Session behind the Host's history, change Desktop-owned configuration (Model, effort, permissions), change trust or approval policy, need a native login or terminal UI, manage plugins or MCP, or start work that outlives the Turn (loops, schedules, background jobs, goals); names starting with `__` or `hooks-` are excluded too. The common list never hides skills, so a user skill is not lost to a name clash; each Adapter adds its own names, which apply to skills as well. Curated Adapter built-ins are not filtered. Because the Host only runs catalog commands, an excluded command is also rejected when typed.
+
+| Harness | Native source | Skill signal | Adapter exclusions beyond the common list |
+| --- | --- | --- | --- |
+| Claude Code | SDK `initializationResult().commands`, `commands_changed` | `init` system message `skills` | account and usage settings, `doctor`, `ultrareview`, removed or renamed commands, workflow entry points |
+| Pi | RPC `get_commands` on each listing | `source: "skill"` | pi-subagents run management and profile rewriting, Host-internal `subagents-inspect-rpc` |
+| Grok | ACP `available_commands_update` | `_meta.path` is a `SKILL.md`, or `_meta.qualifiedName` | — |
+| Kiro CLI | ACP `available_commands_update` | `_meta.kiro.type: "skill"` | — |
+| OMP | RPC `available_commands_update` event | `source: "skill"` | every `source: "builtin"` entry (terminal UI commands) |
+| CodeBuddy | ACP `available_commands_update` | `_meta.type: "skill"` | its own reviewed list |
+| Cursor CLI | ACP push | none (common list applies to every entry) | `update-cli-config` |
+| Qoder, Hermes | SDK or ACP push | none (common list applies to every entry) | — |
+
+WorkBuddy, DeepSeek Harness and OpenCode deliberately keep static catalogs. Antigravity CLI has no native listing interface.
 
 ## 5. Add focused tests
 
