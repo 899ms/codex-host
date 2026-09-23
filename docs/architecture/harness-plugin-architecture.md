@@ -96,7 +96,7 @@ Codex Desktop 协议、官方 app-server、Renderer 兼容绑定仍是 codexhost
 
 ### 2.4 可选能力尚未贯通
 
-**Session Import：**本地共享 RPC、Host Importer 和设置页面已通用化，Pi 与上述两个 DSH 版本共用同一路径。Adapter 通过 `listCandidates()` 提供元数据，通过 `resolveCandidate(id)` 重新验证完整原生引用；Host 保留去重、并发、忙碌检查与临时记录清理。远程和 CC Broker 导入尚未扩展，见[当前导入契约](harness-session-import.md)。
+**Session Import：**本地共享 RPC、Host Importer 和设置页面已通用化，Pi 与 DSH 共用同一路径；DSH 已验证 `0.1.2-rc.1`、`0.1.5-rc.1` 和 `0.1.5-rc.2`，其他 SemVer 版本可尝试连接，仍须通过原生协议校验。Adapter 通过 `listCandidates()` 提供元数据，通过 `resolveCandidate(id)` 重新验证完整原生引用；Host 保留去重、并发、忙碌检查与临时记录清理。远程和 CC Broker 导入尚未扩展，见[当前导入契约](harness-session-import.md)。
 
 **Credits：**Host 通过结构探测读取 `credits()`、`refreshCredits()`，它们不是正式 Adapter 成员。Renderer 还通过 Codex/Grok/Claude 名单决定是否等待 Credits，而 Antigravity 也有对应方法。这是能力提供与消费的双重接线，不等于本轮已证明具体 UI 故障。
 
@@ -357,7 +357,7 @@ Renderer 只从当前目标 Host 获取可序列化插件描述、能力和公�
 
 ### 10.1 原生承载
 
-Claude 直连与 macOS Broker、DeepSeek 两个受支持 RC 的 profile 选择归对应插件。DSH 只启动托管 Web，不再提供 Legacy attach；V0/V3 历史和流式差异不向公共层传播。现有 Claude Broker 可先保留为插件专属承载，不必一次扩大为全 Harness RPC。
+Claude 直连与 macOS Broker、DeepSeek CLI 版本到 V0/V3 profile 的选择归对应插件。DSH 只启动托管 Web，不再提供 Legacy attach；V0/V3 历史和流式差异不向公共层传播。现有 Claude Broker 可先保留为插件专属承载，不必一次扩大为全 Harness RPC。
 
 Rust 继续拥有原生启动、进程管理、安装与平台集成。若平台设施需要参数化，应使用有限的通用进程/服务描述，而不是让 Rust 理解 Harness 会话或权限语义。
 

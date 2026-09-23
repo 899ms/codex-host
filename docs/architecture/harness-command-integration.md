@@ -46,7 +46,7 @@ For commands with visible progress, decide explicitly whether they need:
 Catalog reads never open or resume a Session:
 
 - `codexhost/harness/commands/inspect { harnessId }` returns the static Adapter metadata. The Renderer uses it before a Thread exists.
-- `codexhost/thread/commands/inspect { threadId }` returns the loaded Session's `session.commands.list()` when that Session is already loaded, and falls back to the static Adapter metadata when it is not loaded or the listing fails. The Renderer uses it for existing Threads and refreshes it whenever the Composer `#` menu opens.
+- `codexhost/thread/commands/inspect { threadId }` returns the loaded Session's `session.commands.list()` when that Session is already loaded, and falls back to the static Adapter metadata when it is not loaded, the listing fails, or the read exceeds the Host’s one-second inspection deadline. The Renderer uses it for existing Threads and refreshes it whenever the Composer `#` menu opens.
 
 The Composer `#` menu is the single command surface; it has no Harness-specific catalog branches. The command (⌘) button is its discoverable entry: hovering explains the `#` trigger, and clicking types `#` at the caret (spaced from a preceding word) to open the menu. The button holds the Harness command catalog the menu reads.
 
@@ -145,7 +145,7 @@ submitted as Host text Turns.
 
 DeepSeek declares exactly `/compact`, `/dsh-goal`, and `/plan` in its static Adapter catalog, for both new and existing Threads. Neither catalog display nor command admission queries native `commands/list`. Execution retains ID, argument, busy-state, cancellation, and native-result validation; an unsupported native deployment reports its execution error rather than being probed beforehand. Native `feedback`, `permission`, `export`, the Client-side `/model`, and unknown commands are not exposed through this surface.
 
-DeepSeek supports only `0.1.2-rc.1` and `0.1.5-rc.1`. The Adapter sends `images: []` with `commands/execute` for `0.1.2-rc.1`, or `submittedAttachments: []` for `0.1.5-rc.1`; this version-specific translation does not add attachment input or native descriptor discovery to the public command surface.
+DeepSeek has been tested with `0.1.2-rc.1`, `0.1.5-rc.1` and `0.1.5-rc.2`; other SemVer versions may attempt native protocol validation. The Adapter sends `images: []` with `commands/execute` for the `0.1.2` family's V0 profile, or `submittedAttachments: []` for the V3 profile; this version-specific translation does not add attachment input or native descriptor discovery to the public command surface.
 
 OpenCode exposes only the fixed `/compact` command, implemented through native Session summarization. Dynamic native command discovery and execution are not part of its Host integration.
 
