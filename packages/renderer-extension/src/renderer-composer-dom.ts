@@ -482,14 +482,60 @@ export function creditsPlacementAnchor(control: ComposerAgentControl): HTMLEleme
   return root?.parentElement ? root : null;
 }
 
+/**
+ * Mirrors the mount-time `allButtons.at(-1)` fallback for Composers whose
+ * action button is neither `type="submit"` nor labelled as send. After mount
+ * the Composer also contains our own controls, so skip their buttons.
+ */
+function lastNativeButtonWithin(composer: Element): HTMLButtonElement | null {
+  const buttons = [...composer.querySelectorAll<HTMLButtonElement>("button")];
+  for (let index = buttons.length - 1; index >= 0; index -= 1) {
+    const button = buttons[index];
+    if (button && !isInsideOwnedRendererControl(button, composer)) return button;
+  }
+  return null;
+}
+
+function isInsideOwnedRendererControl(element: Element, composer: Element): boolean {
+  for (let node: Element | null = element; node && node !== composer; node = node.parentElement) {
+    if (typeof node.hasAttribute === "function" && isOwnedRendererControl(node)) return true;
+  }
+  return false;
+}
+
+/**
+ * Codex re-renders the trailing action cluster (for example when the draft
+ * becomes non-empty or a turn starts/stops), which replaces the send button
+ * and its wrapper. Follow the live button so placement never anchors to a
+ * detached subtree: moving owned controls there disconnects them, and the
+ * next scan would dispose and remount the whole control (closing open menus).
+ */
+export function refreshSendButton(control: ComposerAgentControl): HTMLButtonElement | null {
+  const current = control.sendButton;
+  if (current?.isConnected && control.composer.contains(current)) return current;
+  // Only a Composer that was mounted through the unlabelled fallback keeps
+  // using it; otherwise a Stop/Attach button would be mistaken for send.
+  const replacement =
+    sendButtonWithin(control.composer) ??
+    (current && !isComposerSubmitButton(current) ? lastNativeButtonWithin(control.composer) : null);
+  if (!replacement) return null;
+  if (control.sendDisabledBeforeSwitch !== null) {
+    control.sendDisabledBeforeSwitch = replacement.disabled;
+    replacement.disabled = true;
+  }
+  control.sendButton = replacement;
+  return replacement;
+}
+
 function refreshTrailingClusterPlacement(control: ComposerAgentControl): void {
-  const sendButton = control.sendButton;
+  const sendButton = refreshSendButton(control);
   const modelRoot = control.modelPicker?.root;
   const agentRoot = control.root ?? control.picker?.root;
   if (!sendButton || !modelRoot || !agentRoot) return;
   const anchor = trailingActionAnchor(sendButton);
   const parent = anchor.parentElement;
   if (!parent || typeof parent.insertBefore !== "function") return;
+  if (!parent.isConnected || !control.composer.contains(parent)) return;
   if (
     modelRoot.parentElement === parent &&
     agentRoot.parentElement === parent &&
