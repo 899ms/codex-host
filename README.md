@@ -150,13 +150,13 @@ Type `#` in the chat input to choose an Agent to delegate a task to, or to find 
 
 Ask the current Agent to hand off a self-contained task to another Harness. For example:
 
-> Have `claude-code` review this change on its own and flag any compatibility risks.
+> Have `#claude-code` review this change on its own and flag any compatibility risks.
 >
-> Have `pi` figure out why this test is flaky.
+> Have `#pi` figure out why this test is flaky.
 >
-> Have `omp` implement this feature while I keep working on the docs.
+> Have `#omp` implement this feature while I keep working on the docs.
 >
-> Have `opencode` verify this fix in a separate Thread and run the related tests.
+> Have `#opencode` verify this fix in a separate Thread and run the related tests.
 
 CodexHost spins up a separate Native Session in the target Harness. It shows up in the Codex Desktop conversation list, so you can open it anytime to check progress or pick up the conversation.
 
