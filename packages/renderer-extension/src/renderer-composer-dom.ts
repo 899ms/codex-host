@@ -7,7 +7,6 @@ import type {
 import type {
   AccountCreditsSnapshot,
   CodexAccountSummary,
-  HarnessCommandDescriptor,
   ThreadUsageSnapshot,
 } from "@codexhost/shared-contracts";
 import {
@@ -654,7 +653,7 @@ export function mountComposerAgentControl(
   onSelectModel: (modelId: string) => void,
   onSelectThinking: (thinkingOptionId: string) => void,
   onSelectPermissionMode: (permissionModeId: string) => void,
-  onSelectCommand: (command: HarnessCommandDescriptor) => void,
+  onOpenCommandMenu: () => void,
 ): ComposerAgentControl {
   // External Harnesses inject more footer chips than native Codex. Let the
   // thread column shrink under sidebar / narrow-window pressure so those chips
@@ -688,7 +687,7 @@ export function mountComposerAgentControl(
   const harnessCommands = mountRendererHarnessCommandControl(
     toolbar ?? composer,
     trailingActionAnchor(sendButton),
-    onSelectCommand,
+    onOpenCommandMenu,
   );
 
   const permissionParent = nativePermissionModeControl?.element.parentElement;
@@ -807,7 +806,6 @@ export function renderComposerAgentControl(
   control.harnessCommands.setLocale(locale);
   control.harnessCommands.root.hidden = state.agent === "codex";
   control.harnessCommands.root.style.display = state.agent === "codex" ? "none" : "inline-flex";
-  if (state.agent === "codex") control.harnessCommands.close();
   renderRendererCreditsControl(control.credits, accountCredits, locale);
 }
 

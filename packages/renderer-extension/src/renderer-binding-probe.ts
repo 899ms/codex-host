@@ -82,6 +82,11 @@ import {
   routeRendererHarnessCommandSelection,
 } from "./renderer-harness-command-claim.js";
 import { installRendererSettingsLifecycle } from "./renderer-settings-lifecycle.js";
+import {
+  installRendererDelegationMention,
+  type RendererDelegationMentionControl,
+} from "./renderer-delegation-mention.js";
+import { RENDERER_AGENT_LABELS } from "./renderer-agent-icon.js";
 import { openRendererThread } from "./renderer-fork-control.js";
 import type {
   RendererConnectionDiagnostics,
@@ -892,18 +897,29 @@ export function installRendererBindingProbe(
     }
   };
 
-  const refreshCommands = async (mounted: MountedComposer): Promise<void> => {
+  let delegationMention: RendererDelegationMentionControl | null = null;
+  /**
+   * `keepCurrent` refreshes in place (the `#` menu reopening) instead of
+   * clearing first, so an open menu never flickers empty.
+   */
+  const refreshCommands = async (
+    mounted: MountedComposer,
+    { keepCurrent = false }: { keepCurrent?: boolean } = {},
+  ): Promise<void> => {
     const generation = ++mounted.commandRequestGeneration;
     const agent = controller.get(mounted.composer).agent;
-    const hostId = threadIdFromComposerModelTarget(mounted.modelTarget)
-      ? mounted.hostId
-      : activeModelHostId();
+    const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+    const hostId = threadId ? mounted.hostId : activeModelHostId();
     const requestControl = modelControl;
     const client = modelClientForHostFrom(requestControl, hostId);
-    mounted.control.harnessCommands.setCommands([]);
+    if (!keepCurrent || agent === "codex") mounted.control.harnessCommands.setCommands([]);
     if (agent === "codex" || !client) return;
     try {
-      const catalog = await client.inspectHarnessCommands({ harnessId: externalHarnessIds[agent] });
+      // A Thread's loaded Session reports its live catalog (custom commands,
+      // skills); the Host falls back to the static Adapter catalog otherwise.
+      const catalog = threadId
+        ? await client.inspectThreadCommands({ threadId })
+        : await client.inspectHarnessCommands({ harnessId: externalHarnessIds[agent] });
       if (
         disposed ||
         mountedByComposer.get(mounted.composer) !== mounted ||
@@ -919,6 +935,7 @@ export function installRendererBindingProbe(
         catalog.commands,
         threadIdFromComposerModelTarget(mounted.modelTarget) !== null,
       );
+      delegationMention?.refresh();
     } catch {
       // Keep the entry unavailable. Never open a Session as a catalog fallback.
     }
@@ -2395,9 +2412,10 @@ export function installRendererBindingProbe(
         if (!composer.isConnected || !mounted) return;
         void selectPermissionMode(mounted, permissionModeId);
       },
-      (command) => {
-        const mounted = mountedByComposer.get(composer);
-        if (mounted) selectCommand(mounted, command);
+      () => {
+        // The button is the discoverable entry to the `#` menu.
+        const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+        if (editor) delegationMention?.openFor(editor);
       },
     );
     const mounted: MountedComposer = {
@@ -2738,6 +2756,48 @@ export function installRendererBindingProbe(
   window.addEventListener("codexhost:draft-prewarm-policy-changed", onHostRouteChange);
   window.addEventListener("codexhost:renderer-adapter-status", onAdapterStatus);
   window.addEventListener("focus", onWindowFocus);
+  delegationMention = installRendererDelegationMention(document, {
+    onOpen: (editor) => {
+      const composer = composerForElement(editor);
+      const mounted = composer ? mountedByComposer.get(composer) : undefined;
+      if (mounted && controller.get(mounted.composer).agent !== "codex") {
+        void refreshCommands(mounted, { keepCurrent: true });
+      }
+    },
+    readTargets: () => {
+      const availability = activeHarnessAvailabilityState().availability;
+      return enabledAgents
+        .filter((agent) => agent === "codex" || availability[agent] === "ready")
+        .map((agent) => ({ agent, label: RENDERER_AGENT_LABELS[agent] }));
+    },
+    isComposerEditor: (editor) => {
+      const composer = composerForElement(editor);
+      return composer !== null && mountedByComposer.has(composer);
+    },
+    readLocale: () => settingsLifecycle.locale,
+    // Desktop's own suggestion menu hugs the input card and covers the
+    // top tray (workspace / branch bar), so anchor to the card when present.
+    anchorForEditor: (editor) =>
+      editor.closest("[data-composer-body]") ?? composerForElement(editor),
+    readCommands: (editor) => {
+      const composer = composerForElement(editor);
+      const mounted = composer ? mountedByComposer.get(composer) : undefined;
+      if (!mounted || controller.get(mounted.composer).agent === "codex") return null;
+      const { commands, hasSession, executingCommandId } =
+        mounted.control.harnessCommands.snapshot();
+      // While a command runs, the ⌘ button is disabled too.
+      if (commands.length === 0 || executingCommandId !== null) return null;
+      const messages = rendererHarnessMessages(settingsLifecycle.locale);
+      return {
+        commands,
+        disabledReason: (command) =>
+          !hasSession && rendererHarnessCommandExecutesDirectly(command)
+            ? messages.commandRequiresConversation
+            : null,
+        select: (command) => selectCommand(mounted, command),
+      };
+    },
+  });
 
   const connectedComposers = (): MountedComposer[] =>
     [...mountedByComposer.values()].filter(
@@ -2857,6 +2917,7 @@ export function installRendererBindingProbe(
       modelControl = null;
       mutationObserver.disconnect();
       disposeReasoningSoftWrap();
+      delegationMention?.dispose();
       sidebarAgentIcons.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);
