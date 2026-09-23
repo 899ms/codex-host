@@ -1,4 +1,5 @@
 import {
+  DELEGATION_MENTION_PATH_PREFIX,
   IDLE_RELEASE_SETTINGS_METHOD,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
@@ -8,6 +9,11 @@ import {
   credentialImportsParamsSchema,
 } from "@codexhost/shared-contracts";
 import { handleCredentialImports } from "./credential-imports.js";
+import {
+  rewriteDelegationMentionInput,
+  rewriteDelegationMentionText,
+} from "./delegation-mention-rewrite.js";
+import { managedDelegationSkillReference } from "./delegation-skill.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
@@ -189,6 +195,7 @@ import {
   decodeThreadMetadataUpdateRequest,
   decodeThreadRevertRequest,
   decodeThreadRollbackRequest,
+  encodeJsonFrame,
   mapExternalThreadHarnessError,
   projectCodexRateLimitsToCredits,
   observeCodexRateLimits,
@@ -1514,7 +1521,36 @@ export class AppServerHost {
         return;
       }
     }
-    await this.#forwardOfficialRequest(request, frame);
+    await this.#forwardOfficialRequest(
+      request,
+      await this.#rewriteOfficialDelegationMentions(request, frame),
+    );
+  }
+
+  /** Native Codex Turns: turn `#` delegation chips into an explicit Skill-backed request. */
+  async #rewriteOfficialDelegationMentions(
+    request: JsonRpcRequest,
+    frame: Buffer<ArrayBufferLike>,
+  ): Promise<Buffer<ArrayBufferLike>> {
+    if (request.method !== "turn/start" && request.method !== "turn/steer") return frame;
+    if (!isRecord(request.params) || !Array.isArray(request.params.input)) return frame;
+    const input = request.params.input as JsonValue[];
+    if (
+      !input.some(
+        (item) =>
+          isRecord(item) &&
+          typeof item.text === "string" &&
+          item.text.includes(DELEGATION_MENTION_PATH_PREFIX),
+      )
+    ) {
+      return frame;
+    }
+    const rewritten = rewriteDelegationMentionInput(input, await managedDelegationSkillReference());
+    if (!rewritten) return frame;
+    return encodeJsonFrame({
+      ...(request as unknown as JsonObject),
+      params: { ...(request.params as JsonObject), input: rewritten },
+    });
   }
 
   async #forwardOfficialNonRequest(
@@ -3665,7 +3701,7 @@ export class AppServerHost {
       const result = await thread.session.execute({
         type: "turn.start",
         turnId,
-        input: [{ type: "text", text }],
+        input: [{ type: "text", text: rewriteDelegationMentionText(text) }],
       });
       if (!result.ok) throw new ExternalSteerError(-32073, result.error.message);
       return { turnId, turn: projection.projector.pendingTurn(), gate };

@@ -309,3 +309,12 @@ export const packageMetadata = {
   name: "@codexhost/shared-contracts",
   contractVersion: WORKSPACE_CONTRACT_VERSION,
 } as const;
+
+export {
+  DELEGATION_MENTION_PATH_PREFIX,
+  delegationMentionPath,
+  formatDelegationMentionLink,
+  stripDelegationMentions,
+  type DelegationMention,
+  type DelegationMentionRewrite,
+} from "./delegation-mention.js";

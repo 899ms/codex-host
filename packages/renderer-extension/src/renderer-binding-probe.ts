@@ -81,6 +81,8 @@ import {
   routeRendererHarnessCommandSelection,
 } from "./renderer-harness-command-claim.js";
 import { installRendererSettingsLifecycle } from "./renderer-settings-lifecycle.js";
+import { installRendererDelegationMention } from "./renderer-delegation-mention.js";
+import { RENDERER_AGENT_LABELS } from "./renderer-agent-icon.js";
 import { openRendererThread } from "./renderer-fork-control.js";
 import type {
   RendererConnectionDiagnostics,
@@ -2737,6 +2739,41 @@ export function installRendererBindingProbe(
   window.addEventListener("codexhost:draft-prewarm-policy-changed", onHostRouteChange);
   window.addEventListener("codexhost:renderer-adapter-status", onAdapterStatus);
   window.addEventListener("focus", onWindowFocus);
+  const disposeDelegationMention = installRendererDelegationMention(document, {
+    readTargets: () => {
+      const availability = activeHarnessAvailabilityState().availability;
+      return enabledAgents
+        .filter((agent) => agent === "codex" || availability[agent] === "ready")
+        .map((agent) => ({ agent, label: RENDERER_AGENT_LABELS[agent] }));
+    },
+    isComposerEditor: (editor) => {
+      const composer = composerForElement(editor);
+      return composer !== null && mountedByComposer.has(composer);
+    },
+    readLocale: () => settingsLifecycle.locale,
+    // Desktop's own suggestion menu hugs the input card and covers the
+    // top tray (workspace / branch bar), so anchor to the card when present.
+    anchorForEditor: (editor) =>
+      editor.closest("[data-composer-body]") ?? composerForElement(editor),
+    readCommands: (editor) => {
+      const composer = composerForElement(editor);
+      const mounted = composer ? mountedByComposer.get(composer) : undefined;
+      if (!mounted || controller.get(mounted.composer).agent === "codex") return null;
+      const { commands, hasSession, executingCommandId } =
+        mounted.control.harnessCommands.snapshot();
+      // While a command runs, the ⌘ button is disabled too.
+      if (commands.length === 0 || executingCommandId !== null) return null;
+      const messages = rendererHarnessMessages(settingsLifecycle.locale);
+      return {
+        commands,
+        disabledReason: (command) =>
+          !hasSession && rendererHarnessCommandExecutesDirectly(command)
+            ? messages.commandRequiresConversation
+            : null,
+        select: (command) => selectCommand(mounted, command),
+      };
+    },
+  });
 
   const connectedComposers = (): MountedComposer[] =>
     [...mountedByComposer.values()].filter(
@@ -2856,6 +2893,7 @@ export function installRendererBindingProbe(
       modelControl = null;
       mutationObserver.disconnect();
       disposeReasoningSoftWrap();
+      disposeDelegationMention();
       sidebarAgentIcons.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);

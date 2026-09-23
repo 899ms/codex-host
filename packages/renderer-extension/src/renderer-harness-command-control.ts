@@ -35,11 +35,19 @@ function commandIcon(ownerDocument: Document): SVGSVGElement {
   return svg;
 }
 
+export interface RendererHarnessCommandSnapshot {
+  commands: readonly HarnessCommandDescriptor[];
+  hasSession: boolean;
+  executingCommandId: string | null;
+}
+
 export interface RendererHarnessCommandControl {
   root: HTMLElement;
   trigger: HTMLButtonElement;
   menu: HTMLElement;
   setCommands(commands: readonly HarnessCommandDescriptor[], hasSession?: boolean): void;
+  /** Current catalog state, shared with the `#` Composer menu. */
+  snapshot(): RendererHarnessCommandSnapshot;
   setExecuting(commandId: string | null): void;
   setLocale(locale: RendererSettingsLocale): void;
   placeBefore(reference: Element | null): boolean;
@@ -379,6 +387,9 @@ export function mountRendererHarnessCommandControl(
       if (commands.length === 0) close();
       renderItems();
       syncTriggerState();
+    },
+    snapshot() {
+      return { commands, hasSession, executingCommandId };
     },
     setExecuting(commandId) {
       executingCommandId = commandId;
