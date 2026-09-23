@@ -371,14 +371,16 @@ function updatesPage(
         notes.replaceChildren();
       };
 
+      // A request that never reached the update service (bridge unavailable,
+      // timeout) is not something the user can fix by retrying here. Point them
+      // at the manual download and keep the internal detail out of the UI.
       const renderRequestFailure = (error: unknown): void => {
+        console.error("codexhost update request failed", error);
         renderPendingStatus(
           null,
           error instanceof RendererUpdateRequestTimeoutError
             ? messages.updateRequestTimeout
-            : error instanceof Error
-              ? error.message
-              : messages.updateFailed,
+            : messages.updateServiceUnavailable,
           "failed",
         );
       };
@@ -436,14 +438,6 @@ function updatesPage(
           );
           detail.textContent = `${percent}% · ${formatUpdateBytes(status.downloadedBytes)} / ${formatUpdateBytes(status.totalBytes)}`;
           panel.append(progress, detail);
-        }
-        if (viewPhase === "failed") {
-          const retry = document.createElement("button");
-          retry.type = "button";
-          retry.className = "settings-command-button";
-          retry.append(createRendererSettingsIcon("refresh", 16), messages.updateRetry);
-          retry.addEventListener("click", () => void load());
-          panel.append(createPanelActions(document, retry));
         }
       };
 

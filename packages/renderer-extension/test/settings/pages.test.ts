@@ -1361,6 +1361,49 @@ describe("Renderer Updates page", () => {
     scope.dispose();
   });
 
+  it("points to GitHub Releases without a retry or internal detail when the update request fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const client = {
+      checkUpdate: vi.fn(async () => {
+        throw new Error("Renderer Model request manager is unavailable");
+      }),
+      startUpdate: vi.fn(),
+      readUpdateStatus: vi.fn(async () => ({ status: null })),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("zh-CN"),
+      () => client,
+    ).find(({ id }) => id === "updates");
+    if (!page) throw new Error("Updates page is not registered");
+
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    const cleanup = page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+
+    const panel = elementWithClass(content, "settings-update-panel");
+    await vi.waitFor(() => expect(panel.dataset.updateState).toBe("failed"));
+    expect(visibleText(panel)).toContain("暂时无法自动更新");
+    expect(visibleText(content)).not.toContain("request manager");
+    expect(descendants(panel).find(({ tagName }) => tagName === "button")).toBeUndefined();
+    expect(
+      descendants(content).find(
+        (candidate) =>
+          candidate.tagName === "a" && visibleNotesText(candidate).includes("GitHub Releases"),
+      ),
+    ).toBeDefined();
+    expect(client.checkUpdate).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalled();
+
+    consoleError.mockRestore();
+    cleanup?.();
+    scope.dispose();
+  });
+
   it.each([
     ["npm" as const, "Windows 暂不支持自动更新。请退出 codexhost，在终端运行以下命令完成更新。"],
     [

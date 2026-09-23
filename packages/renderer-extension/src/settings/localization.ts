@@ -218,6 +218,7 @@ export interface RendererSettingsMessages {
   readonly updateInstalling: string;
   readonly updateInstallingNpm: string;
   readonly updateRequestTimeout: string;
+  readonly updateServiceUnavailable: string;
   readonly updateRestarting: string;
   readonly updateSucceeded: string;
   readonly updateFailed: string;
@@ -461,7 +462,10 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateWaitingForExit: "Waiting for the application to close...",
   updateInstalling: "Installing update...",
   updateInstallingNpm: "Installing update through npm...",
-  updateRequestTimeout: "The update service did not respond. Try again.",
+  updateRequestTimeout:
+    "The update service did not respond. Download the latest version from GitHub Releases below.",
+  updateServiceUnavailable:
+    "Automatic updates are unavailable right now. Download the latest version from GitHub Releases below.",
   updateRestarting: "Restarting to finish the update...",
   updateSucceeded: "Update installed successfully.",
   updateFailed: "Update failed.",
@@ -708,7 +712,8 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateWaitingForExit: "正在等待应用退出...",
   updateInstalling: "正在安装更新...",
   updateInstallingNpm: "正在通过 npm 安装...",
-  updateRequestTimeout: "更新服务未响应，请重试。",
+  updateRequestTimeout: "更新服务未响应，请通过下方 GitHub Releases 手动下载最新版本。",
+  updateServiceUnavailable: "暂时无法自动更新，请通过下方 GitHub Releases 手动下载最新版本。",
   updateRestarting: "正在重启以完成更新...",
   updateSucceeded: "更新安装成功。",
   updateFailed: "更新失败。",
