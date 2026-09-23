@@ -2649,7 +2649,9 @@ export class AppServerHost {
       } catch (error) {
         this.#diagnose(error);
         await this.#writer.json(
-          rpcError(request, -32073, `External Harness command failed: ${errorMessage(error)}`),
+          error instanceof ExternalCommandError
+            ? rpcError(request, error.code, error.message)
+            : rpcError(request, -32073, `External Harness command failed: ${errorMessage(error)}`),
         );
       }
     } finally {
