@@ -1,9 +1,9 @@
 /**
  * `#` menu for the Codex Composer.
  *
- * Typing `#` opens a floating list with the current Harness's native commands
- * (the same catalog and selection path as the Composer ⌘ button) and the
- * delegation targets (Harnesses). Picking a command removes `#query` and runs
+ * Typing `#` opens a floating list with the delegation targets (Harnesses)
+ * first, then the current Harness's native commands and skills (the same
+ * catalog and selection path as the Composer ⌘ button). Picking a command removes `#query` and runs
  * or claims it exactly like the button. Picking
  * one replaces `#query` with Codex Desktop's native `agentMention` chip, so
  * deletion, cursor movement, serialization and history rendering stay native.
@@ -25,6 +25,7 @@ import type { HarnessCommandDescriptor } from "@codexhost/shared-contracts";
 import type { RendererAgent } from "./agent-selection-state.js";
 import { createRendererAgentIcon } from "./renderer-agent-icon.js";
 import { rendererHarnessCommandExecutesDirectly } from "./renderer-harness-command-claim.js";
+import { createHarnessCommandIcon } from "./renderer-harness-command-control.js";
 import { rendererHarnessCommandPresentation } from "./renderer-harness-localization.js";
 import {
   deleteNativeRange,
@@ -36,6 +37,7 @@ import type { RendererSettingsLocale } from "./settings/localization.js";
 const MENU_ATTRIBUTE = "data-codexhost-delegation-mention-menu";
 const STYLE_ATTRIBUTE = "data-codexhost-delegation-mention-style";
 const MENU_MAX_HEIGHT = 320;
+const SOURCE_TAG = "codexhost";
 // Class lists mirror Desktop's composer suggestion menu (measured from the
 // native `@` menu), so density, colors and light/dark theming follow Desktop.
 const MENU_CLASS =
@@ -114,16 +116,56 @@ export function filterDelegationCommands(
   const scored = commands.flatMap((command, index) => {
     const invocation = command.invocation.toLowerCase().replace(/^\//u, "");
     const label = command.label.toLowerCase();
-    const score = invocation.startsWith(needle)
-      ? 2
-      : invocation.includes(needle) || label.includes(needle)
-        ? 1
-        : 0;
+    const display = harnessCommandDisplayName(command.label).toLowerCase();
+    const score =
+      invocation.startsWith(needle) || display.startsWith(needle)
+        ? 2
+        : invocation.includes(needle) || label.includes(needle) || display.includes(needle)
+          ? 1
+          : 0;
     return score > 0 ? [{ command, score, index }] : [];
   });
   return scored
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .map(({ command }) => command);
+}
+
+/**
+ * Readable row title like Desktop's own menus ("Code Review" rather than
+ * `/skill:code-review`). Labels that are already readable are kept.
+ */
+export function harnessCommandDisplayName(label: string): string {
+  const slug = label
+    .trim()
+    .replace(/^\//u, "")
+    .replace(/^skill:/u, "");
+  if (!slug || /\s/u.test(slug) || /[A-Z]/u.test(slug) || /[^\x00-\x7F]/u.test(slug)) {
+    return slug || label;
+  }
+  // Plugin-namespaced names (`plugin:skill`) show the skill part.
+  const name = slug.split(":").filter(Boolean).at(-1) ?? slug;
+  return name
+    .split(/[-_.]+/u)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Outline cube for skills, drawn in the row's text color. */
+function createSkillIcon(ownerDocument: Document): SVGSVGElement {
+  const svg = ownerDocument.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.7");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = ownerDocument.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", "M12 3 20 7.5v9L12 21l-8-4.5v-9ZM4 7.5 12 12l8-4.5M12 12v9");
+  svg.append(path);
+  return svg;
 }
 
 function agentsTitle(locale: RendererSettingsLocale): string {
@@ -314,10 +356,23 @@ export function installRendererDelegationMention(
       : `${Math.min(view.innerHeight - height - VIEWPORT_MARGIN, rect.bottom + MENU_GAP)}px`;
   };
 
+  /** The first section carries a quiet source tag, like Desktop's "Personal". */
+  let sourceTagged = false;
   const sectionHeader = (title: string): HTMLElement => {
     const header = ownerDocument.createElement("div");
-    header.className = HEADER_CLASS;
-    header.textContent = title;
+    header.className = `${HEADER_CLASS} flex items-center justify-between gap-2`;
+    const label = ownerDocument.createElement("span");
+    label.className = "min-w-0 truncate";
+    label.textContent = title;
+    header.append(label);
+    if (!sourceTagged) {
+      sourceTagged = true;
+      const source = ownerDocument.createElement("span");
+      source.className = "shrink-0 text-sm text-codex-description";
+      source.setAttribute("data-codexhost-source", "");
+      source.textContent = SOURCE_TAG;
+      header.append(source);
+    }
     return header;
   };
 
@@ -371,32 +426,7 @@ export function installRendererDelegationMention(
     const locale = options.readLocale();
     const rows: HTMLElement[] = [];
     entries = [];
-    if (commands) {
-      // Harnesses that report the distinction get separate Skills; everything
-      // else is a command, like Desktop's own `/` vs `$` split.
-      const groups: [string, HarnessCommandDescriptor[]][] = [
-        [commandsTitle(locale), commands.matches.filter(({ kind }) => kind !== "skill")],
-        [skillsTitle(locale), commands.matches.filter(({ kind }) => kind === "skill")],
-      ];
-      for (const [title, group] of groups) {
-        if (group.length === 0) continue;
-        rows.push(sectionHeader(title));
-        for (const command of group) {
-          const reason = commands.source.disabledReason(command);
-          const presentation = rendererHarnessCommandPresentation(command, locale);
-          const content = rowContent(null, command.invocation, reason ?? presentation.description);
-          if (reason === null) {
-            rows.push(optionRow({ kind: "command", command, source: commands.source }, content));
-          } else {
-            const disabled = ownerDocument.createElement("div");
-            disabled.setAttribute("aria-disabled", "true");
-            disabled.className = `${ROW_CLASS} opacity-50`;
-            disabled.append(content);
-            rows.push(disabled);
-          }
-        }
-      }
-    }
+    sourceTagged = false;
     if (targets.length > 0) {
       rows.push(sectionHeader(agentsTitle(locale)));
       for (const target of targets) {
@@ -410,6 +440,38 @@ export function installRendererDelegationMention(
             ),
           ),
         );
+      }
+    }
+    if (commands) {
+      // Harnesses that report the distinction get separate Skills; everything
+      // else is a command, like Desktop's own `/` vs `$` split.
+      const groups: [string, HarnessCommandDescriptor[]][] = [
+        [commandsTitle(locale), commands.matches.filter(({ kind }) => kind !== "skill")],
+        [skillsTitle(locale), commands.matches.filter(({ kind }) => kind === "skill")],
+      ];
+      for (const [title, group] of groups) {
+        if (group.length === 0) continue;
+        rows.push(sectionHeader(title));
+        for (const command of group) {
+          const reason = commands.source.disabledReason(command);
+          const presentation = rendererHarnessCommandPresentation(command, locale);
+          const content = rowContent(
+            command.kind === "skill"
+              ? createSkillIcon(ownerDocument)
+              : createHarnessCommandIcon(ownerDocument),
+            harnessCommandDisplayName(presentation.label),
+            reason ?? presentation.description,
+          );
+          if (reason === null) {
+            rows.push(optionRow({ kind: "command", command, source: commands.source }, content));
+          } else {
+            const disabled = ownerDocument.createElement("div");
+            disabled.setAttribute("aria-disabled", "true");
+            disabled.className = `${ROW_CLASS} opacity-50`;
+            disabled.append(content);
+            rows.push(disabled);
+          }
+        }
       }
     }
     list.replaceChildren(...rows);

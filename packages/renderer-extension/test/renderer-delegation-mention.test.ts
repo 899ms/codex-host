@@ -4,6 +4,7 @@ import {
   filterDelegationCommands,
   filterDelegationTargets,
   findDelegationTrigger,
+  harnessCommandDisplayName,
 } from "../src/renderer-delegation-mention.js";
 
 describe("delegation mention trigger", () => {
@@ -56,5 +57,15 @@ describe("delegation command filtering", () => {
       "compact",
       "recap",
     ]);
+  });
+});
+
+describe("Harness command display names", () => {
+  it("humanizes slugs and keeps readable labels", () => {
+    expect(harnessCommandDisplayName("/skill:writing-for-agents")).toBe("Writing For Agents");
+    expect(harnessCommandDisplayName("frontend-design:frontend-design")).toBe("Frontend Design");
+    expect(harnessCommandDisplayName("code_review")).toBe("Code Review");
+    expect(harnessCommandDisplayName("Initialize CLAUDE.md")).toBe("Initialize CLAUDE.md");
+    expect(harnessCommandDisplayName("压缩上下文")).toBe("压缩上下文");
   });
 });
