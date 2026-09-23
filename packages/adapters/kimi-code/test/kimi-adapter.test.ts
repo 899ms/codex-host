@@ -63,7 +63,15 @@ class FakeTransport implements KimiAcpTransportLike {
     return this.configOptions();
   });
   configOptions() {
-    return Object.entries(this.currentConfig).map(([id, currentValue]) => ({ id, currentValue }));
+    return Object.entries(this.currentConfig).map(([id, currentValue]) => ({
+      id,
+      currentValue,
+      ...(id === "thinking"
+        ? {
+            options: ["off", "medium", "high"].map((value) => ({ value, name: value })),
+          }
+        : {}),
+    }));
   }
   prompt = vi.fn();
   cancel = vi.fn();
@@ -176,7 +184,9 @@ effort = "medium"
       expect(inspection.status).toBe("ready");
       if (inspection.status === "ready") {
         expect(inspection.catalog.models).toHaveLength(1);
-        expect(inspection.catalog.defaultThinkingOptionId).toBe("medium");
+        expect(inspection.catalog.defaultThinkingOptionId).toBeUndefined();
+        expect(inspection.catalog.thinkingOptions).toEqual([]);
+        expect(fakeTransport.openSession).not.toHaveBeenCalled();
         expect(inspection.capabilities.configuration.selectModel).toBe(true);
         expect(inspection.permissionModes?.defaultModeId).toBe("default");
       }
@@ -192,6 +202,100 @@ effort = "medium"
   });
 
   describe("open()", () => {
+    it.each(["create", "resume"] as const)(
+      "uses native on/off Thinking on %s without sending a guessed default",
+      async (kind) => {
+        const sessionDir = path.join(tempDir, "sessions", "native-thinking");
+        await mkdir(sessionDir, { recursive: true });
+        await writeFile(
+          path.join(tempDir, "session_index.jsonl"),
+          JSON.stringify({ sessionId: "native-thinking", sessionDir }) + "\n",
+        );
+        await writeFile(
+          path.join(sessionDir, "state.json"),
+          JSON.stringify({ id: "native-thinking", cwd: tempDir }),
+        );
+        fakeTransport.configOptions = () => [
+          { id: "model", currentValue: "relay" },
+          {
+            id: "thinking",
+            currentValue: "on",
+            options: [
+              { value: "off", name: "Thinking Off" },
+              { value: "on", name: "Thinking On" },
+            ],
+          },
+        ];
+        const adapter = new KimiAdapter(
+          { environment: { KIMI_CODE_HOME: tempDir } },
+          {
+            resolveExecutable: () => "kimi",
+            createTransport: () => fakeTransport,
+          },
+        );
+        try {
+          const result = await adapter.open(
+            kind === "create"
+              ? { kind, cwd: tempDir }
+              : {
+                  kind,
+                  cwd: tempDir,
+                  nativeRef: nativeSessionRefSchema.parse({
+                    formatVersion: 1,
+                    harnessId: "kimi-code",
+                    nativeSessionId: "native-thinking",
+                  }),
+                },
+          );
+          expect(result.ok).toBe(true);
+          if (!result.ok) throw new Error(result.error.message);
+          expect(result.value.initialState).toMatchObject({
+            effectiveThinkingOptionId: "on",
+            availableThinkingOptions: [
+              { id: "off", label: "Off" },
+              { id: "on", label: "On" },
+            ],
+          });
+          expect(fakeTransport.setConfigOption).not.toHaveBeenCalled();
+        } finally {
+          await adapter.close();
+        }
+      },
+    );
+
+    it("rejects a stale Thinking selection using the newly selected Model's options", async () => {
+      fakeTransport.setConfigOption = vi.fn(async (configId: string, value: string) => {
+        fakeTransport.configOptionsSet.push({ configId, value });
+        return [
+          { id: "model", currentValue: value },
+          { id: "thinking", currentValue: "on", options: [{ value: "on", name: "On" }] },
+        ];
+      });
+      const adapter = new KimiAdapter(
+        {},
+        { resolveExecutable: () => "kimi", createTransport: () => fakeTransport },
+      );
+      try {
+        expect(
+          await adapter.open({
+            kind: "create",
+            cwd: tempDir,
+            model: encodeKimiModelRef("new-model"),
+            thinkingOptionId: harnessThinkingOptionIdSchema.parse("medium"),
+          }),
+        ).toMatchObject({
+          ok: false,
+          error: {
+            code: "invalidRequest",
+            message: expect.stringContaining("does not advertise Thinking medium"),
+          },
+        });
+        expect(fakeTransport.configOptionsSet).toEqual([{ configId: "model", value: "new-model" }]);
+        expect(fakeTransport.close).toHaveBeenCalled();
+      } finally {
+        await adapter.close();
+      }
+    });
     it("forks the latest native checkpoint through ACP", async () => {
       const sessionId = "session-to-fork";
       const sessionDir = path.join(tempDir, ".kimi-code", "sessions", sessionId);

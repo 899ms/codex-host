@@ -61,7 +61,15 @@ class MockKimiTransport implements KimiAcpTransportLike {
 
   async setConfigOption(configId: string, value: string) {
     this.configOptionsSet.push({ configId, value });
-    return [{ id: configId, currentValue: value }];
+    return [
+      { id: configId, currentValue: value },
+      ...(configId === "thinking" ? [] : [{ id: "thinking", currentValue: "off" }]),
+    ].map((option) => ({
+      ...option,
+      ...(option.id === "thinking"
+        ? { options: ["off", "high"].map((value) => ({ value, name: value })) }
+        : {}),
+    }));
   }
 
   promptMock = vi.fn(
@@ -85,6 +93,91 @@ class MockKimiTransport implements KimiAcpTransportLike {
 }
 
 describe("KimiSession", () => {
+  it("caches native Thinking state per session and replaces it on Model changes and notifications", async () => {
+    const transport = new MockKimiTransport();
+    const config = (model: string, values: string[], current: string) => [
+      { id: "model", currentValue: model },
+      {
+        id: "thinking",
+        currentValue: current,
+        options: values.map((value) => ({ value, name: `Thinking ${value}` })),
+      },
+    ];
+    const setConfig = vi
+      .spyOn(transport, "setConfigOption")
+      .mockResolvedValue(config("second", ["off", "high"], "off"));
+    const session = new KimiSession({
+      transport,
+      sessionId: "dynamic",
+      cwd: process.cwd(),
+      initialState: {
+        effectiveModel: encodeKimiModelRef("first"),
+        effectiveThinkingOptionId: harnessThinkingOptionIdSchema.parse("on"),
+        availableThinkingOptions: ["off", "on"].map((id) => ({
+          id: harnessThinkingOptionIdSchema.parse(id),
+          label: id,
+        })),
+      },
+    });
+    const other = new KimiSession({
+      transport: new MockKimiTransport(),
+      sessionId: "other",
+      cwd: process.cwd(),
+      initialState: {},
+    });
+    const outputs: HarnessOutput[] = [];
+    const drain = (async () => {
+      for await (const output of session.outputs) outputs.push(output);
+    })();
+    try {
+      expect(
+        await session.execute({ type: "model.select", model: encodeKimiModelRef("second") }),
+      ).toMatchObject({ ok: true });
+      expect(session.initialState).toMatchObject({
+        effectiveThinkingOptionId: "off",
+        availableThinkingOptions: [
+          { id: "off", label: "Off" },
+          { id: "high", label: "High" },
+        ],
+      });
+      expect(setConfig).toHaveBeenCalledTimes(1);
+      expect(setConfig).toHaveBeenCalledWith("model", "second");
+      expect(
+        await session.execute({
+          type: "thinking.select",
+          thinkingOptionId: harnessThinkingOptionIdSchema.parse("on"),
+        }),
+      ).toMatchObject({ ok: false, error: { code: "invalidRequest" } });
+      expect(setConfig).toHaveBeenCalledTimes(1);
+      transport.sessionEventHandler?.({
+        type: "config.update",
+        configOptions: config("second", ["off", "on"], "on"),
+      });
+      expect(session.initialState.availableThinkingOptions?.map(({ id }) => id)).toEqual([
+        "off",
+        "on",
+      ]);
+      expect(other.initialState.availableThinkingOptions).toBeUndefined();
+      transport.sessionEventHandler?.({
+        type: "config.update",
+        configOptions: [{ id: "model", currentValue: "third" }],
+      });
+      expect(session.initialState.availableThinkingOptions).toEqual([]);
+      expect(session.initialState.effectiveThinkingOptionId).toBeUndefined();
+    } finally {
+      await session.close();
+      await other.close();
+      await drain;
+    }
+    expect(outputs).toContainEqual({
+      kind: "event",
+      event: {
+        type: "session.state.changed",
+        state: expect.objectContaining({ availableThinkingOptions: [] }),
+      },
+    });
+  });
+
   it("initializes state, capabilities, and nativeSessionRef", () => {
     const transport = new MockKimiTransport();
     const session = new KimiSession({

@@ -73,6 +73,8 @@ import {
   encodeKimiModelRef,
   isKimiModeId,
   readKimiEffectiveConfig,
+  readKimiThinkingOptions,
+  KimiThinkingSelectionError,
 } from "./models.js";
 import {
   canonicalizeKimiToolName,
@@ -382,7 +384,10 @@ export class KimiSession implements HarnessSession {
 
   #applyConfigOptions(configOptions: unknown[]): void {
     const effective = readKimiEffectiveConfig(configOptions);
-    const state = { ...this.#state };
+    const state = {
+      ...this.#state,
+      availableThinkingOptions: readKimiThinkingOptions(configOptions),
+    };
     delete state.effectiveModel;
     delete state.effectiveThinkingOptionId;
     delete state.effectivePermissionModeId;
@@ -1165,6 +1170,12 @@ export class KimiSession implements HarnessSession {
   async #handleThinkingSelect(
     command: ThinkingSelectCommand,
   ): Promise<HarnessResult<ThinkingSelectCompleted>> {
+    if (!this.#state.availableThinkingOptions?.some(({ id }) => id === command.thinkingOptionId)) {
+      return err(
+        "invalidRequest",
+        new KimiThinkingSelectionError(command.thinkingOptionId).message,
+      );
+    }
     try {
       const confirmed = await this.#transport.setConfigOption("thinking", command.thinkingOptionId);
       this.#applyConfigOptions(confirmed);

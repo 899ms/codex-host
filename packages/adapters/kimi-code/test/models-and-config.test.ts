@@ -14,6 +14,7 @@ import {
   isKimiModeId,
   kimiPermissionModeCatalog,
   parseKimiConfigToml,
+  readKimiThinkingOptions,
   resolveKimiContextWindow,
   type KimiNativeConfig,
 } from "../src/models.js";
@@ -141,12 +142,12 @@ default_model = "test"
       expect(firstModel.label).toBe("relay (claude-sonnet-5)");
       expect(firstModel.resolvedModelLabel).toBe("claude-sonnet-5");
       expect(validated.defaultModel?.id).toBe(firstModel.ref.id);
-      expect(validated.defaultThinkingOptionId).toBe("high");
-      expect(validated.thinkingOptions.map((t) => t.id)).toContain("off");
-      expect(validated.thinkingOptions.map((t) => t.id)).toContain("high");
+      expect(validated.defaultThinkingOptionId).toBeUndefined();
+      expect(validated.thinkingOptions).toEqual([]);
+      expect(firstModel.supportedThinkingOptionIds).toBeUndefined();
     });
 
-    it("handles thinking disabled with 'off' default", () => {
+    it("does not infer selectable options from a disabled config setting", () => {
       const config: KimiNativeConfig = {
         models: [{ alias: "base" }],
         thinking: { enabled: false },
@@ -154,7 +155,8 @@ default_model = "test"
 
       const catalog = buildModelCatalogFromConfig(config);
       const validated = harnessModelCatalogSchema.parse(catalog);
-      expect(validated.defaultThinkingOptionId).toBe("off");
+      expect(validated.defaultThinkingOptionId).toBeUndefined();
+      expect(validated.thinkingOptions).toEqual([]);
     });
 
     it("falls back to default model when config has no models or defaults", () => {
@@ -169,6 +171,36 @@ default_model = "test"
   });
 
   describe("buildModelCatalogFromAcp", () => {
+    it("does not invent options or select the first option without a native current value", () => {
+      expect(readKimiThinkingOptions([])).toEqual([]);
+      expect(buildModelCatalogFromAcp([]).thinkingOptions).toEqual([]);
+      expect(
+        buildModelCatalogFromAcp([{ id: "thinking", options: [{ value: "on", name: "On" }] }])
+          .defaultThinkingOptionId,
+      ).toBeUndefined();
+    });
+
+    it("reads grouped native options without assuming effort names", () => {
+      expect(
+        readKimiThinkingOptions([
+          {
+            id: "thinking",
+            options: [
+              {
+                name: "Native",
+                options: [
+                  { value: "off", name: "Thinking Off" },
+                  { value: "on", name: "Thinking On" },
+                ],
+              },
+            ],
+          },
+        ]),
+      ).toEqual([
+        { id: "off", label: "Off" },
+        { id: "on", label: "On" },
+      ]);
+    });
     it("builds catalog from ACP session config options", () => {
       const acpOptions: SessionConfigOption[] = [
         {
@@ -204,6 +236,8 @@ default_model = "test"
       expect(firstModel.label).toBe("Claude Sonnet 5 (Relay)");
       expect(validated.defaultModel?.id).toBe(firstModel.ref.id);
       expect(validated.defaultThinkingOptionId).toBe("high");
+      expect(firstModel.supportedThinkingOptionIds).toEqual(["off", "high"]);
+      expect(validated.models[1]?.supportedThinkingOptionIds).toBeUndefined();
       expect(validated.thinkingOptions).toEqual([
         { id: "off", label: "Off" },
         { id: "high", label: "High" },

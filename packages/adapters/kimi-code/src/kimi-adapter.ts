@@ -45,6 +45,8 @@ import {
   kimiPermissionModeCatalog,
   parseKimiConfigToml,
   readKimiEffectiveConfig,
+  readKimiThinkingOptions,
+  KimiThinkingSelectionError,
   resolveKimiContextWindow,
   type KimiNativeConfig,
 } from "./models.js";
@@ -112,6 +114,12 @@ async function applyRequestedConfig(
 ): Promise<unknown[]> {
   let confirmed = configOptions ?? [];
   for (const option of requested) {
+    if (
+      option.id === "thinking" &&
+      !readKimiThinkingOptions(confirmed).some(({ id }) => id === option.value)
+    ) {
+      throw new KimiThinkingSelectionError(option.value);
+    }
     confirmed = await transport.setConfigOption(option.id, option.value);
     const effective = readKimiEffectiveConfig(confirmed);
     const actual =
@@ -135,6 +143,7 @@ function stateFromConfig(
   const effective = readKimiEffectiveConfig(configOptions);
   return {
     nativeRef: createKimiNativeSessionRef(sessionId, cwd),
+    availableThinkingOptions: readKimiThinkingOptions(configOptions),
     ...(effective.modelAlias ? { effectiveModel: encodeKimiModelRef(effective.modelAlias) } : {}),
     ...(effective.thinkingOptionId
       ? { effectiveThinkingOptionId: effective.thinkingOptionId }
@@ -275,11 +284,7 @@ export class KimiAdapter implements HarnessAdapter {
     } else {
       modelCatalog = {
         models: [],
-        thinkingOptions: [
-          { id: harnessThinkingOptionIdSchema.parse("off"), label: "Off" },
-          { id: harnessThinkingOptionIdSchema.parse("medium"), label: "Medium" },
-          { id: harnessThinkingOptionIdSchema.parse("high"), label: "High" },
-        ],
+        thinkingOptions: [],
       };
     }
 
@@ -411,7 +416,7 @@ export class KimiAdapter implements HarnessAdapter {
       } catch (error) {
         await transport.close().catch(() => undefined);
         return err(
-          "nativeFailure",
+          error instanceof KimiThinkingSelectionError ? "invalidRequest" : "nativeFailure",
           `Failed to create Kimi session: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
@@ -588,7 +593,7 @@ export class KimiAdapter implements HarnessAdapter {
       } catch (error) {
         await transport.close().catch(() => undefined);
         return err(
-          "nativeFailure",
+          error instanceof KimiThinkingSelectionError ? "invalidRequest" : "nativeFailure",
           `Failed to resume Kimi session: ${error instanceof Error ? error.message : String(error)}`,
         );
       }

@@ -25,7 +25,7 @@
 
 ## Harness 专项
 
-[能力表边界](harnesses/capability-boundaries.md)记录各 Harness 的接入条件、Cursor 的单向委派，以及 Pi 权限模式、Antigravity 审批与压缩等剩余缺口。
+[能力表边界](harnesses/capability-boundaries.md)记录各 Harness 的接入条件、Kimi 动态 Thinking、Cursor 的单向委派，以及 Pi 权限模式、Antigravity 审批与压缩等剩余缺口。
 
 ### Antigravity
 

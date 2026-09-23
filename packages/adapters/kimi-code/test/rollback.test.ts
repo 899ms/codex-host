@@ -67,7 +67,13 @@ describe("Kimi native rollback", () => {
       openSession: vi.fn(async () => ({ sessionId: "derived", configOptions: [] })),
       setConfigOption: vi.fn(async (id: string, value: string) => {
         config[id] = value;
-        return Object.entries(config).map(([id, currentValue]) => ({ id, currentValue }));
+        return Object.entries(config).map(([id, currentValue]) => ({
+          id,
+          currentValue,
+          ...(id === "thinking"
+            ? { options: ["off", "medium", "high"].map((value) => ({ value, name: value })) }
+            : {}),
+        }));
       }),
     } satisfies KimiAcpTransportLike;
     const adapter = new KimiAdapter(

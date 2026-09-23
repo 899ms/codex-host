@@ -157,19 +157,8 @@ export function buildModelCatalogFromConfig(
   config: KimiNativeConfig,
   thinkingOptionsList?: HarnessThinkingOption[],
 ): HarnessModelCatalog {
-  const fallbackThinkingOptions: HarnessThinkingOption[] = [
-    { id: harnessThinkingOptionIdSchema.parse("off"), label: "Off" },
-    { id: harnessThinkingOptionIdSchema.parse("low"), label: "Low" },
-    { id: harnessThinkingOptionIdSchema.parse("medium"), label: "Medium" },
-    { id: harnessThinkingOptionIdSchema.parse("high"), label: "High" },
-    { id: harnessThinkingOptionIdSchema.parse("xhigh"), label: "Xhigh" },
-    { id: harnessThinkingOptionIdSchema.parse("max"), label: "Max" },
-  ];
-
-  const thinkingOptions =
-    thinkingOptionsList && thinkingOptionsList.length > 0
-      ? thinkingOptionsList
-      : fallbackThinkingOptions;
+  // The config file does not describe model-specific selectable Thinking values.
+  const thinkingOptions = thinkingOptionsList ?? [];
 
   const thinkingIds = thinkingOptions.map((opt) => opt.id);
   const rawModels =
@@ -180,7 +169,9 @@ export function buildModelCatalogFromConfig(
       ref: encodeKimiModelRef(m.alias),
       label: label.slice(0, 256),
       ...(m.model ? { resolvedModelLabel: m.model.slice(0, 256) } : {}),
-      supportedThinkingOptionIds: thinkingIds,
+      ...(thinkingOptionsList && m.alias === config.defaultModel
+        ? { supportedThinkingOptionIds: thinkingIds }
+        : {}),
     });
   });
 
@@ -201,10 +192,6 @@ export function buildModelCatalogFromConfig(
     thinkingIds.includes("off" as HarnessThinkingOptionId)
   ) {
     defaultThinkingOptionId = harnessThinkingOptionIdSchema.parse("off");
-  } else if (thinkingIds.length > 0) {
-    defaultThinkingOptionId = thinkingIds.includes("medium" as HarnessThinkingOptionId)
-      ? harnessThinkingOptionIdSchema.parse("medium")
-      : thinkingIds[0];
   }
 
   return harnessModelCatalogSchema.parse({
@@ -259,34 +246,45 @@ export function formatThinkingLabel(raw: string): string {
   return stripped.charAt(0).toUpperCase() + stripped.slice(1);
 }
 
+export class KimiThinkingSelectionError extends Error {
+  constructor(value: string) {
+    super(
+      `Kimi does not advertise Thinking ${value} for the current Model; use its native default or a listed option`,
+    );
+  }
+}
+
+export function readKimiThinkingOptions(configOptions: unknown[]): HarnessThinkingOption[] {
+  const { thinkingOptions } = parseAcpConfigOptions(configOptions);
+  const choices: unknown[] = Array.isArray(thinkingOptions?.options) ? thinkingOptions.options : [];
+  return choices
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const group = entry as Record<string, unknown>;
+      return Array.isArray(group.options) ? group.options : [entry];
+    })
+    .flatMap((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return [];
+      const option = entry as Record<string, unknown>;
+      if (typeof option.value !== "string" || !option.value.trim()) return [];
+      return [
+        harnessThinkingOptionSchema.parse({
+          id: option.value,
+          label: formatThinkingLabel(
+            typeof option.name === "string" ? option.name : option.value,
+          ).slice(0, 256),
+        }),
+      ];
+    });
+}
+
 export function buildModelCatalogFromAcp(
   configOptions: unknown[],
   fallbackConfig?: KimiNativeConfig,
 ): HarnessModelCatalog {
   const { modelOptions, thinkingOptions } = parseAcpConfigOptions(configOptions);
 
-  const thinking: HarnessThinkingOption[] = [];
-  if (thinkingOptions?.options && Array.isArray(thinkingOptions.options)) {
-    for (const opt of thinkingOptions.options) {
-      if (typeof opt.value === "string" && opt.value.trim().length > 0) {
-        const rawLabel = opt.name || opt.value;
-        thinking.push(
-          harnessThinkingOptionSchema.parse({
-            id: harnessThinkingOptionIdSchema.parse(opt.value),
-            label: formatThinkingLabel(rawLabel).slice(0, 256),
-          }),
-        );
-      }
-    }
-  }
-
-  if (thinking.length === 0) {
-    thinking.push(
-      { id: harnessThinkingOptionIdSchema.parse("off"), label: "Off" },
-      { id: harnessThinkingOptionIdSchema.parse("medium"), label: "Medium" },
-      { id: harnessThinkingOptionIdSchema.parse("high"), label: "High" },
-    );
-  }
+  const thinking = readKimiThinkingOptions(configOptions);
 
   const thinkingIds = thinking.map((t) => t.id);
   const models: HarnessModel[] = [];
@@ -300,7 +298,9 @@ export function buildModelCatalogFromAcp(
           harnessModelSchema.parse({
             ref: encodeKimiModelRef(alias),
             label: displayName.slice(0, 256),
-            supportedThinkingOptionIds: thinkingIds,
+            ...(alias === modelOptions.currentValue
+              ? { supportedThinkingOptionIds: thinkingIds }
+              : {}),
           }),
         );
       }
@@ -308,7 +308,7 @@ export function buildModelCatalogFromAcp(
   }
 
   if (models.length === 0 && fallbackConfig) {
-    return buildModelCatalogFromConfig(fallbackConfig, thinking);
+    models.push(...buildModelCatalogFromConfig(fallbackConfig).models);
   }
 
   const currentModelAlias = modelOptions?.currentValue;
@@ -321,7 +321,7 @@ export function buildModelCatalogFromAcp(
   const defaultThinkingOptionId =
     currentThinking && thinkingIds.includes(currentThinking as HarnessThinkingOptionId)
       ? harnessThinkingOptionIdSchema.parse(currentThinking)
-      : thinkingIds[0];
+      : undefined;
 
   return harnessModelCatalogSchema.parse({
     models,
