@@ -30,6 +30,7 @@ import { rendererHarnessCommandPresentation } from "./renderer-harness-localizat
 import {
   deleteNativeRange,
   insertNativeAgentMention,
+  insertNativeTextAtSelection,
   type NativeTextRange,
 } from "./renderer-native-composer-controller.js";
 import type { RendererSettingsLocale } from "./settings/localization.js";
@@ -264,6 +265,8 @@ export interface RendererDelegationMentionOptions {
 export interface RendererDelegationMentionControl {
   /** Re-render the open menu after its data sources changed. */
   refresh(): void;
+  /** Type `#` at the editor caret (spaced from a preceding word) to open the menu. */
+  openFor(editor: HTMLElement): void;
   dispose(): void;
 }
 
@@ -284,7 +287,9 @@ export function installRendererDelegationMention(
   options: RendererDelegationMentionOptions,
 ): RendererDelegationMentionControl {
   const view = ownerDocument.defaultView;
-  if (!view) return { refresh: () => undefined, dispose: () => undefined };
+  if (!view) {
+    return { refresh: () => undefined, openFor: () => undefined, dispose: () => undefined };
+  }
   const iconCache = new Map<RendererAgent, string | null>();
 
   // Codex's own suggestion menu utilities, so light/dark theming and density
@@ -320,6 +325,7 @@ export function installRendererDelegationMention(
   let composing = false;
   let inserting = false;
   let openedFor: { node: Text; start: number } | null = null;
+  let rowsRendered = 0;
 
   const close = (): void => {
     active = null;
@@ -455,6 +461,7 @@ export function installRendererDelegationMention(
             harnessCommandDisplayName(presentation.label),
             reason ?? presentation.description,
           );
+          content.setAttribute("data-command-id", command.id);
           if (reason === null) {
             rows.push(optionRow({ kind: "command", command, source: commands.source }, content));
           } else {
@@ -467,6 +474,7 @@ export function installRendererDelegationMention(
         }
       }
     }
+    rowsRendered = rows.length;
     list.replaceChildren(...rows);
     activeIndex = Math.min(activeIndex, Math.max(0, entries.length - 1));
     setMenuOpen(true);
@@ -519,7 +527,8 @@ export function installRendererDelegationMention(
     active = trigger;
     if (!sameQuery) activeIndex = 0;
     render(trigger, source ? { source, matches: commandMatches } : null, targets);
-    if (entries.length === 0) close();
+    // Keep a menu of only disabled rows open so their explanation stays visible.
+    if (rowsRendered === 0) close();
   };
 
   const waitForSelectionSync = (): Promise<void> =>
@@ -615,6 +624,8 @@ export function installRendererDelegationMention(
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (!isMenuOpen() || !active || event.isComposing) return;
+    // With nothing selectable, only Escape belongs to the menu.
+    if (entries.length === 0 && event.key !== "Escape") return;
     let handled = true;
     if (event.key === "ArrowDown") activeIndex = (activeIndex + 1) % entries.length;
     else if (event.key === "ArrowUp") {
@@ -668,7 +679,21 @@ export function installRendererDelegationMention(
     ownerDocument.querySelector(`style[${STYLE_ATTRIBUTE}]`)?.remove();
   };
 
+  const openFor = (editor: HTMLElement): void => {
+    editor.focus({ preventScroll: true });
+    const trigger = (previous: string): string => (previous && !/\s/u.test(previous) ? " #" : "#");
+    if (insertNativeTextAtSelection(editor, trigger)) return;
+    const selection = ownerDocument.getSelection();
+    const node = selection?.anchorNode;
+    const previous =
+      node?.nodeType === node?.TEXT_NODE && selection && selection.anchorOffset > 0
+        ? (node as Text).data.charAt(selection.anchorOffset - 1)
+        : "";
+    ownerDocument.execCommand("insertText", false, trigger(previous));
+  };
+
   return {
+    openFor,
     refresh: () => {
       if (openedFor) refresh();
     },

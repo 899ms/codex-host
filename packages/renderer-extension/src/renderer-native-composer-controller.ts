@@ -13,7 +13,8 @@ interface NativeEditorView {
   state: {
     doc: { textBetween(from: number, to: number): string };
     schema: { nodes: Record<string, unknown> };
-    tr: { delete(from: number, to: number): unknown };
+    selection: { from: number; to: number };
+    tr: { delete(from: number, to: number): unknown; insertText(text: string): unknown };
   };
   posAtDOM(node: Node, offset: number): number;
   dispatch(transaction: unknown): void;
@@ -76,6 +77,26 @@ function resolveRange(
   const from = controller.view.posAtDOM(range.node, range.start);
   const to = controller.view.posAtDOM(range.node, range.end);
   return controller.view.state.doc.textBetween(from, to) === range.expected ? { from, to } : null;
+}
+
+/**
+ * Insert text at the editor selection through its own transaction. `build`
+ * receives the character before the selection so callers can add spacing.
+ */
+export function insertNativeTextAtSelection(
+  editor: Element,
+  build: (previousCharacter: string) => string,
+): boolean {
+  const controller = findNativeComposerController(editor);
+  if (!controller || typeof controller.view.dispatch !== "function") return false;
+  try {
+    const { from } = controller.view.state.selection;
+    const previous = from > 0 ? controller.view.state.doc.textBetween(from - 1, from) : "";
+    controller.view.dispatch(controller.view.state.tr.insertText(build(previous)));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Delete the DOM text range through the editor's own transaction. */

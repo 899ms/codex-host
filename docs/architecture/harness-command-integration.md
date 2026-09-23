@@ -43,9 +43,19 @@ For commands with visible progress, decide explicitly whether they need:
 
 ## 4. Reuse Host and Renderer routing
 
-The Renderer reads static metadata via `codexhost/harness/commands/inspect { harnessId }`, through the target Host and public Adapter contract. No Thread or Native Session is needed, and there is no native-discovery fallback. The legacy Thread catalog RPC also reads Adapter metadata without opening or resuming a Session. The independent Composer popover has no Harness-specific catalog branches. Selecting `/compact` always executes directly with no text arguments, leaving the current draft and attachments untouched, even when the Harness supports optional compaction instructions. Other text commands prefix their invocation in the current editor, including before the first Turn, preserving the draft and attachments for ordinary submission. Direct commands (`/compact` and argument-free commands) execute only when a Thread exists; otherwise their menu items are disabled with an explanation, while the menu and other text commands remain available. Manually submitted `/compact` text retains the Adapter's existing argument support.
+Catalog reads never open or resume a Session:
 
-The command button belongs to the active external Harness controls, near the Composer's left-side actions. It remains visible before a Thread exists and while the command catalog is empty or unavailable; in those states it is disabled with a localized availability hint. Only command execution requires a Thread; catalog inspection does not. Switching to Codex hides the external Harness command button and closes its popover. It MUST remain outside the Codex React-managed Slash command list; the independent popover owns its own focus, keyboard navigation, positioning, and scrolling.
+- `codexhost/harness/commands/inspect { harnessId }` returns the static Adapter metadata. The Renderer uses it before a Thread exists.
+- `codexhost/thread/commands/inspect { threadId }` returns the loaded Session's `session.commands.list()` when that Session is already loaded, and falls back to the static Adapter metadata when it is not loaded or the listing fails. The Renderer uses it for existing Threads and refreshes it whenever the Composer `#` menu opens.
+
+The Composer `#` menu is the single command surface; it has no Harness-specific catalog branches. The command (⌘) button is its discoverable entry: hovering explains the `#` trigger, and clicking types `#` at the caret (spaced from a preceding word) to open the menu. The button holds the Harness command catalog the menu reads.
+
+- Selecting `/compact` or an `argumentMode: "none"` command executes it directly through `codexhost/thread/command/execute` with no text arguments, leaving the current draft and attachments untouched, even when the Harness supports optional compaction instructions. Direct commands execute only when a Thread exists; otherwise they are disabled with an explanation.
+- Selecting another text command inserts a native Composer mention chip in place of `#query` (`subagent://codexhost-command.<name>`), because literal `/command` text opens Desktop's own `/` menu. When Desktop's Composer controller is unavailable, the invocation is prefixed in the editor instead. On External Thread `turn/start` the Host restores the first chip to a leading `/command arguments` before command matching; other command chips are dropped.
+- When every listed command is disabled and nothing else matches, the menu stays open to show why; Enter is then left to the Composer.
+- The `#` menu groups entries into Commands, Skills (descriptors with `kind: "skill"`) and delegation Agents.
+
+The command button belongs to the active external Harness controls, near the Composer's left-side actions. It stays visible and enabled before a Thread exists and whatever the catalog or execution state, because the `#` menu also lists delegation targets. Switching to Codex hides it. The `#` menu MUST remain outside the Codex React-managed Slash command list; it owns its own focus, keyboard navigation, positioning, and scrolling.
 
 For typed submission, the Host first checks for a leading slash-command token (ignoring leading whitespace). Only command candidates have trailing whitespace removed before catalog matching; ordinary prompts retain their original text and skip command catalog inspection. Unknown slash commands are rejected.
 
@@ -100,15 +110,14 @@ git diff --check
 
 For native RPC changes, also verify the request and event sequence against the real Harness when available.
 
-## Current examples: Pi, Grok, Claude, and DeepSeek commands
+## Current examples: Pi, Grok, Claude, and DeepSeek built-in commands
 
 ```text
 Adapter static commandCatalog (no native request or Session)
   -> Host harness/commands/inspect
-  -> Composer Harness Commands button
-  -> independent command popover
+  -> Composer `#` menu (the command button types `#`)
   -> /compact or argumentMode none: fixed Host command/execute (no arguments)
-     other argumentMode text: prefix the Composer, then ordinary turn/start
+     other argumentMode text: command chip, restored to `/command` on turn/start
   -> current Host catalog validation
   -> owning Adapter
        Pi:     native { type: "compact" }

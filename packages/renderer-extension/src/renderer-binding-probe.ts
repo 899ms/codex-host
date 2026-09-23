@@ -2411,9 +2411,10 @@ export function installRendererBindingProbe(
         if (!composer.isConnected || !mounted) return;
         void selectPermissionMode(mounted, permissionModeId);
       },
-      (command) => {
-        const mounted = mountedByComposer.get(composer);
-        if (mounted) selectCommand(mounted, command);
+      () => {
+        // The button is the discoverable entry to the `#` menu.
+        const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+        if (editor) delegationMention?.openFor(editor);
       },
     );
     const mounted: MountedComposer = {
