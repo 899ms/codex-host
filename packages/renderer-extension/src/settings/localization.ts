@@ -234,6 +234,8 @@ export interface RendererSettingsMessages {
   readonly updateCopyFailed: string;
   readonly updateDownloadFromReleases: string;
   readonly updateDownloadWindowsInstaller: string;
+  readonly updateStarCallout: string;
+  readonly updateStarLink: string;
   readonly aboutTagline: string;
   readonly aboutParagraphs: readonly string[];
   readonly aboutOpenSource: string;
@@ -486,6 +488,9 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateCopyFailed: "Copy failed",
   updateDownloadFromReleases: "Download from GitHub Releases",
   updateDownloadWindowsInstaller: "Download Windows installer",
+  updateStarCallout:
+    "If CodexHost has helped you, please Star it on GitHub. It means a lot to us 👉",
+  updateStarLink: "GitHub",
   aboutTagline: "Run Pi and other Harnesses in Codex Desktop",
   aboutParagraphs: Object.freeze([
     "We believe Codex Desktop offers the best desktop development experience available today.",
@@ -737,6 +742,8 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateCopyFailed: "复制失败",
   updateDownloadFromReleases: "前往 GitHub Releases 下载",
   updateDownloadWindowsInstaller: "下载 Windows 安装包",
+  updateStarCallout: "如果 CodexHost 帮到了你，请在 GitHub 点个 Star，这对我们意义重大 👉",
+  updateStarLink: "GitHub",
   aboutTagline: "在 Codex Desktop 中运行 Pi 和其他 Harness",
   aboutParagraphs: Object.freeze([
     "我们认为 Codex Desktop 提供了目前最好的桌面开发交互体验。",

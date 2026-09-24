@@ -51,6 +51,13 @@ describe("Renderer settings localization", () => {
     expect(english.updateDownloadFromReleases).toBe("Download from GitHub Releases");
     expect(chinese.updateDownloadFromReleases).toBe("前往 GitHub Releases 下载");
     expect(chinese.updateDownloadWindowsInstaller).toBe("下载 Windows 安装包");
+    expect(chinese.updateStarCallout).toBe(
+      "如果 CodexHost 帮到了你，请在 GitHub 点个 Star，这对我们意义重大 👉",
+    );
+    expect(english.updateStarCallout).toBe(
+      "If CodexHost has helped you, please Star it on GitHub. It means a lot to us 👉",
+    );
+    expect(chinese.updateStarLink).toBe("GitHub");
     expect(chinese.pageLabels.about).toBe("关于");
     expect(chinese.pageLabels["session-import"]).toBe("会话导入");
     expect(chinese.sessionImportAvailabilityNote).toContain("可选 Harness 来自本地 Host");
