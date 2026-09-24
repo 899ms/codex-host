@@ -265,6 +265,7 @@
 .settings-nav-star-link {
   margin-top: 0;
   color: var(--settings-text);
+  font-weight: 600;
   text-decoration: none;
 }
 
